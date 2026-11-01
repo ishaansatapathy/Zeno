@@ -1,0 +1,14 @@
+/target
+**/target
+
+node_modules/
+.next/
+out/
+
+.env
+.env.*
+!.env.example
+
+*.log
+.DS_Store
+Thumbs.db
