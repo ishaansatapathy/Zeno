@@ -5,9 +5,12 @@ use sqlx::types::ipnetwork::IpNetwork;
 use uuid::Uuid;
 use zeno_core::model::Role;
 
+use crate::auth::audit::{self, Event, Kind};
 use crate::auth::repo::{self, NewSession, TokenPurpose, UserRow};
+use crate::auth::tokens::AccessClaims;
 use crate::auth::{emails, limits, revocation, tokens};
 use crate::error::ApiError;
+use crate::outbox;
 use crate::secret::Secret;
 use crate::state::AppState;
 
@@ -22,6 +25,7 @@ const RESET_TTL_HOURS: i64 = 1;
 const MAX_LOGIN_PASSWORD_BYTES: usize = 1024;
 const MAX_USER_AGENT_CHARS: usize = 512;
 
+#[derive(Clone)]
 pub struct ClientContext {
     pub ip: Option<IpAddr>,
     pub user_agent: Option<String>,
@@ -102,7 +106,12 @@ async fn send_verification(state: &AppState, user: &UserRow) -> Result<(), ApiEr
         Duration::hours(VERIFY_TTL_HOURS),
     )
     .await?;
-    state.send_email(emails::verification(to, &link(state, "verify-email", &raw)));
+    outbox::enqueue(
+        state,
+        emails::verification(to, &link(state, "verify-email", &raw)),
+        Duration::hours(VERIFY_TTL_HOURS),
+    )
+    .await?;
     Ok(())
 }
 
@@ -130,11 +139,16 @@ async fn notify_existing_account(state: &AppState, email: &str) -> Result<(), Ap
         send_verification(state, &existing).await
     } else if let Some(to) = &existing.email {
         let origin = &state.config.client_origin;
-        state.send_email(emails::already_registered(
-            to,
-            &format!("{origin}/login"),
-            &format!("{origin}/forgot-password"),
-        ));
+        outbox::enqueue(
+            state,
+            emails::already_registered(
+                to,
+                &format!("{origin}/login"),
+                &format!("{origin}/forgot-password"),
+            ),
+            Duration::days(1),
+        )
+        .await?;
         Ok(())
     } else {
         Ok(())
@@ -144,11 +158,21 @@ async fn notify_existing_account(state: &AppState, email: &str) -> Result<(), Ap
 /// Both outcomes (new address, taken address) cost the same inline: one hash and one
 /// insert. Everything that differs happens in the background, and the caller always gives
 /// the same answer, so sign-up can't be used to discover who has an account.
-pub async fn register(state: &AppState, input: RegisterInput) -> Result<(), ApiError> {
+pub async fn register(
+    state: &AppState,
+    input: RegisterInput,
+    ctx: &ClientContext,
+) -> Result<(), ApiError> {
     let hash = state.passwords.hash(input.password.into_inner()).await?;
     let inserted =
         repo::insert_user(&state.db, &input.name, &input.email, &hash, input.role).await?;
     let email = input.email;
+    if let Some(user) = &inserted {
+        audit::record(
+            state,
+            Event::new(Kind::SignedUp, ctx).user(user.id).email(&email),
+        );
+    }
     defer(state, "register follow-up", move |state| async move {
         match inserted {
             Some(user) => send_verification(&state, &user).await,
@@ -174,6 +198,7 @@ pub async fn verify_email(
     let user = repo::find_user_by_id(&state.db, user_id)
         .await?
         .ok_or_else(invalid_token)?;
+    audit::record(state, Event::new(Kind::EmailVerified, ctx).user(user.id));
     start_session(state, user, ctx).await
 }
 
@@ -193,7 +218,10 @@ pub async fn login(
     ctx: &ClientContext,
 ) -> Result<Authenticated, ApiError> {
     let email = crate::auth::validation::normalize_email(raw_email);
-    limits::ensure_login_allowed(&*state.counters, &email, ctx.ip).await?;
+    if let Err(err) = limits::ensure_login_allowed(&*state.counters, &email, ctx.ip).await {
+        audit::record(state, Event::new(Kind::LoginBlocked, ctx).email(&email));
+        return Err(err);
+    }
 
     let user = if email.len() <= 254 {
         repo::find_user_by_email(&state.db, &email).await?
@@ -211,14 +239,22 @@ pub async fn login(
         .verify(password, user.as_ref().map(|u| u.password_hash.clone()))
         .await?;
 
+    let known_user = user.as_ref().map(|u| u.id);
     let Some(user) = user.filter(|_| valid) else {
         limits::record_login_failure(&*state.counters, &email, ctx.ip).await;
+        audit::record(
+            state,
+            Event::new(Kind::LoginFailed, ctx)
+                .maybe_user(known_user)
+                .email(&email),
+        );
         return Err(ApiError::unauthorized(
             "invalid_credentials",
             "Invalid email or password.",
         ));
     };
     if user.email_verified_at.is_none() {
+        audit::record(state, Event::new(Kind::LoginUnverified, ctx).user(user.id));
         return Err(ApiError::forbidden(
             "email_not_verified",
             "Please verify your email before signing in.",
@@ -226,6 +262,7 @@ pub async fn login(
     }
 
     limits::clear_login_failures(&*state.counters, &email, ctx.ip).await;
+    audit::record(state, Event::new(Kind::LoginSucceeded, ctx).user(user.id));
     start_session(state, user, ctx).await
 }
 
@@ -320,6 +357,12 @@ pub async fn refresh(
             "refresh token reuse detected; revoking the session family"
         );
         revoke_family(state, session.family_id).await?;
+        audit::record(
+            state,
+            Event::new(Kind::RefreshReuseDetected, ctx)
+                .user(session.user_id)
+                .family(session.family_id),
+        );
         return Err(RefreshFailure::Dead);
     }
 
@@ -376,25 +419,35 @@ pub async fn refresh(
 pub async fn logout(
     state: &AppState,
     raw_refresh_token: Option<&str>,
-    access_family: Option<Uuid>,
+    access: Option<&AccessClaims>,
+    ctx: &ClientContext,
 ) -> Result<(), ApiError> {
     let mut families = Vec::new();
+    let mut user_id = access.map(|claims| claims.sub);
     if let Some(raw) = raw_refresh_token {
         let hash = tokens::hash_opaque_token(raw);
         if let Some(session) = repo::find_session_by_token_hash(&state.db, &hash).await? {
             families.push(session.family_id);
+            user_id = user_id.or(Some(session.user_id));
         }
     }
-    families.extend(access_family);
+    families.extend(access.map(|claims| claims.fid));
     families.sort_unstable();
     families.dedup();
-    for family_id in families {
-        revoke_family(state, family_id).await?;
+    for family_id in &families {
+        revoke_family(state, *family_id).await?;
+    }
+    if let Some(user_id) = user_id {
+        audit::record(state, Event::new(Kind::LoggedOut, ctx).user(user_id));
     }
     Ok(())
 }
 
-pub async fn forgot_password(state: &AppState, email: &str) -> Result<(), ApiError> {
+pub async fn forgot_password(
+    state: &AppState,
+    email: &str,
+    ctx: &ClientContext,
+) -> Result<(), ApiError> {
     let Some(user) = repo::find_user_by_email(&state.db, email).await? else {
         return Ok(());
     };
@@ -408,10 +461,16 @@ pub async fn forgot_password(state: &AppState, email: &str) -> Result<(), ApiErr
         Duration::hours(RESET_TTL_HOURS),
     )
     .await?;
-    state.send_email(emails::password_reset(
-        to,
-        &link(state, "reset-password", &raw),
-    ));
+    audit::record(
+        state,
+        Event::new(Kind::PasswordResetRequested, ctx).user(user.id),
+    );
+    outbox::enqueue(
+        state,
+        emails::password_reset(to, &link(state, "reset-password", &raw)),
+        Duration::hours(RESET_TTL_HOURS),
+    )
+    .await?;
     Ok(())
 }
 
@@ -419,6 +478,7 @@ pub async fn reset_password(
     state: &AppState,
     raw_token: &str,
     new_password: String,
+    ctx: &ClientContext,
 ) -> Result<(), ApiError> {
     let token_hash = tokens::hash_opaque_token(raw_token);
     // Reject bad tokens before paying for a password hash.
@@ -437,10 +497,20 @@ pub async fn reset_password(
     for family_id in families {
         revocation::mark_revoked(&*state.counters, family_id).await;
     }
+    audit::record(
+        state,
+        Event::new(Kind::PasswordResetCompleted, ctx).user(user_id),
+    );
 
+    // The password is already changed; failing to queue the courtesy notice must not
+    // turn that success into an error.
     if let Some(user) = repo::find_user_by_id(&state.db, user_id).await? {
         if let Some(to) = &user.email {
-            state.send_email(emails::password_changed(to));
+            if let Err(err) =
+                outbox::enqueue(state, emails::password_changed(to), Duration::days(1)).await
+            {
+                tracing::error!(error = ?err, "could not queue password-changed notice");
+            }
         }
     }
     Ok(())

@@ -258,24 +258,53 @@ pub async fn revoke_user_sessions<'e>(
     Ok(families)
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Purged {
+    pub sessions: u64,
+    pub tokens: u64,
+    pub events: u64,
+    pub emails: u64,
+}
+
 /// Deletes rows that can no longer matter. A rotated token must stay until its own expiry so
 /// reuse can still be detected; revoked and past-lifetime rows are dead either way (a
-/// replay of a deleted token is refused exactly like a revoked one).
-pub async fn purge_expired<'e, E>(db: E) -> Result<(u64, u64), sqlx::Error>
+/// replay of a deleted token is refused exactly like a revoked one). Audit events are kept
+/// for a year, then dropped to honour data minimisation; delivered or abandoned outbox rows
+/// (already blanked) go after a week.
+pub async fn purge_expired<'e, E>(db: E) -> Result<Purged, sqlx::Error>
 where
     E: PgExecutor<'e> + Copy,
 {
     let sessions = sqlx::query(
-        "delete from sessions where absolute_expires_at < now()             or expires_at < now() - interval '7 days'             or revoked_at < now() - interval '1 day'",
+        "delete from sessions where absolute_expires_at < now() \
+            or expires_at < now() - interval '7 days' \
+            or revoked_at < now() - interval '1 day'",
     )
     .execute(db)
     .await?
     .rows_affected();
     let tokens = sqlx::query(
-        "delete from auth_tokens where expires_at < now() - interval '1 day'             or used_at < now() - interval '1 day'",
+        "delete from auth_tokens where expires_at < now() - interval '1 day' \
+            or used_at < now() - interval '1 day'",
     )
     .execute(db)
     .await?
     .rows_affected();
-    Ok((sessions, tokens))
+    let events =
+        sqlx::query("delete from auth_events where created_at < now() - interval '365 days'")
+            .execute(db)
+            .await?
+            .rows_affected();
+    let emails = sqlx::query(
+        "delete from email_outbox where coalesce(sent_at, failed_at) < now() - interval '7 days'",
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
+    Ok(Purged {
+        sessions,
+        tokens,
+        events,
+        emails,
+    })
 }

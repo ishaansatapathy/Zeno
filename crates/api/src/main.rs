@@ -52,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         Passwords::new(PasswordParams::default())?,
     );
 
+    zeno_api::outbox::spawn_retry_loop(state.clone());
     let background = state.background.clone();
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     tracing::info!("api listening on {bind_addr}");

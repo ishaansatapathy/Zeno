@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod cleanup;
 pub mod cookies;
 pub mod counters;

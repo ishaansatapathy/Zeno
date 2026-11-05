@@ -219,7 +219,8 @@ db_test! {
                      select id, 'email_verification', 'b'::bytea, now() - interval '3 days' from users")
             .execute(&pool).await.unwrap();
 
-        let (sessions, tokens) = repo::purge_expired(&pool).await.unwrap();
+        let purged = repo::purge_expired(&pool).await.unwrap();
+        let (sessions, tokens) = (purged.sessions, purged.tokens);
         assert_eq!((sessions, tokens), (2, 2));
 
         let left: Vec<uuid::Uuid> = sqlx::query_scalar("select id from sessions order by created_at")

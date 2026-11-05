@@ -52,8 +52,13 @@ Cookie-based (`HttpOnly`, `SameSite=Lax`): a 15-minute access JWT plus a rotatin
 | `POST /v1/auth/logout` | End this device's session |
 | `POST /v1/auth/forgot-password` / `reset-password` | Emailed single-use link; reset signs out every device |
 | `GET /v1/auth/me` | The signed-in user |
+| `GET /v1/auth/activity` | The signed-in user's last 20 security events (sign-ins, failures, resets) |
 
 Sessions end immediately on logout, password reset and detected token theft: each access token carries its session family, and revoking a family marks it in Redis for the token's remaining lifetime. Anything that differs between "account exists" and "doesn't" (token writes, email) runs after the response, so timing doesn't reveal accounts. Expired sessions and tokens are purged hourly.
+
+Passwords must be 10-128 characters and are rejected if they are on a common-password list (the UK NCSC top 100k, entries of 10+ characters, embedded in the binary), trivially repetitive, or built from the account's own email.
+
+Security-relevant events (sign-up, verification, sign-in success/failure/lockout, token theft, resets, logout) are written to `auth_events` for a year; addresses are stored only as a SHA-256. Emails go through a durable outbox (`email_outbox`): they are retried with backoff if the provider is down, a link stops being retried once it would have expired, and the body (which holds a live link) is blanked as soon as the row is sent or abandoned.
 
 Every response carries an `x-request-id` (a caller-supplied one is kept) that is attached to all log lines for that request. Set `LOG_FORMAT=json` for structured logs.
 

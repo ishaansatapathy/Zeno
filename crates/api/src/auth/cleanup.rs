@@ -14,9 +14,9 @@ pub fn spawn_periodic(db: PgPool) {
         loop {
             ticker.tick().await;
             match repo::purge_expired(&db).await {
-                Ok((0, 0)) => {}
-                Ok((sessions, tokens)) => {
-                    tracing::info!(sessions, tokens, "purged expired auth rows");
+                Ok(purged) if purged == repo::Purged::default() => {}
+                Ok(purged) => {
+                    tracing::info!(?purged, "purged expired rows");
                 }
                 Err(err) => tracing::error!(error = ?err, "auth cleanup failed"),
             }

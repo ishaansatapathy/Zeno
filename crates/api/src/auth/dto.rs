@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use zeno_core::model::Role;
@@ -45,6 +46,12 @@ impl RegisterRequest {
             .ok();
         if let Err(e) = validation::password(self.password.expose(), "password") {
             errors.push(e);
+        } else if let Some(email) = &email {
+            if let Err(e) =
+                validation::password_not_from_email(self.password.expose(), email, "password")
+            {
+                errors.push(e);
+            }
         }
         match (name, email, errors.is_empty()) {
             (Some(name), Some(email), true) => Ok(RegisterInput {
@@ -109,6 +116,19 @@ impl From<&UserRow> for UserResponse {
             email_verified: user.email_verified_at.is_some(),
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ActivityItem {
+    pub kind: String,
+    pub at: DateTime<Utc>,
+    pub ip: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ActivityResponse {
+    pub events: Vec<ActivityItem>,
 }
 
 #[derive(Debug, Serialize)]

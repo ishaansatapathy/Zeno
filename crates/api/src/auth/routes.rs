@@ -5,10 +5,11 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 
+use crate::auth::audit;
 use crate::auth::cookies::{self, ACCESS_COOKIE, REFRESH_COOKIE};
 use crate::auth::dto::{
-    EmailRequest, LoginRequest, MessageResponse, RegisterRequest, ResetPasswordRequest,
-    TokenRequest, UserEnvelope, UserResponse,
+    ActivityItem, ActivityResponse, EmailRequest, LoginRequest, MessageResponse, RegisterRequest,
+    ResetPasswordRequest, TokenRequest, UserEnvelope, UserResponse,
 };
 use crate::auth::extractor::{ApiJson, AuthUser, Client};
 use crate::auth::limits::{self, HOUR};
@@ -34,6 +35,7 @@ pub fn router() -> Router<AppState> {
         .route("/forgot-password", post(forgot_password))
         .route("/reset-password", post(reset_password))
         .route("/me", get(me))
+        .route("/activity", get(activity))
 }
 
 fn session_response(
@@ -67,7 +69,7 @@ async fn register(
     )
     .await?;
     let input = body.validate()?;
-    service::register(&state, input).await?;
+    service::register(&state, input, &ctx).await?;
     Ok(accepted(REGISTER_MESSAGE))
 }
 
@@ -143,14 +145,14 @@ async fn refresh(State(state): State<AppState>, Client(ctx): Client, jar: Cookie
 
 async fn logout(
     State(state): State<AppState>,
+    Client(ctx): Client,
     jar: CookieJar,
 ) -> Result<(CookieJar, StatusCode), ApiError> {
     let raw = jar.get(REFRESH_COOKIE).map(|c| c.value().to_owned());
-    let access_family = jar
+    let access = jar
         .get(ACCESS_COOKIE)
-        .and_then(|c| state.tokens.verify_access(c.value()).ok())
-        .map(|claims| claims.fid);
-    service::logout(&state, raw.as_deref(), access_family).await?;
+        .and_then(|c| state.tokens.verify_access(c.value()).ok());
+    service::logout(&state, raw.as_deref(), access.as_ref(), &ctx).await?;
     Ok((
         cookies::clear_session(jar, state.config.cookie_secure),
         StatusCode::NO_CONTENT,
@@ -175,7 +177,7 @@ async fn forgot_password(
         .is_none();
     if within_cap {
         service::defer(&state, "forgot password", move |state| async move {
-            service::forgot_password(&state, &email).await
+            service::forgot_password(&state, &email, &ctx).await
         });
     }
     Ok(accepted(RECOVERY_MESSAGE))
@@ -183,11 +185,18 @@ async fn forgot_password(
 
 async fn reset_password(
     State(state): State<AppState>,
+    Client(ctx): Client,
     ApiJson(body): ApiJson<ResetPasswordRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
     validation::password(body.new_password.expose(), "new_password")
         .map_err(|e| ApiError::validation(vec![e]))?;
-    service::reset_password(&state, body.token.expose(), body.new_password.into_inner()).await?;
+    service::reset_password(
+        &state,
+        body.token.expose(),
+        body.new_password.into_inner(),
+        &ctx,
+    )
+    .await?;
     Ok(Json(MessageResponse {
         message: "Password updated. Sign in with your new password.",
     }))
@@ -198,4 +207,22 @@ async fn me(State(state): State<AppState>, user: AuthUser) -> Result<Json<UserEn
     Ok(Json(UserEnvelope {
         user: UserResponse::from(&row),
     }))
+}
+
+/// The signed-in user's own recent security activity, newest first.
+async fn activity(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<ActivityResponse>, ApiError> {
+    let rows = audit::recent_for_user(&state.db, user.id, 20).await?;
+    let events = rows
+        .into_iter()
+        .map(|row| ActivityItem {
+            kind: row.kind,
+            at: row.created_at,
+            ip: row.ip.map(|ip| ip.ip().to_string()),
+            user_agent: row.user_agent,
+        })
+        .collect();
+    Ok(Json(ActivityResponse { events }))
 }

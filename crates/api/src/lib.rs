@@ -6,6 +6,7 @@ pub mod error;
 pub mod health;
 pub mod mail;
 pub mod net;
+pub mod outbox;
 pub mod secret;
 pub mod security;
 pub mod state;

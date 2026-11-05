@@ -54,6 +54,17 @@ pub fn build(pool: PgPool, cookie_secure: bool, trusted_proxy_hops: usize) -> Ap
     }
 }
 
+/// An app whose real mail transport is `send`, while `record` is what tests inspect.
+pub fn build_with_mailer(pool: PgPool, send: Arc<dyn Mailer>, record: MemoryMailer) -> App {
+    let state = make_state(pool.clone(), false, 0, send);
+    App {
+        router: zeno_api::build_app(state.clone()),
+        mailer: record,
+        pool,
+        state,
+    }
+}
+
 pub fn make_state(
     pool: PgPool,
     cookie_secure: bool,

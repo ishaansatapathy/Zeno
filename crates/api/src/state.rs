@@ -9,7 +9,7 @@ use crate::auth::counters::CounterStore;
 use crate::auth::password::Passwords;
 use crate::auth::tokens::TokenKeys;
 use crate::config::ApiConfig;
-use crate::mail::{Mailer, OutgoingEmail};
+use crate::mail::Mailer;
 
 /// Fire-and-forget tasks that can still be waited for: shutdown drains them so queued
 /// emails aren't dropped, and tests settle on them instead of sleeping.
@@ -84,16 +84,5 @@ impl AppState {
             tokens,
             background: Background::default(),
         }
-    }
-
-    /// Sends in the background so response time doesn't reveal whether an email was sent
-    /// (which would leak whether an account exists). Failures are logged, not surfaced.
-    pub fn send_email(&self, email: OutgoingEmail) {
-        let mailer = self.mailer.clone();
-        self.background.spawn(async move {
-            if let Err(err) = mailer.send(email).await {
-                tracing::error!(error = ?err, "failed to send email");
-            }
-        });
     }
 }
