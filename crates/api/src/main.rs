@@ -1,43 +1,81 @@
-//! HTTP API: auth, courses, videos, playback manifests and payment webhooks.
-use axum::{
-    http::StatusCode,
-    routing::{get, post},
-    Json, Router,
-};
-use serde_json::{json, Value};
-use zeno_core::config::Config;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use anyhow::{bail, Context};
+use tracing_subscriber::EnvFilter;
+use zeno_api::auth::counters::RedisCounters;
+use zeno_api::auth::password::{PasswordParams, Passwords};
+use zeno_api::config::ApiConfig;
+use zeno_api::mail::LogMailer;
+use zeno_api::state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
-    let config = Config::from_env();
+    let _ = dotenvy::dotenv();
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
+        )
+        .init();
 
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/v1/auth/register", post(not_implemented))
-        .route("/v1/auth/login", post(not_implemented))
-        .route("/v1/auth/refresh", post(not_implemented))
-        .route("/v1/courses", post(not_implemented))
-        .route("/v1/courses/:id", get(not_implemented).patch(not_implemented))
-        .route("/v1/courses/:id/lessons", post(not_implemented))
-        .route("/v1/videos", post(not_implemented))
-        .route("/v1/videos/:id", get(not_implemented))
-        .route("/v1/play/:lesson_id/master.m3u8", get(not_implemented))
-        .route("/v1/play/:session_id/heartbeat", post(not_implemented))
-        .route("/v1/checkout/:course_id", post(not_implemented))
-        .route("/v1/webhooks/razorpay", post(not_implemented))
-        .route("/v1/analytics/courses/:id", get(not_implemented));
+    let config = ApiConfig::from_env().context("invalid configuration")?;
+    if config.core.env.is_production() {
+        bail!("no production mail transport is configured yet; refusing to start in production");
+    }
 
-    let listener = tokio::net::TcpListener::bind(&config.bind_addr).await?;
-    tracing::info!("api listening on {}", config.bind_addr);
-    axum::serve(listener, app).await?;
+    let db = zeno_core::db::connect(&config.core.database_url, 10)
+        .await
+        .context("could not connect to Postgres")?;
+    if !config.core.env.is_production() {
+        zeno_core::db::MIGRATOR
+            .run(&db)
+            .await
+            .context("running migrations")?;
+    }
+
+    let redis = redis::Client::open(config.core.redis_url.as_str()).context("invalid REDIS_URL")?;
+    let redis = redis::aio::ConnectionManager::new(redis)
+        .await
+        .context("could not connect to Redis")?;
+
+    let bind_addr = config.core.bind_addr;
+    let state = AppState::new(
+        db,
+        config,
+        Arc::new(RedisCounters::new(redis)),
+        Arc::new(LogMailer),
+        Passwords::new(PasswordParams::default())?,
+    );
+
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    tracing::info!("api listening on {bind_addr}");
+    axum::serve(
+        listener,
+        zeno_api::build_app(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
-async fn health() -> &'static str {
-    "ok"
-}
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            signal.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
 
-async fn not_implemented() -> (StatusCode, Json<Value>) {
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "not implemented" })))
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("shutting down");
 }
