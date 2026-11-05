@@ -20,6 +20,9 @@ pub struct AccessClaims {
     pub role: Role,
     /// Session (refresh-token row) this access token was minted from.
     pub sid: Uuid,
+    /// Session family, so revoking a session (logout, password reset, token theft) can cut
+    /// off every access token it has minted.
+    pub fid: Uuid,
     pub iss: String,
     pub aud: String,
     pub iat: i64,
@@ -54,6 +57,7 @@ impl TokenKeys {
         user_id: Uuid,
         role: Role,
         session_id: Uuid,
+        family_id: Uuid,
         now: DateTime<Utc>,
     ) -> Result<(String, DateTime<Utc>), JwtError> {
         let expires_at = now + Duration::minutes(ACCESS_TTL_MINUTES);
@@ -61,6 +65,7 @@ impl TokenKeys {
             sub: user_id,
             role,
             sid: session_id,
+            fid: family_id,
             iss: ISSUER.into(),
             aud: AUDIENCE.into(),
             iat: now.timestamp(),
@@ -100,13 +105,14 @@ mod tests {
 
     #[test]
     fn issued_token_round_trips() {
-        let (user, session) = (Uuid::new_v4(), Uuid::new_v4());
+        let (user, session, family) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
         let (token, _) = keys()
-            .issue_access(user, Role::Creator, session, Utc::now())
+            .issue_access(user, Role::Creator, session, family, Utc::now())
             .unwrap();
         let claims = keys().verify_access(&token).unwrap();
         assert_eq!(claims.sub, user);
         assert_eq!(claims.sid, session);
+        assert_eq!(claims.fid, family);
         assert_eq!(claims.role, Role::Creator);
     }
 
@@ -114,7 +120,13 @@ mod tests {
     fn expired_token_is_rejected() {
         let long_ago = Utc::now() - Duration::hours(2);
         let (token, _) = keys()
-            .issue_access(Uuid::new_v4(), Role::Student, Uuid::new_v4(), long_ago)
+            .issue_access(
+                Uuid::new_v4(),
+                Role::Student,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                long_ago,
+            )
             .unwrap();
         assert!(keys().verify_access(&token).is_err());
     }
@@ -122,7 +134,13 @@ mod tests {
     #[test]
     fn token_signed_with_another_secret_is_rejected() {
         let (token, _) = TokenKeys::new(b"ffffffffffffffffffffffffffffffff")
-            .issue_access(Uuid::new_v4(), Role::Admin, Uuid::new_v4(), Utc::now())
+            .issue_access(
+                Uuid::new_v4(),
+                Role::Admin,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Utc::now(),
+            )
             .unwrap();
         assert!(keys().verify_access(&token).is_err());
     }
@@ -130,11 +148,17 @@ mod tests {
     #[test]
     fn tampered_payload_is_rejected() {
         let (token, _) = keys()
-            .issue_access(Uuid::new_v4(), Role::Student, Uuid::new_v4(), Utc::now())
+            .issue_access(
+                Uuid::new_v4(),
+                Role::Student,
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                Utc::now(),
+            )
             .unwrap();
         let mut parts: Vec<String> = token.split('.').map(str::to_owned).collect();
         let forged = URL_SAFE_NO_PAD.encode(
-            br#"{"sub":"00000000-0000-0000-0000-000000000000","role":"admin","sid":"00000000-0000-0000-0000-000000000000","iss":"zeno","aud":"zeno-api","iat":0,"exp":9999999999}"#,
+            br#"{"sub":"00000000-0000-0000-0000-000000000000","role":"admin","sid":"00000000-0000-0000-0000-000000000000","fid":"00000000-0000-0000-0000-000000000000","iss":"zeno","aud":"zeno-api","iat":0,"exp":9999999999}"#,
         );
         parts[1] = forged;
         assert!(keys().verify_access(&parts.join(".")).is_err());
@@ -146,6 +170,7 @@ mod tests {
             sub: Uuid::new_v4(),
             role: Role::Admin,
             sid: Uuid::new_v4(),
+            fid: Uuid::new_v4(),
             iss: ISSUER.into(),
             aud: AUDIENCE.into(),
             iat: Utc::now().timestamp(),
@@ -164,7 +189,7 @@ mod tests {
     fn unsigned_none_algorithm_token_is_rejected() {
         let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"none","typ":"JWT"}"#);
         let payload = URL_SAFE_NO_PAD.encode(
-            br#"{"sub":"00000000-0000-0000-0000-000000000000","role":"admin","sid":"00000000-0000-0000-0000-000000000000","iss":"zeno","aud":"zeno-api","iat":0,"exp":9999999999}"#,
+            br#"{"sub":"00000000-0000-0000-0000-000000000000","role":"admin","sid":"00000000-0000-0000-0000-000000000000","fid":"00000000-0000-0000-0000-000000000000","iss":"zeno","aud":"zeno-api","iat":0,"exp":9999999999}"#,
         );
         assert!(keys()
             .verify_access(&format!("{header}.{payload}."))
@@ -178,6 +203,7 @@ mod tests {
                 sub: Uuid::new_v4(),
                 role: Role::Student,
                 sid: Uuid::new_v4(),
+                fid: Uuid::new_v4(),
                 iss: iss.into(),
                 aud: aud.into(),
                 iat: Utc::now().timestamp(),

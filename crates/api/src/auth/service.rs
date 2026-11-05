@@ -6,8 +6,9 @@ use uuid::Uuid;
 use zeno_core::model::Role;
 
 use crate::auth::repo::{self, NewSession, TokenPurpose, UserRow};
-use crate::auth::{emails, limits, tokens};
+use crate::auth::{emails, limits, revocation, tokens};
 use crate::error::ApiError;
+use crate::secret::Secret;
 use crate::state::AppState;
 
 const REFRESH_TTL_DAYS: i64 = 30;
@@ -26,21 +27,12 @@ pub struct ClientContext {
     pub user_agent: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct RegisterInput {
     pub name: String,
     pub email: String,
-    pub password: String,
+    pub password: Secret,
     pub role: Role,
-}
-
-impl std::fmt::Debug for RegisterInput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RegisterInput")
-            .field("email", &self.email)
-            .field("role", &self.role)
-            .field("password", &"<redacted>")
-            .finish_non_exhaustive()
-    }
 }
 
 pub struct Authenticated {
@@ -64,6 +56,13 @@ impl<E: Into<anyhow::Error>> From<E> for RefreshFailure {
     fn from(err: E) -> Self {
         RefreshFailure::Other(ApiError::Internal(err.into()))
     }
+}
+
+/// Revokes in Postgres (the source of truth) and cuts off access tokens already in flight.
+async fn revoke_family(state: &AppState, family_id: Uuid) -> Result<(), sqlx::Error> {
+    repo::revoke_family(&state.db, family_id).await?;
+    revocation::mark_revoked(&*state.counters, family_id).await;
+    Ok(())
 }
 
 fn invalid_token() -> ApiError {
@@ -107,29 +106,55 @@ async fn send_verification(state: &AppState, user: &UserRow) -> Result<(), ApiEr
     Ok(())
 }
 
-/// Always completes the same work (including the expensive hash) whether or not the email
-/// is already registered, and the caller always gives the same answer, so sign-up can't be
-/// used to discover who has an account.
-pub async fn register(state: &AppState, input: RegisterInput) -> Result<(), ApiError> {
-    let hash = state.passwords.hash(input.password).await?;
-    match repo::insert_user(&state.db, &input.name, &input.email, &hash, input.role).await? {
-        Some(user) => send_verification(state, &user).await?,
-        None => {
-            let Some(existing) = repo::find_user_by_email(&state.db, &input.email).await? else {
-                return Ok(());
-            };
-            if existing.email_verified_at.is_none() {
-                send_verification(state, &existing).await?;
-            } else if let Some(to) = &existing.email {
-                let origin = &state.config.client_origin;
-                state.send_email(emails::already_registered(
-                    to,
-                    &format!("{origin}/login"),
-                    &format!("{origin}/forgot-password"),
-                ));
-            }
+/// Runs `job` after the response has been sent. Anything whose duration depends on whether
+/// an account exists (token writes, mail) goes through here, so response time can't be used
+/// to discover registered emails.
+pub fn defer<F, Fut>(state: &AppState, what: &'static str, job: F)
+where
+    F: FnOnce(AppState) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), ApiError>> + Send + 'static,
+{
+    let owned = state.clone();
+    state.background.spawn(async move {
+        if let Err(err) = job(owned).await {
+            tracing::error!(error = ?err, job = what, "background job failed");
         }
+    });
+}
+
+async fn notify_existing_account(state: &AppState, email: &str) -> Result<(), ApiError> {
+    let Some(existing) = repo::find_user_by_email(&state.db, email).await? else {
+        return Ok(());
+    };
+    if existing.email_verified_at.is_none() {
+        send_verification(state, &existing).await
+    } else if let Some(to) = &existing.email {
+        let origin = &state.config.client_origin;
+        state.send_email(emails::already_registered(
+            to,
+            &format!("{origin}/login"),
+            &format!("{origin}/forgot-password"),
+        ));
+        Ok(())
+    } else {
+        Ok(())
     }
+}
+
+/// Both outcomes (new address, taken address) cost the same inline: one hash and one
+/// insert. Everything that differs happens in the background, and the caller always gives
+/// the same answer, so sign-up can't be used to discover who has an account.
+pub async fn register(state: &AppState, input: RegisterInput) -> Result<(), ApiError> {
+    let hash = state.passwords.hash(input.password.into_inner()).await?;
+    let inserted =
+        repo::insert_user(&state.db, &input.name, &input.email, &hash, input.role).await?;
+    let email = input.email;
+    defer(state, "register follow-up", move |state| async move {
+        match inserted {
+            Some(user) => send_verification(&state, &user).await,
+            None => notify_existing_account(&state, &email).await,
+        }
+    });
     Ok(())
 }
 
@@ -218,11 +243,12 @@ async fn start_session(
         .as_ref()
         .map(|ua| ua.chars().take(MAX_USER_AGENT_CHARS).collect());
 
+    let family_id = Uuid::new_v4();
     let session_id = repo::insert_session(
         &state.db,
         &NewSession {
             user_id: user.id,
-            family_id: Uuid::new_v4(),
+            family_id,
             token_hash: &token_hash,
             user_agent: user_agent.as_deref(),
             ip: ctx.ip.map(IpNetwork::from),
@@ -232,20 +258,29 @@ async fn start_session(
     )
     .await?;
 
-    issue_tokens(state, user, session_id, refresh_token, expires_at, now)
+    issue_tokens(
+        state,
+        user,
+        session_id,
+        family_id,
+        refresh_token,
+        expires_at,
+        now,
+    )
 }
 
 fn issue_tokens(
     state: &AppState,
     user: UserRow,
     session_id: Uuid,
+    family_id: Uuid,
     refresh_token: String,
     refresh_expires_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<Authenticated, ApiError> {
     let (access_token, access_expires_at) = state
         .tokens
-        .issue_access(user.id, user.role, session_id, now)?;
+        .issue_access(user.id, user.role, session_id, family_id, now)?;
     Ok(Authenticated {
         user,
         access_token,
@@ -284,7 +319,7 @@ pub async fn refresh(
             family_id = %session.family_id,
             "refresh token reuse detected; revoking the session family"
         );
-        repo::revoke_family(&state.db, session.family_id).await?;
+        revoke_family(state, session.family_id).await?;
         return Err(RefreshFailure::Dead);
     }
 
@@ -292,7 +327,7 @@ pub async fn refresh(
         .await?
         .filter(|u| u.email_verified_at.is_some());
     let Some(user) = user else {
-        repo::revoke_family(&state.db, session.family_id).await?;
+        revoke_family(state, session.family_id).await?;
         return Err(RefreshFailure::Dead);
     };
 
@@ -323,17 +358,38 @@ pub async fn refresh(
     .await?;
     tx.commit().await?;
 
-    issue_tokens(state, user, new_id, new_token, expires_at, now).map_err(RefreshFailure::Other)
+    issue_tokens(
+        state,
+        user,
+        new_id,
+        session.family_id,
+        new_token,
+        expires_at,
+        now,
+    )
+    .map_err(RefreshFailure::Other)
 }
 
-/// Ends the whole session family. Access tokens already issued stay valid until they expire
-/// (at most 15 minutes), which is the price of not hitting the database on every request.
-pub async fn logout(state: &AppState, raw_refresh_token: Option<&str>) -> Result<(), ApiError> {
+/// Ends the whole session family, identified by the refresh cookie and/or the family in a
+/// still-valid access token (so logout works even if the refresh cookie went missing).
+/// Access tokens already issued are cut off immediately through the revocation marker.
+pub async fn logout(
+    state: &AppState,
+    raw_refresh_token: Option<&str>,
+    access_family: Option<Uuid>,
+) -> Result<(), ApiError> {
+    let mut families = Vec::new();
     if let Some(raw) = raw_refresh_token {
         let hash = tokens::hash_opaque_token(raw);
         if let Some(session) = repo::find_session_by_token_hash(&state.db, &hash).await? {
-            repo::revoke_family(&state.db, session.family_id).await?;
+            families.push(session.family_id);
         }
+    }
+    families.extend(access_family);
+    families.sort_unstable();
+    families.dedup();
+    for family_id in families {
+        revoke_family(state, family_id).await?;
     }
     Ok(())
 }
@@ -376,8 +432,11 @@ pub async fn reset_password(
         .await?
         .ok_or_else(invalid_token)?;
     repo::update_password(&mut *tx, user_id, &new_hash).await?;
-    repo::revoke_user_sessions(&mut *tx, user_id).await?;
+    let families = repo::revoke_user_sessions(&mut *tx, user_id).await?;
     tx.commit().await?;
+    for family_id in families {
+        revocation::mark_revoked(&*state.counters, family_id).await;
+    }
 
     if let Some(user) = repo::find_user_by_id(&state.db, user_id).await? {
         if let Some(to) = &user.email {

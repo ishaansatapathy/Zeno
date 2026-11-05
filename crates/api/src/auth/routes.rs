@@ -5,7 +5,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 
-use crate::auth::cookies::{self, REFRESH_COOKIE};
+use crate::auth::cookies::{self, ACCESS_COOKIE, REFRESH_COOKIE};
 use crate::auth::dto::{
     EmailRequest, LoginRequest, MessageResponse, RegisterRequest, ResetPasswordRequest,
     TokenRequest, UserEnvelope, UserResponse,
@@ -77,7 +77,7 @@ async fn verify_email(
     jar: CookieJar,
     ApiJson(body): ApiJson<TokenRequest>,
 ) -> Result<(CookieJar, Json<UserEnvelope>), ApiError> {
-    let auth = service::verify_email(&state, &body.token, &ctx).await?;
+    let auth = service::verify_email(&state, body.token.expose(), &ctx).await?;
     Ok(session_response(&state, jar, &auth))
 }
 
@@ -100,7 +100,9 @@ async fn resend_verification(
         .await
         .is_none();
     if within_cap {
-        service::resend_verification(&state, &email).await?;
+        service::defer(&state, "resend verification", move |state| async move {
+            service::resend_verification(&state, &email).await
+        });
     }
     Ok(accepted(VERIFICATION_MESSAGE))
 }
@@ -111,7 +113,7 @@ async fn login(
     jar: CookieJar,
     ApiJson(body): ApiJson<LoginRequest>,
 ) -> Result<(CookieJar, Json<UserEnvelope>), ApiError> {
-    let auth = service::login(&state, &body.email, body.password, &ctx).await?;
+    let auth = service::login(&state, &body.email, body.password.into_inner(), &ctx).await?;
     Ok(session_response(&state, jar, &auth))
 }
 
@@ -144,7 +146,11 @@ async fn logout(
     jar: CookieJar,
 ) -> Result<(CookieJar, StatusCode), ApiError> {
     let raw = jar.get(REFRESH_COOKIE).map(|c| c.value().to_owned());
-    service::logout(&state, raw.as_deref()).await?;
+    let access_family = jar
+        .get(ACCESS_COOKIE)
+        .and_then(|c| state.tokens.verify_access(c.value()).ok())
+        .map(|claims| claims.fid);
+    service::logout(&state, raw.as_deref(), access_family).await?;
     Ok((
         cookies::clear_session(jar, state.config.cookie_secure),
         StatusCode::NO_CONTENT,
@@ -168,7 +174,9 @@ async fn forgot_password(
         .await
         .is_none();
     if within_cap {
-        service::forgot_password(&state, &email).await?;
+        service::defer(&state, "forgot password", move |state| async move {
+            service::forgot_password(&state, &email).await
+        });
     }
     Ok(accepted(RECOVERY_MESSAGE))
 }
@@ -177,9 +185,9 @@ async fn reset_password(
     State(state): State<AppState>,
     ApiJson(body): ApiJson<ResetPasswordRequest>,
 ) -> Result<Json<MessageResponse>, ApiError> {
-    validation::password(&body.new_password, "new_password")
+    validation::password(body.new_password.expose(), "new_password")
         .map_err(|e| ApiError::validation(vec![e]))?;
-    service::reset_password(&state, &body.token, body.new_password).await?;
+    service::reset_password(&state, body.token.expose(), body.new_password.into_inner()).await?;
     Ok(Json(MessageResponse {
         message: "Password updated. Sign in with your new password.",
     }))

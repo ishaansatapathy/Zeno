@@ -6,6 +6,7 @@ use crate::auth::repo::UserRow;
 use crate::auth::service::RegisterInput;
 use crate::auth::validation;
 use crate::error::{ApiError, FieldError};
+use crate::secret::Secret;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,7 +29,7 @@ impl From<SignupRole> for Role {
 pub struct RegisterRequest {
     pub name: String,
     pub email: String,
-    pub password: String,
+    pub password: Secret,
     #[serde(default)]
     pub role: Option<SignupRole>,
 }
@@ -42,7 +43,7 @@ impl RegisterRequest {
         let email = validation::email(&self.email)
             .map_err(|e| errors.push(e))
             .ok();
-        if let Err(e) = validation::password(&self.password, "password") {
+        if let Err(e) = validation::password(self.password.expose(), "password") {
             errors.push(e);
         }
         match (name, email, errors.is_empty()) {
@@ -62,7 +63,7 @@ impl RegisterRequest {
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
     pub email: String,
-    pub password: String,
+    pub password: Secret,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,14 +75,14 @@ pub struct EmailRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TokenRequest {
-    pub token: String,
+    pub token: Secret,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResetPasswordRequest {
-    pub token: String,
-    pub new_password: String,
+    pub token: Secret,
+    pub new_password: Secret,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,7 +124,7 @@ mod tests {
         RegisterRequest {
             name: "Asha Rao".into(),
             email: "Asha@Example.com".into(),
-            password: "a-long-enough-password".into(),
+            password: Secret::new("a-long-enough-password"),
             role,
         }
     }
@@ -144,7 +145,7 @@ mod tests {
         let bad = RegisterRequest {
             name: "x".into(),
             email: "nope".into(),
-            password: "short".into(),
+            password: Secret::new("short"),
             role: None,
         };
         match bad.validate() {

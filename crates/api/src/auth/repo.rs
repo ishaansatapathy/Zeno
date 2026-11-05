@@ -242,13 +242,40 @@ pub async fn revoke_family<'e>(
     Ok(())
 }
 
+/// Returns the families that were just revoked so their access tokens can be cut off too.
 pub async fn revoke_user_sessions<'e>(
     db: impl PgExecutor<'e>,
     user_id: Uuid,
-) -> Result<(), sqlx::Error> {
-    sqlx::query("update sessions set revoked_at = now() where user_id = $1 and revoked_at is null")
-        .bind(user_id)
-        .execute(db)
-        .await?;
-    Ok(())
+) -> Result<Vec<Uuid>, sqlx::Error> {
+    let mut families: Vec<Uuid> = sqlx::query_scalar(
+        "update sessions set revoked_at = now() where user_id = $1 and revoked_at is null returning family_id",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    families.sort_unstable();
+    families.dedup();
+    Ok(families)
+}
+
+/// Deletes rows that can no longer matter. A rotated token must stay until its own expiry so
+/// reuse can still be detected; revoked and past-lifetime rows are dead either way (a
+/// replay of a deleted token is refused exactly like a revoked one).
+pub async fn purge_expired<'e, E>(db: E) -> Result<(u64, u64), sqlx::Error>
+where
+    E: PgExecutor<'e> + Copy,
+{
+    let sessions = sqlx::query(
+        "delete from sessions where absolute_expires_at < now()             or expires_at < now() - interval '7 days'             or revoked_at < now() - interval '1 day'",
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
+    let tokens = sqlx::query(
+        "delete from auth_tokens where expires_at < now() - interval '1 day'             or used_at < now() - interval '1 day'",
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
+    Ok((sessions, tokens))
 }

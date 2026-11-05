@@ -13,6 +13,7 @@ use uuid::Uuid;
 use zeno_core::model::Role;
 
 use crate::auth::cookies::ACCESS_COOKIE;
+use crate::auth::revocation;
 use crate::auth::service::ClientContext;
 use crate::error::ApiError;
 use crate::net::client_ip;
@@ -55,6 +56,9 @@ impl FromRequestParts<AppState> for AuthUser {
             .tokens
             .verify_access(token.value())
             .map_err(|_| unauthenticated())?;
+        if revocation::is_revoked(&*state.counters, claims.fid).await {
+            return Err(unauthenticated());
+        }
         Ok(AuthUser {
             id: claims.sub,
             role: claims.role,
