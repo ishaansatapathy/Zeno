@@ -20,12 +20,12 @@ tokio = { version = "1.40", features = ["full"] }
 axum = "0.7"
 axum-extra = { version = "0.9", features = ["cookie"] }
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors", "trace", "limit"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "request-id"] }
 http-body-util = "0.1"
 async-trait = "0.1"
 
 # data
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "migrate", "ipnetwork"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "uuid", "chrono", "json", "ipnetwork"] }
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -44,7 +44,7 @@ time = "0.3"
 
 # plumbing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 thiserror = "1.0"
 anyhow = "1.0"
 dotenvy = "0.15"

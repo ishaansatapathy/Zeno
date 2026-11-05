@@ -12,11 +12,14 @@ use zeno_api::state::AppState;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
-        )
-        .init();
+    let logs = tracing_subscriber::fmt().with_env_filter(
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn")),
+    );
+    if std::env::var("LOG_FORMAT").is_ok_and(|v| v.eq_ignore_ascii_case("json")) {
+        logs.json().init();
+    } else {
+        logs.init();
+    }
 
     let config = ApiConfig::from_env().context("invalid configuration")?;
     if config.core.env.is_production() {
@@ -38,6 +41,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not connect to Redis")?;
 
+    zeno_api::auth::cleanup::spawn_periodic(db.clone());
+
     let bind_addr = config.core.bind_addr;
     let state = AppState::new(
         db,
@@ -47,6 +52,7 @@ async fn main() -> anyhow::Result<()> {
         Passwords::new(PasswordParams::default())?,
     );
 
+    let background = state.background.clone();
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     tracing::info!("api listening on {bind_addr}");
     axum::serve(
@@ -55,6 +61,9 @@ async fn main() -> anyhow::Result<()> {
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
+
+    // Let queued emails and follow-up jobs finish, but never hang shutdown on them.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), background.idle()).await;
     Ok(())
 }
 
