@@ -53,6 +53,10 @@ Cookie-based (`HttpOnly`, `SameSite=Lax`): a 15-minute access JWT plus a rotatin
 | `POST /v1/auth/forgot-password` / `reset-password` | Emailed single-use link; reset signs out every device |
 | `GET /v1/auth/me` | The signed-in user |
 
+Sessions end immediately on logout, password reset and detected token theft: each access token carries its session family, and revoking a family marks it in Redis for the token's remaining lifetime. Anything that differs between "account exists" and "doesn't" (token writes, email) runs after the response, so timing doesn't reveal accounts. Expired sessions and tokens are purged hourly.
+
+Every response carries an `x-request-id` (a caller-supplied one is kept) that is attached to all log lines for that request. Set `LOG_FORMAT=json` for structured logs.
+
 Other endpoints from the plan answer `501` until they are built. Not built yet: phone OTP sign-in, 2FA, Google sign-in, CAPTCHA, a production mail transport (the API refuses to start in production until one exists).
 
 ## Status
