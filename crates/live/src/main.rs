@@ -14,7 +14,7 @@ use zeno_core::config::Config;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    let config = Config::from_env();
+    let config = Config::from_env("0.0.0.0:8082")?;
 
     let app = Router::new()
         .route("/health", get(health))
@@ -51,5 +51,8 @@ async fn check_stream_key() -> (StatusCode, Json<Value>) {
 }
 
 fn not_implemented() -> (StatusCode, Json<Value>) {
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "not implemented" })))
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({ "error": "not implemented" })),
+    )
 }

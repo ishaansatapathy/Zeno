@@ -7,7 +7,7 @@ use zeno_core::config::Config;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    let config = Config::from_env();
+    let config = Config::from_env("0.0.0.0:8081")?;
 
     let app = Router::new()
         .route("/health", get(health))
@@ -25,5 +25,8 @@ async fn health() -> &'static str {
 
 async fn get_key(Path(_video_id): Path<Uuid>) -> (StatusCode, Json<Value>) {
     // TODO: validate the signed token, confirm enrollment and session limits, return the key.
-    (StatusCode::NOT_IMPLEMENTED, Json(json!({ "error": "not implemented" })))
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({ "error": "not implemented" })),
+    )
 }
