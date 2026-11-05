@@ -1,0 +1,8 @@
+[advisories]
+ignore = [
+    # `rsa` appears in Cargo.lock only because sqlx-macros lists the MySQL driver as an
+    # optional dependency. We use Postgres only, and `cargo tree -i rsa --target all`
+    # reports it is not part of any build. Remove this once sqlx drops it from the lockfile
+    # or a fixed rsa is released.
+    "RUSTSEC-2023-0071",
+]
