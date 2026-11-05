@@ -198,14 +198,14 @@ db_test! {
 
         let (user, session) = (Uuid::new_v4(), Uuid::new_v4());
         let expired = TokenKeys::new(SECRET.as_bytes())
-            .issue_access(user, Role::Admin, session, Utc::now() - Duration::hours(1))
+            .issue_access(user, Role::Admin, session, Uuid::new_v4(), Utc::now() - Duration::hours(1))
             .unwrap()
             .0;
         let res = app.get("/v1/auth/me").cookie_header(&format!("zeno_at={expired}")).send().await;
         assert_eq!(res.status, StatusCode::UNAUTHORIZED);
 
         let forged = TokenKeys::new(b"an-attacker-guessed-this-secret-xx")
-            .issue_access(user, Role::Admin, session, Utc::now())
+            .issue_access(user, Role::Admin, session, Uuid::new_v4(), Utc::now())
             .unwrap()
             .0;
         let res = app.get("/v1/auth/me").cookie_header(&format!("zeno_at={forged}")).send().await;

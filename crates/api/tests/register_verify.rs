@@ -247,7 +247,7 @@ db_test! {
             let res = app.post("/v1/auth/resend-verification").json(json!({"email":"a@x.in"})).send().await;
             assert_eq!(res.status, StatusCode::ACCEPTED);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        app.settle().await;
         // 1 signup email + 3 resends allowed by the per-address cap; ghost@ never gets mail.
         let sent = app.mailer.sent();
         assert_eq!(sent.len(), 4, "{sent:#?}");

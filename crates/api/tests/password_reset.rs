@@ -49,7 +49,7 @@ db_test! {
         assert_eq!(known.body, unknown.body);
 
         let mails = app.mailer.wait_for(2).await;
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        app.settle().await;
         assert_eq!(app.mailer.sent().len(), mails.len());
         assert!(app.mailer.sent().iter().all(|m| m.to == "a@x.in"));
     }
@@ -172,7 +172,7 @@ db_test! {
         for _ in 0..5 {
             assert_eq!(forgot(&app, "a@x.in").await.status, StatusCode::ACCEPTED);
         }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        app.settle().await;
         let resets = app
             .mailer
             .sent()

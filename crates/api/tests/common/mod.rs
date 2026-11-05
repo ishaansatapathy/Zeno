@@ -12,7 +12,7 @@ use tower::ServiceExt;
 use zeno_api::auth::counters::MemoryCounters;
 use zeno_api::auth::password::{PasswordParams, Passwords};
 use zeno_api::config::ApiConfig;
-use zeno_api::mail::{MemoryMailer, OutgoingEmail};
+use zeno_api::mail::{Mailer, MemoryMailer, OutgoingEmail};
 use zeno_api::state::AppState;
 use zeno_core::config::{Config, Environment};
 
@@ -24,6 +24,14 @@ pub struct App {
     pub router: Router,
     pub mailer: MemoryMailer,
     pub pool: PgPool,
+    pub state: AppState,
+}
+
+impl App {
+    /// Waits for fire-and-forget work (emails, follow-up jobs) started by earlier requests.
+    pub async fn settle(&self) {
+        self.state.background.idle().await;
+    }
 }
 
 pub fn app(pool: PgPool) -> App {
@@ -31,6 +39,27 @@ pub fn app(pool: PgPool) -> App {
 }
 
 pub fn build(pool: PgPool, cookie_secure: bool, trusted_proxy_hops: usize) -> App {
+    let mailer = MemoryMailer::default();
+    let state = make_state(
+        pool.clone(),
+        cookie_secure,
+        trusted_proxy_hops,
+        Arc::new(mailer.clone()),
+    );
+    App {
+        router: zeno_api::build_app(state.clone()),
+        mailer,
+        pool,
+        state,
+    }
+}
+
+pub fn make_state(
+    pool: PgPool,
+    cookie_secure: bool,
+    trusted_proxy_hops: usize,
+    mailer: Arc<dyn Mailer>,
+) -> AppState {
     let config = ApiConfig {
         core: Config {
             env: Environment::Development,
@@ -43,19 +72,13 @@ pub fn build(pool: PgPool, cookie_secure: bool, trusted_proxy_hops: usize) -> Ap
         cookie_secure,
         trusted_proxy_hops,
     };
-    let mailer = MemoryMailer::default();
-    let state = AppState::new(
-        pool.clone(),
+    AppState::new(
+        pool,
         config,
         Arc::new(MemoryCounters::default()),
-        Arc::new(mailer.clone()),
-        Passwords::new(PasswordParams::for_tests()).unwrap(),
-    );
-    App {
-        router: zeno_api::build_app(state),
         mailer,
-        pool,
-    }
+        Passwords::new(PasswordParams::for_tests()).unwrap(),
+    )
 }
 
 pub struct Res {
