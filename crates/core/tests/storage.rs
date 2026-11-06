@@ -250,3 +250,78 @@ async fn downloads_stop_at_the_size_limit() {
         .await;
     assert!(matches!(missing, Err(StorageError::NotFound)));
 }
+
+#[tokio::test]
+async fn deleting_a_prefix_removes_only_that_prefix_across_listing_pages() {
+    use futures_util::StreamExt;
+
+    let store = store().await;
+    let root = format!("tests/{}", Uuid::new_v4());
+    // More than one ListObjectsV2 page (1000 keys) so pagination is exercised.
+    let doomed: Vec<String> = (0..1010).map(|i| format!("{root}/1/seg{i}.ts")).collect();
+    let neighbours = [
+        format!("{root}/10/a"),
+        format!("{root}/1x"),
+        format!("{root}/2/a"),
+    ];
+    let uploads = doomed.iter().chain(neighbours.iter()).map(|key| {
+        let store = store.clone();
+        async move {
+            store
+                .put_bytes(key, vec![1, 2, 3], "video/mp2t")
+                .await
+                .unwrap()
+        }
+    });
+    futures_util::stream::iter(uploads)
+        .buffer_unordered(32)
+        .collect::<Vec<_>>()
+        .await;
+
+    assert_eq!(
+        store
+            .list_prefix(&format!("{root}/1/"))
+            .await
+            .unwrap()
+            .len(),
+        1010
+    );
+    assert_eq!(
+        store.delete_prefix(&format!("{root}/1/")).await.unwrap(),
+        1010
+    );
+
+    assert!(store
+        .list_prefix(&format!("{root}/1/"))
+        .await
+        .unwrap()
+        .is_empty());
+    let mut left = store.list_prefix(&format!("{root}/")).await.unwrap();
+    left.sort();
+    let mut expected = neighbours.to_vec();
+    expected.sort();
+    assert_eq!(
+        left, expected,
+        "sibling prefixes sharing leading characters must survive"
+    );
+    assert_eq!(
+        store.delete_prefix(&format!("{root}/1/")).await.unwrap(),
+        0,
+        "idempotent"
+    );
+    store.delete_prefix(&format!("{root}/")).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_prefix_without_a_trailing_slash_is_refused() {
+    let store = store().await;
+    for bad in ["", "/", "videos", "videos/abc"] {
+        assert!(
+            matches!(
+                store.delete_prefix(bad).await,
+                Err(StorageError::Protocol(_))
+            ),
+            "{bad:?}"
+        );
+    }
+}

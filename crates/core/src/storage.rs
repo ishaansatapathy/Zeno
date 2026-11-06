@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use reqwest::{Method, StatusCode};
 use rusty_s3::actions::{
     AbortMultipartUpload, CompleteMultipartUpload, CreateBucket, CreateMultipartUpload,
-    DeleteObject, GetObject, HeadObject, ListParts, PutObject, S3Action, UploadPart,
+    DeleteObject, GetObject, HeadObject, ListObjectsV2, ListParts, PutObject, S3Action, UploadPart,
 };
 use rusty_s3::{Bucket, Credentials, UrlStyle};
 use tokio::io::AsyncWriteExt;
@@ -414,6 +414,58 @@ impl S3Store {
         } else {
             Err(error_from(response).await)
         }
+    }
+
+    /// Every key under `prefix`, following pagination.
+    pub async fn list_prefix(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        let mut keys = Vec::new();
+        let mut token: Option<String> = None;
+        loop {
+            let mut action = ListObjectsV2::new(&self.internal, Some(&self.credentials));
+            action.with_prefix(prefix);
+            if let Some(token) = &token {
+                action.with_continuation_token(token);
+            }
+            let response = self
+                .http
+                .get(action.sign(SIGNED_URL_TTL))
+                .timeout(CONTROL_TIMEOUT)
+                .send()
+                .await?;
+            let body = ok_body(response).await?;
+            let page = ListObjectsV2::parse_response(&body)
+                .map_err(|e| StorageError::Protocol(e.to_string()))?;
+            keys.extend(page.contents.into_iter().map(|object| object.key));
+            match page.next_continuation_token {
+                Some(next) => token = Some(next),
+                None => break,
+            }
+        }
+        Ok(keys)
+    }
+
+    /// Deletes everything under `prefix` and returns how many objects were removed. `prefix`
+    /// must end in `/`, so `videos/1` can never take `videos/10` with it.
+    pub async fn delete_prefix(&self, prefix: &str) -> Result<usize, StorageError> {
+        if !prefix.ends_with('/') || prefix == "/" {
+            return Err(StorageError::Protocol(format!(
+                "refusing to delete by prefix {prefix:?}"
+            )));
+        }
+        let keys = self.list_prefix(prefix).await?;
+        let count = keys.len();
+        // Owned clones, not borrows: borrowed futures inside a stream make the caller's future
+        // fail rustc's "Send is not general enough" check when it is spawned.
+        let mut removals = futures_util::stream::iter(keys)
+            .map(|key| {
+                let store = self.clone();
+                async move { store.delete(&key).await }
+            })
+            .buffer_unordered(8);
+        while let Some(result) = removals.next().await {
+            result?;
+        }
+        Ok(count)
     }
 
     pub async fn delete(&self, key: &str) -> Result<(), StorageError> {
