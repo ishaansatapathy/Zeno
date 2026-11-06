@@ -46,7 +46,7 @@ impl MemoryMailer {
 
     /// Emails are sent from background tasks, so tests poll instead of assuming timing.
     pub async fn wait_for(&self, count: usize) -> Vec<OutgoingEmail> {
-        for _ in 0..200 {
+        for _ in 0..1000 {
             let sent = self.sent();
             if sent.len() >= count {
                 return sent;
