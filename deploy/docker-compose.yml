@@ -25,5 +25,26 @@ services:
       timeout: 3s
       retries: 30
 
+  # S3-compatible object storage for uploads and encrypted HLS output. Browsers upload parts
+  # straight to it, so the web origin must be allowed by CORS. MinIO no longer publishes
+  # official images, so this is the last Bitnami build, pinned by digest.
+  minio:
+    image: bitnamilegacy/minio@sha256:451fe6858cb770cc9d0e77ba811ce287420f781c7c1b806a386f6896471a349c
+    environment:
+      MINIO_ROOT_USER: zeno-dev
+      MINIO_ROOT_PASSWORD: zeno-dev-secret
+      MINIO_API_CORS_ALLOW_ORIGIN: http://localhost:3000
+    volumes:
+      - minio_data:/bitnami/minio/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
 volumes:
   postgres_data:
+  minio_data:
