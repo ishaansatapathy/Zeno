@@ -76,12 +76,13 @@ Creators (and admins) upload straight to object storage; the API only coordinate
 | `POST /v1/videos/:id/complete` | Verifies every part against storage (never client-supplied ETags), assembles the file and queues transcoding. Safe to retry |
 | `POST /v1/videos/:id/abort` | Cancel an unfinished upload |
 | `GET /v1/videos/:id` | Status (`uploading`, `processing`, `ready`, `failed`), error code, renditions. Someone else's video looks like a missing one |
+| `DELETE /v1/videos/:id` | Stops serving the video at once; an hourly sweep then removes its files (waiting for any still-running transcode job to end first). Cancels an unfinished upload |
 
-Unfinished uploads are cancelled after 24 hours.
+Unfinished uploads are cancelled after 24 hours. Original uploads are deleted `SOURCE_RETENTION_DAYS` (default 7) after a video is ready or has failed; only the encrypted renditions remain.
 
 ### Transcoding
 
-`zeno-worker` claims `transcode` jobs from Postgres (`FOR UPDATE SKIP LOCKED` under a lease it keeps extending; updates are fenced by attempt number so a worker that lost its lease cannot touch the job). For each video it probes the file, rejects anything unsupported, then writes AES-128 encrypted VOD HLS: 144p, 240p, 360p, 480p and 720p (never above the source; rotation and non-square pixels handled; frame rate capped at 30), plus an audio-only rendition, with keyframes aligned every 6 seconds on every rung. The content key is stored in `video_keys`, never beside the segments; the playlists carry a placeholder key URI that playback replaces per viewer.
+`zeno-worker` claims `transcode` jobs from Postgres (`FOR UPDATE SKIP LOCKED` under a lease it keeps extending; updates are fenced by attempt number so a worker that lost its lease cannot touch the job). For each video it probes the file, rejects anything unsupported, then writes AES-128 encrypted VOD HLS: 144p, 240p, 360p, 480p and 720p (never above the source; rotation and non-square pixels handled; frame rate capped at 30), plus an audio-only rendition, with keyframes aligned every 6 seconds on every rung. The content key is stored in `video_keys`, never beside the segments, and wrapped with AES-256-GCM under `CONTENT_KEY_SECRET` (bound to the video id), so a copy of the database does not unlock the stored segments; the playlists carry a placeholder key URI that playback replaces per viewer.
 
 Uploads are untrusted input to ffmpeg, so only an allowlist of media containers is accepted (playlists, concat scripts and other formats that reference further resources are refused before any encode); ffmpeg runs with `-protocol_whitelist file`, a scrubbed environment, a hard timeout and kill-on-cancel; output is capped at the duration limit; and metadata, chapters and subtitles are stripped. A file that cannot be processed fails for good with a short code (`unsupported_media`, `no_video_stream`, `too_long`, `resolution_too_high`); infrastructure trouble is retried with backoff.
 
