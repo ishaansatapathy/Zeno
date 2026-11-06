@@ -15,8 +15,6 @@ pub fn router() -> Router<AppState> {
             get(not_implemented).patch(not_implemented),
         )
         .route("/v1/courses/:id/lessons", post(not_implemented))
-        .route("/v1/videos", post(not_implemented))
-        .route("/v1/videos/:id", get(not_implemented))
         .route("/v1/play/:lesson_id/master.m3u8", get(not_implemented))
         .route("/v1/play/:session_id/heartbeat", post(not_implemented))
         .route("/v1/checkout/:course_id", post(not_implemented))

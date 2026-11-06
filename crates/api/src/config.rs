@@ -1,5 +1,6 @@
 use url::Url;
 use zeno_core::config::{parse_or, required, Config, ConfigError};
+use zeno_core::storage::StorageConfig;
 
 pub struct ApiConfig {
     pub core: Config,
@@ -8,6 +9,9 @@ pub struct ApiConfig {
     pub jwt_access_secret: String,
     pub cookie_secure: bool,
     pub trusted_proxy_hops: usize,
+    pub storage: StorageConfig,
+    /// Largest video a creator may upload, in bytes.
+    pub max_upload_bytes: u64,
 }
 
 impl ApiConfig {
@@ -17,6 +21,8 @@ impl ApiConfig {
         let jwt_access_secret = required("JWT_ACCESS_SECRET")?;
         let cookie_secure = parse_or("COOKIE_SECURE", false)?;
         let trusted_proxy_hops = parse_or("TRUSTED_PROXY_HOPS", 0usize)?;
+        let storage = StorageConfig::from_env()?;
+        let max_upload_bytes = parse_or("MAX_UPLOAD_BYTES", 10u64 * 1024 * 1024 * 1024)?;
 
         if jwt_access_secret.len() < 32 {
             return Err(ConfigError::Invalid {
@@ -45,6 +51,8 @@ impl ApiConfig {
             jwt_access_secret,
             cookie_secure,
             trusted_proxy_hops,
+            storage,
+            max_upload_bytes,
         })
     }
 }

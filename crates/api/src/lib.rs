@@ -11,6 +11,7 @@ pub mod secret;
 pub mod security;
 pub mod state;
 pub mod stubs;
+pub mod videos;
 
 use std::time::Duration;
 
@@ -63,6 +64,7 @@ pub fn build_app(state: AppState) -> Router {
     Router::new()
         .merge(health::router())
         .nest("/v1/auth", auth::routes::router())
+        .nest("/v1/videos", videos::routes::router())
         .merge(stubs::router())
         .layer(from_fn_with_state(
             state.clone(),

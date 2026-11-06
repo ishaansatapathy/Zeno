@@ -8,6 +8,7 @@ use zeno_api::auth::password::{PasswordParams, Passwords};
 use zeno_api::config::ApiConfig;
 use zeno_api::mail::LogMailer;
 use zeno_api::state::AppState;
+use zeno_core::storage::S3Store;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,7 +42,13 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not connect to Redis")?;
 
-    zeno_api::auth::cleanup::spawn_periodic(db.clone());
+    let store = S3Store::new(&config.storage).context("invalid storage configuration")?;
+    if !config.core.env.is_production() {
+        store
+            .ensure_bucket()
+            .await
+            .context("could not reach object storage")?;
+    }
 
     let bind_addr = config.core.bind_addr;
     let state = AppState::new(
@@ -50,7 +57,10 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(RedisCounters::new(redis)),
         Arc::new(LogMailer),
         Passwords::new(PasswordParams::default())?,
+        store,
     );
+
+    zeno_api::auth::cleanup::spawn_periodic(state.clone());
 
     zeno_api::outbox::spawn_retry_loop(state.clone());
     let background = state.background.clone();

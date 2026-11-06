@@ -15,6 +15,7 @@ use zeno_api::config::ApiConfig;
 use zeno_api::mail::{Mailer, MemoryMailer, OutgoingEmail};
 use zeno_api::state::AppState;
 use zeno_core::config::{Config, Environment};
+use zeno_core::storage::{S3Store, StorageConfig};
 
 pub const ORIGIN: &str = "http://localhost:3000";
 pub const PASSWORD: &str = "correct horse battery staple";
@@ -82,14 +83,25 @@ pub fn make_state(
         jwt_access_secret: SECRET.into(),
         cookie_secure,
         trusted_proxy_hops,
+        storage: storage_config(),
+        max_upload_bytes: MAX_UPLOAD_BYTES,
     };
+    let store = S3Store::new(&config.storage).unwrap();
     AppState::new(
         pool,
         config,
         Arc::new(MemoryCounters::default()),
         mailer,
         Passwords::new(PasswordParams::for_tests()).unwrap(),
+        store,
     )
+}
+
+pub const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
+
+pub fn storage_config() -> StorageConfig {
+    let _ = dotenvy::dotenv();
+    StorageConfig::from_env().expect("S3_* settings are required for API tests; see .env.example")
 }
 
 pub struct Res {
@@ -330,4 +342,35 @@ pub async fn login(app: &App, email: &str, password: &str) -> Res {
 
 pub async fn count(pool: &PgPool, sql: &str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+}
+
+/// Registers with the given role, verifies, and returns the logged-in jar.
+pub async fn signup_verified_as(app: &App, email: &str, role: &str) -> Jar {
+    let before = app.mailer.sent().len();
+    let res = app
+        .post("/v1/auth/register")
+        .json(json!({ "name": "Asha Rao", "email": email, "password": PASSWORD, "role": role }))
+        .send()
+        .await;
+    assert_eq!(res.status, StatusCode::ACCEPTED, "{:?}", res.body);
+    let mails = app.mailer.wait_for(before + 1).await;
+    let verified = verify(app, &token_from(&mails[before])).await;
+    assert_eq!(verified.status, StatusCode::OK, "{:?}", verified.body);
+    Jar::of(&verified)
+}
+
+pub async fn signup_creator(app: &App, email: &str) -> Jar {
+    signup_verified_as(app, email, "creator").await
+}
+
+/// What a browser does with a presigned part URL.
+pub async fn browser_put(url: &str, body: Vec<u8>) -> StatusCode {
+    let status = reqwest::Client::new()
+        .put(url)
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .status();
+    StatusCode::from_u16(status.as_u16()).unwrap()
 }

@@ -51,7 +51,8 @@ pub struct Lesson {
     pub live_session_id: Option<Uuid>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "video_status", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
 pub enum VideoStatus {
     Uploading,

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 use tokio::sync::Notify;
+use zeno_core::storage::S3Store;
 
 use crate::auth::counters::CounterStore;
 use crate::auth::password::Passwords;
@@ -64,6 +65,7 @@ pub struct AppState {
     pub passwords: Passwords,
     pub tokens: Arc<TokenKeys>,
     pub background: Background,
+    pub store: S3Store,
 }
 
 impl AppState {
@@ -73,6 +75,7 @@ impl AppState {
         counters: Arc<dyn CounterStore>,
         mailer: Arc<dyn Mailer>,
         passwords: Passwords,
+        store: S3Store,
     ) -> Self {
         let tokens = Arc::new(TokenKeys::new(config.jwt_access_secret.as_bytes()));
         Self {
@@ -83,6 +86,7 @@ impl AppState {
             passwords,
             tokens,
             background: Background::default(),
+            store,
         }
     }
 }
