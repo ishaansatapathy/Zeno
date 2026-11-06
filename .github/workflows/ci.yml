@@ -35,11 +35,29 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
+      # MinIO no longer publishes official images; this is the last Bitnami build, by digest.
+      minio:
+        image: bitnamilegacy/minio@sha256:451fe6858cb770cc9d0e77ba811ce287420f781c7c1b806a386f6896471a349c
+        env:
+          MINIO_ROOT_USER: zeno-ci
+          MINIO_ROOT_PASSWORD: zeno-ci-secret
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     env:
       DATABASE_URL: postgres://zeno:zeno@localhost:5432/zeno
       TEST_REDIS_URL: redis://localhost:6379
+      S3_ENDPOINT: http://localhost:9000
+      S3_BUCKET: zeno-ci
+      S3_ACCESS_KEY: zeno-ci
+      S3_SECRET_KEY: zeno-ci-secret
     steps:
       - uses: actions/checkout@v4
+      # The worker's tests run real ffmpeg (with libx264) on generated videos.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
