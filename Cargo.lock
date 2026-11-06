@@ -3279,10 +3279,12 @@ dependencies = [
 name = "zeno-core"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "dotenvy",
  "futures-util",
  "reqwest",
+ "ring",
  "rustls",
  "rusty-s3",
  "serde",
