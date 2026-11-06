@@ -65,10 +65,12 @@ pub async fn insert<'e>(
 }
 
 pub async fn find<'e>(db: impl PgExecutor<'e>, id: Uuid) -> Result<Option<VideoRow>, sqlx::Error> {
-    sqlx::query_as(&format!("select {COLUMNS} from videos where id = $1"))
-        .bind(id)
-        .fetch_optional(db)
-        .await
+    sqlx::query_as(&format!(
+        "select {COLUMNS} from videos where id = $1 and deleted_at is null"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await
 }
 
 pub async fn count_uploading<'e>(
@@ -134,4 +136,78 @@ pub async fn stale_uploads<'e>(
     .bind(limit)
     .fetch_all(db)
     .await
+}
+
+/// Marks a video deleted so it stops being served. Returns whether it was live.
+pub async fn soft_delete<'e>(db: impl PgExecutor<'e>, id: Uuid) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "update videos set deleted_at = now(), updated_at = now() \
+         where id = $1 and deleted_at is null",
+    )
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Deleted videos that can be purged now: none has a transcode job that is still live, because
+/// such a job may yet write output for it.
+pub async fn purgeable<'e>(
+    db: impl PgExecutor<'e>,
+    limit: i64,
+) -> Result<Vec<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "select v.id, v.source_key from videos v \
+         where v.deleted_at is not null \
+           and not exists ( \
+               select 1 from jobs j where j.kind = 'transcode' \
+                 and j.payload ->> 'video_id' = v.id::text \
+                 and j.completed_at is null and j.failed_at is null) \
+         order by v.deleted_at limit $1",
+    )
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
+/// Removes a purged video's row (its key goes with it). Re-checks the job condition so a job
+/// enqueued between the listing and now cannot lose its video.
+pub async fn delete_purged<'e>(db: impl PgExecutor<'e>, id: Uuid) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "delete from videos v where v.id = $1 and v.deleted_at is not null \
+           and not exists ( \
+               select 1 from jobs j where j.kind = 'transcode' \
+                 and j.payload ->> 'video_id' = v.id::text \
+                 and j.completed_at is null and j.failed_at is null)",
+    )
+    .bind(id)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Finished, still-live videos whose original upload is older than the retention period.
+pub async fn sources_past_retention<'e>(
+    db: impl PgExecutor<'e>,
+    retention_days: i32,
+    limit: i64,
+) -> Result<Vec<(Uuid, String)>, sqlx::Error> {
+    sqlx::query_as(
+        "select id, source_key from videos \
+         where source_purged_at is null and deleted_at is null and status in ('ready', 'failed') \
+           and coalesce(ready_at, updated_at) < now() - make_interval(days => $1) \
+         order by coalesce(ready_at, updated_at) limit $2",
+    )
+    .bind(retention_days)
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
+pub async fn mark_source_purged<'e>(db: impl PgExecutor<'e>, id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("update videos set source_purged_at = now() where id = $1")
+        .bind(id)
+        .execute(db)
+        .await?;
+    Ok(())
 }

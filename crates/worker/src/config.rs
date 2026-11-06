@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use zeno_core::config::{parse_or, required, ConfigError};
+use zeno_core::keyvault::KeyVault;
 use zeno_core::storage::StorageConfig;
 
 #[derive(Clone)]
@@ -18,6 +19,8 @@ pub struct Limits {
 pub struct WorkerConfig {
     pub database_url: String,
     pub storage: StorageConfig,
+    /// Wraps each video's content key before it is stored.
+    pub vault: KeyVault,
     pub ffmpeg_bin: String,
     pub ffprobe_bin: String,
     /// Scratch space for downloads and encodes; every job gets its own directory here.
@@ -55,6 +58,7 @@ impl WorkerConfig {
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             storage: StorageConfig::from_env()?,
+            vault: KeyVault::from_env()?,
             ffmpeg_bin: parse_or("FFMPEG_BIN", "ffmpeg".to_owned())?,
             ffprobe_bin: parse_or("FFPROBE_BIN", "ffprobe".to_owned())?,
             work_dir,

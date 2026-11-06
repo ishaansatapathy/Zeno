@@ -352,6 +352,56 @@ pub async fn abort(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), Ap
     Ok(())
 }
 
+/// Deleting an unfinished upload cancels it; anything else is marked deleted at once (so it
+/// stops being served) and its storage is removed later by `purge_deleted`.
+pub async fn delete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), ApiError> {
+    let video = load_owned(state, user, id).await?;
+    if video.status == VideoStatus::Uploading {
+        return abort(state, user, id).await;
+    }
+    if !repo::soft_delete(&state.db, id).await? {
+        return Err(not_found());
+    }
+    Ok(())
+}
+
+/// Removes the storage and then the row of deleted videos. A video whose transcode job is still
+/// live is skipped until the job ends, since the job may still be writing its output.
+pub async fn purge_deleted(state: &AppState) -> Result<usize, ApiError> {
+    let mut purged = 0;
+    for (id, source_key) in repo::purgeable(&state.db, 50).await? {
+        let removed = async {
+            state.store.delete_prefix(&format!("videos/{id}/")).await?;
+            state.store.delete(&source_key).await
+        }
+        .await;
+        if let Err(err) = removed {
+            tracing::error!(error = ?err, video_id = %id, "could not remove a deleted video's files");
+            continue;
+        }
+        if repo::delete_purged(&state.db, id).await? {
+            purged += 1;
+        }
+    }
+    Ok(purged)
+}
+
+/// Deletes original uploads once they are past the retention period. They are never served and
+/// are by far the largest objects, so keeping them forever would be the main storage cost.
+pub async fn purge_old_sources(state: &AppState) -> Result<usize, ApiError> {
+    let days = i32::try_from(state.config.source_retention_days).unwrap_or(i32::MAX);
+    let mut purged = 0;
+    for (id, source_key) in repo::sources_past_retention(&state.db, days, 50).await? {
+        if let Err(err) = state.store.delete(&source_key).await {
+            tracing::error!(error = ?err, video_id = %id, "could not remove an old source upload");
+            continue;
+        }
+        repo::mark_source_purged(&state.db, id).await?;
+        purged += 1;
+    }
+    Ok(purged)
+}
+
 /// Cleans up uploads nobody finished: storage keeps (and bills for) uploaded parts until the
 /// multipart upload is aborted.
 pub async fn abandon_stale_uploads(state: &AppState) -> Result<usize, ApiError> {

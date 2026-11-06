@@ -18,6 +18,16 @@ pub fn spawn_periodic(state: AppState) {
                 Ok(cleaned) => tracing::info!(cleaned, "cancelled abandoned video uploads"),
                 Err(err) => tracing::error!(error = ?err, "abandoned-upload cleanup failed"),
             }
+            match videos::purge_deleted(&state).await {
+                Ok(0) => {}
+                Ok(purged) => tracing::info!(purged, "removed deleted videos from storage"),
+                Err(err) => tracing::error!(error = ?err, "deleted-video purge failed"),
+            }
+            match videos::purge_old_sources(&state).await {
+                Ok(0) => {}
+                Ok(purged) => tracing::info!(purged, "removed source uploads past retention"),
+                Err(err) => tracing::error!(error = ?err, "source retention sweep failed"),
+            }
             match repo::purge_expired(&state.db).await {
                 Ok(purged) if purged == repo::Purged::default() => {}
                 Ok(purged) => {

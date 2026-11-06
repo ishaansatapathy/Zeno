@@ -12,6 +12,9 @@ pub struct ApiConfig {
     pub storage: StorageConfig,
     /// Largest video a creator may upload, in bytes.
     pub max_upload_bytes: u64,
+    /// Days the original upload is kept once a video is ready (or has failed), in case it needs
+    /// re-encoding. After that only the encrypted renditions remain.
+    pub source_retention_days: u32,
 }
 
 impl ApiConfig {
@@ -23,6 +26,7 @@ impl ApiConfig {
         let trusted_proxy_hops = parse_or("TRUSTED_PROXY_HOPS", 0usize)?;
         let storage = StorageConfig::from_env()?;
         let max_upload_bytes = parse_or("MAX_UPLOAD_BYTES", 10u64 * 1024 * 1024 * 1024)?;
+        let source_retention_days = parse_or("SOURCE_RETENTION_DAYS", 7u32)?;
 
         if jwt_access_secret.len() < 32 {
             return Err(ConfigError::Invalid {
@@ -53,6 +57,7 @@ impl ApiConfig {
             trusted_proxy_hops,
             storage,
             max_upload_bytes,
+            source_retention_days,
         })
     }
 }

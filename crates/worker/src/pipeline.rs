@@ -63,11 +63,12 @@ fn video_id_of(job: &Job) -> Result<Uuid, JobError> {
 pub async fn process(ctx: &Context, job: &Job, cancel: &CancellationToken) -> Result<(), JobError> {
     let started = Instant::now();
     let video_id = video_id_of(job)?;
-    let video: Option<VideoRow> =
-        sqlx::query_as("select source_key, status from videos where id = $1")
-            .bind(video_id)
-            .fetch_optional(&ctx.db)
-            .await?;
+    let video: Option<VideoRow> = sqlx::query_as(
+        "select source_key, status from videos where id = $1 and deleted_at is null",
+    )
+    .bind(video_id)
+    .fetch_optional(&ctx.db)
+    .await?;
     let Some(video) = video.filter(|v| v.status == VideoStatus::Processing) else {
         // Deleted, or already handled by an earlier attempt: nothing left to do.
         return finish_without_work(ctx, job).await;
@@ -430,19 +431,24 @@ async fn finalize(
         })
         .collect();
 
+    let wrapped = ctx
+        .config
+        .vault
+        .seal(video_id, key)
+        .map_err(|e| JobError::Transient(e.to_string()))?;
     let mut tx = ctx.db.begin().await?;
     sqlx::query(
-        "insert into video_keys (video_id, key) values ($1, $2) \
-         on conflict (video_id) do update set key = excluded.key, created_at = now()",
+        "insert into video_keys (video_id, wrapped_key) values ($1, $2) \
+         on conflict (video_id) do update set wrapped_key = excluded.wrapped_key, created_at = now()",
     )
     .bind(video_id)
-    .bind(&key[..])
+    .bind(&wrapped[..])
     .execute(&mut *tx)
     .await?;
     let updated = sqlx::query(
         "update videos set status = 'ready', error_code = null, duration_seconds = $2, width = $3, \
          height = $4, renditions = $5, ready_at = now(), updated_at = now() \
-         where id = $1 and status = 'processing'",
+         where id = $1 and status = 'processing' and deleted_at is null",
     )
     .bind(video_id)
     .bind(encoded.duration_secs.round() as i32)

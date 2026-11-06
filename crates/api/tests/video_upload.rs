@@ -5,7 +5,7 @@ use common::*;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
-use zeno_api::videos::service::abandon_stale_uploads;
+use zeno_api::videos::service::{abandon_stale_uploads, purge_deleted, purge_old_sources};
 use zeno_core::storage::StorageError;
 
 macro_rules! db_test {
@@ -326,5 +326,181 @@ db_test! {
         let jar = signup_creator(&app, "t@x.in").await;
         app.post("/v1/auth/logout").jar(&jar).send().await;
         assert_eq!(create(&app, &jar, MIB).await.status, StatusCode::UNAUTHORIZED);
+    }
+}
+
+/// Uploads a small source, completes it, and pretends a worker published `segments` objects and
+/// finished: the video is `ready` and its transcode job is done.
+async fn ready_video(app: &App, jar: &Jar, pool: &PgPool, segments: usize) -> Uuid {
+    let id = processing_video(app, jar).await;
+    for n in 0..segments {
+        app.state
+            .store
+            .put_bytes(&format!("videos/{id}/seg{n}.ts"), vec![0; 8], "video/mp2t")
+            .await
+            .unwrap();
+    }
+    sqlx::query("update videos set status = 'ready', ready_at = now() where id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into video_keys (video_id, wrapped_key) values ($1, $2)")
+        .bind(id)
+        .bind(vec![7u8; 45])
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("update jobs set completed_at = now() where payload ->> 'video_id' = $1")
+        .bind(id.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+    id
+}
+
+/// A completed upload: status `processing`, with its transcode job queued.
+async fn processing_video(app: &App, jar: &Jar) -> Uuid {
+    let created = create(app, jar, MIB).await;
+    let id = video_id(&created);
+    browser_put(&part_urls(&created.body["upload"])[0].2, bytes(MIB, 5)).await;
+    let done = app
+        .post(&format!("/v1/videos/{id}/complete"))
+        .jar(jar)
+        .send()
+        .await;
+    assert_eq!(done.status, StatusCode::OK, "{:?}", done.body);
+    id
+}
+
+fn delete_request(app: &App, id: impl std::fmt::Display) -> Req {
+    app.req(axum::http::Method::DELETE, &format!("/v1/videos/{id}"))
+}
+
+/// (does the original exist, how many published objects exist)
+async fn objects(app: &App, id: Uuid) -> (bool, usize) {
+    let source = app
+        .state
+        .store
+        .head(&format!("uploads/{id}/source"))
+        .await
+        .unwrap()
+        .is_some();
+    (
+        source,
+        app.state
+            .store
+            .list_prefix(&format!("videos/{id}/"))
+            .await
+            .unwrap()
+            .len(),
+    )
+}
+
+db_test! {
+    async fn deleting_a_video_stops_serving_it_at_once_and_a_sweep_removes_its_files(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "t@x.in").await;
+        let other = ready_video(&app, &jar, &pool, 3).await;
+        let id = ready_video(&app, &jar, &pool, 3).await;
+        assert_eq!(objects(&app, id).await, (true, 3));
+
+        let gone = delete_request(&app, id).jar(&jar).send().await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT);
+        // Stops being served immediately, though the files stay until the sweep.
+        assert_eq!(app.get(&format!("/v1/videos/{id}")).jar(&jar).send().await.status, StatusCode::NOT_FOUND);
+        assert_eq!(delete_request(&app, id).jar(&jar).send().await.status, StatusCode::NOT_FOUND);
+        assert_eq!(objects(&app, id).await, (true, 3));
+
+        assert_eq!(purge_deleted(&app.state).await.unwrap(), 1);
+        assert_eq!(objects(&app, id).await, (false, 0));
+        assert_eq!(count(&pool, &format!("select count(*) from videos where id = '{id}'")).await, 0);
+        assert_eq!(count(&pool, &format!("select count(*) from video_keys where video_id = '{id}'")).await, 0);
+        // The other video, and a second sweep, are unaffected.
+        assert_eq!(objects(&app, other).await, (true, 3));
+        assert_eq!(purge_deleted(&app.state).await.unwrap(), 0);
+        assert_eq!(app.get(&format!("/v1/videos/{other}")).jar(&jar).send().await.status, StatusCode::OK);
+    }
+}
+
+db_test! {
+    async fn only_the_owner_can_delete_a_video(pool: PgPool) {
+        let app = app(pool.clone());
+        let owner = signup_creator(&app, "owner@x.in").await;
+        let rival = signup_creator(&app, "rival@x.in").await;
+        let student = signup_verified(&app, "kid@x.in").await;
+        let id = ready_video(&app, &owner, &pool, 1).await;
+
+        assert_eq!(delete_request(&app, id).jar(&rival).send().await.status, StatusCode::NOT_FOUND);
+        assert_eq!(delete_request(&app, id).jar(&student).send().await.status, StatusCode::FORBIDDEN);
+        assert_eq!(delete_request(&app, id).send().await.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(delete_request(&app, "not-a-uuid").jar(&owner).send().await.status, StatusCode::NOT_FOUND);
+        assert_eq!(app.get(&format!("/v1/videos/{id}")).jar(&owner).send().await.status, StatusCode::OK);
+        assert_eq!(purge_deleted(&app.state).await.unwrap(), 0);
+        assert_eq!(objects(&app, id).await, (true, 1));
+    }
+}
+
+db_test! {
+    async fn deleting_an_unfinished_upload_cancels_it(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "t@x.in").await;
+        let id = video_id(&create(&app, &jar, MIB).await);
+        let gone = delete_request(&app, id).jar(&jar).send().await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT);
+        assert_eq!(count(&pool, "select count(*) from videos").await, 0);
+    }
+}
+
+db_test! {
+    async fn a_deleted_video_is_not_purged_while_its_transcode_job_could_still_write_output(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "t@x.in").await;
+        // Processing: the job is live and a worker may be publishing right now.
+        let id = processing_video(&app, &jar).await;
+        assert_eq!(delete_request(&app, id).jar(&jar).send().await.status, StatusCode::NO_CONTENT);
+
+        assert_eq!(purge_deleted(&app.state).await.unwrap(), 0);
+        assert_eq!(count(&pool, "select count(*) from videos").await, 1);
+        assert!(objects(&app, id).await.0);
+
+        // The worker publishes (late), then its job ends: now everything can go.
+        app.state.store.put_bytes(&format!("videos/{id}/late.ts"), vec![0; 8], "video/mp2t").await.unwrap();
+        sqlx::query("update jobs set completed_at = now()").execute(&pool).await.unwrap();
+        assert_eq!(purge_deleted(&app.state).await.unwrap(), 1);
+        assert_eq!(objects(&app, id).await, (false, 0));
+    }
+}
+
+db_test! {
+    async fn originals_are_deleted_after_the_retention_period_but_the_renditions_stay(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "t@x.in").await;
+        let old = ready_video(&app, &jar, &pool, 2).await;
+        let recent = ready_video(&app, &jar, &pool, 2).await;
+        let processing = processing_video(&app, &jar).await;
+        sqlx::query("update videos set ready_at = now() - interval '8 days' where id = $1").bind(old).execute(&pool).await.unwrap();
+        sqlx::query("update videos set ready_at = now() - interval '6 days' where id = $1").bind(recent).execute(&pool).await.unwrap();
+        sqlx::query("update videos set updated_at = now() - interval '30 days' where id = $1").bind(processing).execute(&pool).await.unwrap();
+
+        assert_eq!(purge_old_sources(&app.state).await.unwrap(), 1);
+        assert_eq!(objects(&app, old).await, (false, 2), "original gone, renditions kept");
+        assert_eq!(objects(&app, recent).await, (true, 2));
+        assert!(objects(&app, processing).await.0, "a video still being processed keeps its original");
+        let shown = app.get(&format!("/v1/videos/{old}")).jar(&jar).send().await;
+        assert_eq!(shown.body["video"]["status"], "ready");
+        assert_eq!(purge_old_sources(&app.state).await.unwrap(), 0, "once is enough");
+    }
+}
+
+db_test! {
+    async fn failed_videos_lose_their_original_after_the_retention_period_too(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "t@x.in").await;
+        let id = processing_video(&app, &jar).await;
+        sqlx::query("update videos set status = 'failed', error_code = 'unsupported_media', updated_at = now() - interval '8 days' where id = $1")
+            .bind(id).execute(&pool).await.unwrap();
+        assert_eq!(purge_old_sources(&app.state).await.unwrap(), 1);
+        assert!(!objects(&app, id).await.0);
     }
 }

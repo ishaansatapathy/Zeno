@@ -397,3 +397,60 @@ db_test! {
         assert_eq!(ctx.store.head(&format!("videos/{id}/master.m3u8")).await.unwrap(), None, "nothing was published");
     }
 }
+
+db_test! {
+    async fn a_video_marked_deleted_while_queued_is_never_downloaded_or_encoded(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &Spec::default())).await;
+        sqlx::query("update videos set deleted_at = now() where id = $1").bind(id).execute(&pool).await.unwrap();
+
+        run(&ctx).await;
+
+        assert!(job_row(&pool).await.1, "the job is closed, not retried forever");
+        assert_eq!(video_state(&pool, id).await.status, "processing");
+        assert_eq!(ctx.store.list_prefix(&format!("videos/{id}/")).await.unwrap().len(), 0);
+    }
+}
+
+db_test! {
+    async fn a_video_deleted_during_the_encode_is_not_marked_ready_and_gets_no_key(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &Spec::default())).await;
+        // Deterministically "delete" the video at the worst moment: after the worker has
+        // started committing its result but before the video is marked ready.
+        sqlx::raw_sql(
+            "create function soft_delete_on_key() returns trigger language plpgsql as $$ \
+             begin update videos set deleted_at = now() where id = new.video_id; return new; end $$; \
+             create trigger soft_delete_on_key before insert on video_keys \
+             for each row execute function soft_delete_on_key();",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run(&ctx).await;
+
+        assert_eq!(video_state(&pool, id).await.status, "processing", "a deleted video must not become ready");
+        let keys: i64 = sqlx::query_scalar("select count(*) from video_keys").fetch_one(&pool).await.unwrap();
+        assert_eq!(keys, 0, "the key insert is rolled back with everything else");
+        assert!(job_row(&pool).await.1, "the job still ends cleanly");
+    }
+}
+
+db_test! {
+    async fn the_content_key_is_stored_wrapped_and_only_opens_for_its_own_video(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &Spec::default())).await;
+        run(&ctx).await;
+
+        let blob = stored_blob(&pool, id).await;
+        let key = stored_key(&pool, id).await;
+        assert_eq!(blob.len(), zeno_core::keyvault::WRAPPED_LEN);
+        assert_eq!(key.len(), 16);
+        assert!(!blob.windows(16).any(|w| w == &key[..]), "the raw key must not appear in the database");
+        assert!(test_vault().open(uuid::Uuid::new_v4(), &blob).is_err(), "bound to its own video");
+    }
+}

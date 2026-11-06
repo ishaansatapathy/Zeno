@@ -15,7 +15,7 @@ use crate::videos::service;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(create))
-        .route("/:id", get(show))
+        .route("/:id", get(show).delete(remove))
         .route("/:id/upload", get(resume))
         .route("/:id/complete", post(complete))
         .route("/:id/abort", post(abort))
@@ -83,5 +83,14 @@ async fn abort(
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     service::abort(&state, &user, parse_id(&id)?).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    service::delete(&state, &user, parse_id(&id)?).await?;
     Ok(StatusCode::NO_CONTENT)
 }

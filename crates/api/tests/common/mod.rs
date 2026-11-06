@@ -85,6 +85,7 @@ pub fn make_state(
         trusted_proxy_hops,
         storage: storage_config(),
         max_upload_bytes: MAX_UPLOAD_BYTES,
+        source_retention_days: SOURCE_RETENTION_DAYS,
     };
     let store = S3Store::new(&config.storage).unwrap();
     AppState::new(
@@ -98,6 +99,7 @@ pub fn make_state(
 }
 
 pub const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
+pub const SOURCE_RETENTION_DAYS: u32 = 7;
 
 pub fn storage_config() -> StorageConfig {
     let _ = dotenvy::dotenv();

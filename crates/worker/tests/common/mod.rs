@@ -7,6 +7,7 @@ use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 use zeno_core::jobs;
+use zeno_core::keyvault::KeyVault;
 use zeno_core::storage::{S3Store, StorageConfig};
 use zeno_worker::config::{Limits, WorkerConfig};
 use zeno_worker::pipeline::Context;
@@ -25,11 +26,18 @@ pub fn storage_config() -> StorageConfig {
         .expect("S3_* settings are required for worker tests; see .env.example")
 }
 
+pub const TEST_CONTENT_KEY_SECRET: &str = "q3V1b0J3pQ0m5sT8yZ2cX7aN4hK9fR6eL1uD0gW3tYI=";
+
+pub fn test_vault() -> KeyVault {
+    KeyVault::from_secret(TEST_CONTENT_KEY_SECRET).unwrap()
+}
+
 pub fn test_config() -> WorkerConfig {
     let work_dir = std::env::temp_dir().join(format!("zeno-worker-test-{}", Uuid::new_v4()));
     WorkerConfig {
         database_url: String::new(),
         storage: storage_config(),
+        vault: test_vault(),
         ffmpeg_bin: ffmpeg_bin(),
         ffprobe_bin: ffprobe_bin(),
         work_dir,
@@ -266,12 +274,21 @@ pub fn rendition_names(state: &VideoState) -> Vec<String> {
         .collect()
 }
 
-pub async fn stored_key(pool: &PgPool, id: Uuid) -> Vec<u8> {
-    sqlx::query_scalar("select key from video_keys where video_id = $1")
+/// The wrapped key exactly as stored.
+pub async fn stored_blob(pool: &PgPool, id: Uuid) -> Vec<u8> {
+    sqlx::query_scalar("select wrapped_key from video_keys where video_id = $1")
         .bind(id)
         .fetch_one(pool)
         .await
         .unwrap()
+}
+
+/// The video's content key, unwrapped the way the key server will.
+pub async fn stored_key(pool: &PgPool, id: Uuid) -> Vec<u8> {
+    test_vault()
+        .open(id, &stored_blob(pool, id).await)
+        .unwrap()
+        .to_vec()
 }
 
 /// Downloads a published variant (playlist + every segment) next to a copy of `key`, with the
