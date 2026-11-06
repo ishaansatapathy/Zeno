@@ -42,6 +42,14 @@ email_address = "0.2"
 url = "2"
 time = "0.3"
 
+# object storage and media
+rusty-s3 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }
+tempfile = "3"
+
 # plumbing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
