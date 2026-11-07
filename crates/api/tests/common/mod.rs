@@ -361,7 +361,15 @@ pub async fn signup_verified_as(app: &App, email: &str, role: &str) -> Jar {
     Jar::of(&verified)
 }
 
+/// Every upload test goes through here first. The API creates its bucket at startup in
+/// development; tests build the app directly, so on a fresh storage server (CI) they must do it
+/// themselves. Creating an existing bucket is a no-op.
 pub async fn signup_creator(app: &App, email: &str) -> Jar {
+    app.state
+        .store
+        .ensure_bucket()
+        .await
+        .expect("storage must be reachable");
     signup_verified_as(app, email, "creator").await
 }
 
