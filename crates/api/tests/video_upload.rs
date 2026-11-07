@@ -70,7 +70,7 @@ db_test! {
         assert_eq!(created.body["upload"]["total_parts"], 2);
         let parts = part_urls(&created.body["upload"]);
         assert_eq!(parts.iter().map(|p| (p.0, p.1)).collect::<Vec<_>>(), vec![(1, 16 * MIB as u64), (2, MIB as u64)]);
-        assert!(parts[0].2.starts_with("http://127.0.0.1:9000/"), "URLs point at storage, not the API: {}", parts[0].2);
+        assert!(parts[0].2.starts_with(storage_config().public_endpoint.as_str()), "URLs point at storage, not the API: {}", parts[0].2);
 
         let payload = bytes(TWO_PART_SIZE, 9);
         assert!(browser_put(&parts[0].2, payload[..16 * MIB].to_vec()).await.is_success());
