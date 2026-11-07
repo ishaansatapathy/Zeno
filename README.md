@@ -25,6 +25,7 @@ cp .env.example .env              # then set JWT_ACCESS_SECRET (openssl rand -ba
 docker compose -f deploy/docker-compose.yml up -d --wait   # Postgres :5433, Redis :6379, MinIO :9000
 cargo run -p zeno-api             # http://localhost:8080/health  (applies migrations in development)
 cargo run -p zeno-worker          # transcodes uploaded videos
+cargo run -p zeno-keyserver       # http://localhost:8081, content keys for playback
 
 cd web && npm install && npm run dev   # http://localhost:3000
 ```
@@ -86,8 +87,25 @@ Unfinished uploads are cancelled after 24 hours. Original uploads are deleted `S
 
 Uploads are untrusted input to ffmpeg, so only an allowlist of media containers is accepted (playlists, concat scripts and other formats that reference further resources are refused before any encode); ffmpeg runs with `-protocol_whitelist file`, a scrubbed environment, a hard timeout and kill-on-cancel; output is capped at the duration limit; and metadata, chapters and subtitles are stripped. A file that cannot be processed fails for good with a short code (`unsupported_media`, `no_video_stream`, `too_long`, `resolution_too_high`); infrastructure trouble is retried with backoff.
 
+## Playback
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/videos/:id/play` | Start a playback session. Returns the master playlist URL (carrying a signed token), where to resume, the heartbeat interval and the watermark text |
+| `GET /v1/play/:session/master.m3u8?t=` | The master playlist, rewritten for this viewer. Authorised by the token alone (players send no cookies) |
+| `GET /v1/play/:session/:rendition.m3u8?t=` | A rendition's playlist: segments become presigned storage URLs valid for the session, the key URI points at the key server |
+| `POST /v1/play/:session/heartbeat` | Every 30 s with `{"position_seconds": n}`: keeps the session alive and saves the position for resume |
+| `DELETE /v1/play/:session` | Stop watching and free the screen |
+| `GET /v1/keys/:video_id?t=` | `zeno-keyserver`: the 16-byte AES key, `no-store` |
+
+Who may watch: for now the video's creator and admins (preview); students will get access through course enrollment. The playback token (HMAC-SHA256, `PLAYBACK_TOKEN_SECRET`, shared by API and key server) names one session, video and user and expires with the session (twice the video's length plus an hour, between 2 and 12 hours). A token is never enough on its own: every playlist and key request also checks that its session is still open, so stopping, a password reset or deleting the video cuts playback off on the very next request.
+
+An account may have `MAX_CONCURRENT_STREAMS` (default 2) sessions open. A screen silent for 3 minutes gives up its slot to the next one to press play and is told why when it returns; simultaneous presses are serialised per account, so the limit can't be overshot. The key server only answers browser requests from the web app's origin (a key URL pasted into a player on another site is refused), caps key fetches per session, and the content key is unwrapped only at that moment. Stored playlists are rewritten strictly: an unknown rendition, a foreign URI, a segment name with a path in it or a playlist without encryption is refused rather than passed on.
+
+The watermark (`name · phone or email · session code`) is for the player to draw over the video and keep moving; it is what makes a screen recording traceable to an account and a session.
+
 Other endpoints from the plan answer `501` until they are built. Not built yet: phone OTP sign-in, 2FA, Google sign-in, CAPTCHA, a production mail transport (the API refuses to start in production until one exists).
 
 ## Status
 
-Stage 1: foundation, auth, video upload and the transcode pipeline are done. Next in the plan: playback (signed playlists, key delivery, watermark) and courses.
+Stage 1: foundation, auth, video upload, the transcode pipeline and secure playback (signed playlists, key server, screen limits, resume, watermark data) are done. Next in the plan: courses, lessons and enrollment, then checkout.
