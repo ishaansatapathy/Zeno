@@ -493,6 +493,8 @@ pub async fn reset_password(
         .ok_or_else(invalid_token)?;
     repo::update_password(&mut *tx, user_id, &new_hash).await?;
     let families = repo::revoke_user_sessions(&mut *tx, user_id).await?;
+    // Whoever had the password may be watching too: their playback stops with the next request.
+    crate::playback::repo::end_all_for_user(&mut *tx, user_id, "password_reset").await?;
     tx.commit().await?;
     for family_id in families {
         revocation::mark_revoked(&*state.counters, family_id).await;

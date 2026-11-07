@@ -72,7 +72,18 @@ pub fn make_state(
     trusted_proxy_hops: usize,
     mailer: Arc<dyn Mailer>,
 ) -> AppState {
-    let config = ApiConfig {
+    make_state_with(pool, cookie_secure, trusted_proxy_hops, mailer, |_| {})
+}
+
+/// `make_state` with a chance to change the configuration first.
+pub fn make_state_with(
+    pool: PgPool,
+    cookie_secure: bool,
+    trusted_proxy_hops: usize,
+    mailer: Arc<dyn Mailer>,
+    tweak: impl FnOnce(&mut ApiConfig),
+) -> AppState {
+    let mut config = ApiConfig {
         core: Config {
             env: Environment::Development,
             database_url: String::new(),
@@ -86,7 +97,11 @@ pub fn make_state(
         storage: storage_config(),
         max_upload_bytes: MAX_UPLOAD_BYTES,
         source_retention_days: SOURCE_RETENTION_DAYS,
+        playback: zeno_core::playback::PlaybackSigner::new(PLAYBACK_SECRET).unwrap(),
+        key_server_url: KEY_SERVER_URL.into(),
+        max_concurrent_streams: MAX_STREAMS,
     };
+    tweak(&mut config);
     let store = S3Store::new(&config.storage).unwrap();
     AppState::new(
         pool,
@@ -100,6 +115,9 @@ pub fn make_state(
 
 pub const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
 pub const SOURCE_RETENTION_DAYS: u32 = 7;
+pub const PLAYBACK_SECRET: &str = "playback-secret-for-tests-only-0123456789";
+pub const KEY_SERVER_URL: &str = "https://keys.test";
+pub const MAX_STREAMS: u32 = 2;
 
 pub fn storage_config() -> StorageConfig {
     let _ = dotenvy::dotenv();

@@ -43,3 +43,8 @@ dotenvy.workspace = true
 tower.workspace = true
 http-body-util.workspace = true
 reqwest.workspace = true
+futures-util.workspace = true
+zeno-worker = { path = "../worker" }
+zeno-keyserver = { path = "../keyserver" }
+tokio-util.workspace = true
+tempfile.workspace = true

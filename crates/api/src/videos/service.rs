@@ -359,9 +359,12 @@ pub async fn delete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), A
     if video.status == VideoStatus::Uploading {
         return abort(state, user, id).await;
     }
-    if !repo::soft_delete(&state.db, id).await? {
+    let mut tx = state.db.begin().await?;
+    if !repo::soft_delete(&mut *tx, id).await? {
         return Err(not_found());
     }
+    crate::playback::repo::end_all_for_video(&mut *tx, id, "video_deleted").await?;
+    tx.commit().await?;
     Ok(())
 }
 

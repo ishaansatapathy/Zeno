@@ -7,6 +7,7 @@ pub mod health;
 pub mod mail;
 pub mod net;
 pub mod outbox;
+pub mod playback;
 pub mod secret;
 pub mod security;
 pub mod state;
@@ -65,6 +66,7 @@ pub fn build_app(state: AppState) -> Router {
         .merge(health::router())
         .nest("/v1/auth", auth::routes::router())
         .nest("/v1/videos", videos::routes::router())
+        .nest("/v1/play", playback::routes::router())
         .merge(stubs::router())
         .layer(from_fn_with_state(
             state.clone(),
