@@ -12,3 +12,6 @@ out/
 *.log
 .DS_Store
 Thumbs.db
+
+# Private working notes (never pushed)
+docs/DAILY_PLAN.md
