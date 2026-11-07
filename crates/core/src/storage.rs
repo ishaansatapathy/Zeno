@@ -194,6 +194,12 @@ impl S3Store {
     /// A URL a browser can PUT one part to. The part's exact byte length is part of the
     /// signature, so storage refuses a body of any other size: a client cannot upload more
     /// than the size it declared.
+    /// A URL a player can GET `key` from without credentials, valid for `ttl` (S3 allows at most
+    /// seven days). Built on the public endpoint, like upload URLs.
+    pub fn presign_get(&self, key: &str, ttl: Duration) -> Url {
+        GetObject::new(&self.public, Some(&self.credentials), key).sign(ttl)
+    }
+
     pub fn presign_part(
         &self,
         key: &str,
