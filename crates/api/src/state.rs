@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 use tokio::sync::Notify;
+use zeno_core::ratelimit::RateLimiter;
 use zeno_core::storage::S3Store;
 
 use crate::auth::counters::CounterStore;
@@ -66,6 +67,7 @@ pub struct AppState {
     pub tokens: Arc<TokenKeys>,
     pub background: Background,
     pub store: S3Store,
+    pub limiter: RateLimiter,
 }
 
 impl AppState {
@@ -87,6 +89,14 @@ impl AppState {
             tokens,
             background: Background::default(),
             store,
+            limiter: RateLimiter::memory(),
         }
+    }
+
+    /// Replaces the per-process request counters with shared ones (Redis) or, in tests, a
+    /// limiter with a controllable clock.
+    pub fn with_limiter(mut self, limiter: RateLimiter) -> Self {
+        self.limiter = limiter;
+        self
     }
 }

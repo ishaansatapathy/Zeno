@@ -54,11 +54,12 @@ async fn main() -> anyhow::Result<()> {
     let state = AppState::new(
         db,
         config,
-        Arc::new(RedisCounters::new(redis)),
+        Arc::new(RedisCounters::new(redis.clone())),
         Arc::new(LogMailer),
         Passwords::new(PasswordParams::default())?,
         store,
-    );
+    )
+    .with_limiter(zeno_core::ratelimit::RateLimiter::redis(redis));
 
     zeno_api::auth::cleanup::spawn_periodic(state.clone());
 

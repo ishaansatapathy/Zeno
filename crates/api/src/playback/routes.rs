@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::auth::extractor::{ApiJson, AuthUser, Client};
 use crate::error::ApiError;
 use crate::playback::service::{self, HEARTBEAT_SECS};
+use crate::ratelimit::{self, policies};
 use crate::state::AppState;
 
 /// Mounted at `/v1/play`. Playlist routes are authorised by the token in `?t=` alone: players
@@ -79,6 +80,7 @@ pub async fn start_video(
         code: "not_found",
         message: "Video not found.".into(),
     })?;
+    ratelimit::enforce_user(&state, &policies::PLAY_START, user.id).await?;
     Ok(started_response(
         service::start_video(&state, &user, id, &ctx).await?,
     ))
@@ -96,6 +98,7 @@ pub async fn start_lesson(
         code: "not_found",
         message: "Lesson not found.".into(),
     })?;
+    ratelimit::enforce_user(&state, &policies::PLAY_START, user.id).await?;
     Ok(started_response(
         service::start_lesson(&state, &user, id, &ctx).await?,
     ))
@@ -186,6 +189,7 @@ async fn heartbeat(
     Path(session): Path<String>,
     ApiJson(body): ApiJson<HeartbeatRequest>,
 ) -> Result<StatusCode, ApiError> {
+    ratelimit::enforce_user(&state, &policies::HEARTBEAT, user.id).await?;
     service::heartbeat(&state, &user, session_id(&session)?, body.position_seconds).await?;
     Ok(StatusCode::NO_CONTENT)
 }

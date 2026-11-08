@@ -38,6 +38,7 @@ async fn enroll(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> Result<(StatusCode, Json<EnrollmentEnvelope>), ApiError> {
+    crate::ratelimit::enforce_user(&state, &crate::ratelimit::policies::ENROLL, user.id).await?;
     let enrollment = service::enroll_free(&state, &user, course_id(&id)?).await?;
     Ok((
         StatusCode::CREATED,

@@ -13,6 +13,7 @@ pub mod net;
 pub mod outbox;
 pub mod playback;
 pub mod profiles;
+pub mod ratelimit;
 pub mod secret;
 pub mod security;
 pub mod state;
@@ -70,7 +71,13 @@ pub fn build_app(state: AppState) -> Router {
     Router::new()
         .merge(health::router())
         .nest("/v1/auth", auth::routes::router())
-        .nest("/v1/public", catalog::routes::router())
+        .nest(
+            "/v1/public",
+            catalog::routes::router().layer(from_fn_with_state(
+                (state.clone(), ratelimit::policies::PUBLIC_CATALOG),
+                ratelimit::limit_by_address,
+            )),
+        )
         .nest("/v1/courses", courses::routes::router())
         .nest(
             "/v1/me",
