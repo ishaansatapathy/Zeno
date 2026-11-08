@@ -77,12 +77,14 @@ pub struct NewSession<'a> {
     pub ip: Option<IpAddr>,
     pub expires_at: DateTime<Utc>,
     pub position: i32,
+    /// The lesson being played, when it was started from one. Progress is recorded against it.
+    pub lesson_id: Option<Uuid>,
 }
 
 pub async fn insert(db: &mut PgConnection, session: &NewSession<'_>) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "insert into playback_sessions (id, user_id, video_id, device, ip, expires_at, last_position_seconds) \
-         values ($1, $2, $3, $4, $5, $6, $7)",
+        "insert into playback_sessions (id, user_id, video_id, device, ip, expires_at, last_position_seconds, lesson_id) \
+         values ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(session.id)
     .bind(session.user_id)
@@ -91,6 +93,7 @@ pub async fn insert(db: &mut PgConnection, session: &NewSession<'_>) -> Result<(
     .bind(session.ip.map(IpNetwork::from))
     .bind(session.expires_at)
     .bind(session.position)
+    .bind(session.lesson_id)
     .execute(db)
     .await?;
     Ok(())
@@ -158,6 +161,7 @@ pub struct SessionState {
     pub end_reason: Option<String>,
     pub expired: bool,
     pub duration_seconds: Option<i32>,
+    pub lesson_id: Option<Uuid>,
 }
 
 pub async fn state_for_user<'e>(
@@ -167,7 +171,7 @@ pub async fn state_for_user<'e>(
 ) -> Result<Option<SessionState>, sqlx::Error> {
     sqlx::query_as(
         "select s.ended_at is not null as ended, s.end_reason, s.expires_at <= now() as expired, \
-                v.duration_seconds \
+                v.duration_seconds, s.lesson_id \
          from playback_sessions s join videos v on v.id = s.video_id \
          where s.id = $1 and s.user_id = $2",
     )

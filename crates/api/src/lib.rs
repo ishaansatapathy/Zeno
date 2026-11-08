@@ -13,6 +13,7 @@ pub mod net;
 pub mod outbox;
 pub mod playback;
 pub mod profiles;
+pub mod progress;
 pub mod ratelimit;
 pub mod secret;
 pub mod security;
@@ -81,7 +82,9 @@ pub fn build_app(state: AppState) -> Router {
         .nest("/v1/courses", courses::routes::router())
         .nest(
             "/v1/me",
-            enrollments::routes::me_router().merge(profiles::routes::me_router()),
+            enrollments::routes::me_router()
+                .merge(profiles::routes::me_router())
+                .merge(progress::routes::me_router()),
         )
         .nest("/v1/lessons", courses::lessons::routes::item_router())
         .nest("/v1/videos", videos::routes::router())

@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
         )
         .merge(crate::courses::lessons::routes::course_router())
         .merge(crate::enrollments::routes::course_router())
+        .merge(crate::progress::routes::course_router())
 }
 
 fn parse_id(raw: &str) -> Result<Uuid, ApiError> {

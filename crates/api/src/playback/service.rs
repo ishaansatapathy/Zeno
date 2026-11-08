@@ -16,6 +16,7 @@ use crate::error::ApiError;
 use crate::playback::access::{self, AccessState};
 use crate::playback::playlist::{self, RewriteError, STORED_PLAYLIST_NAME};
 use crate::playback::repo::{self, NewSession};
+use crate::progress::repo as progress;
 use crate::state::AppState;
 use crate::videos::repo::{self as videos, VideoRow};
 
@@ -112,6 +113,7 @@ async fn start_with_video(
     state: &AppState,
     user: &AuthUser,
     video: VideoRow,
+    lesson_id: Option<Uuid>,
     ctx: &ClientContext,
 ) -> Result<Started, ApiError> {
     let video_id = video.id;
@@ -149,8 +151,17 @@ async fn start_with_video(
             ),
         ));
     }
+    // A lesson remembers where the viewer was for good; a video played outside a lesson (the
+    // owner's preview) falls back to the last session.
+    let remembered = match lesson_id {
+        Some(lesson) => progress::last_position(&mut *tx, user.id, lesson).await?,
+        None => None,
+    };
     let position = resume_point(
-        repo::last_position(&mut tx, user.id, video_id).await?,
+        match remembered {
+            Some(position) => Some(position),
+            None => repo::last_position(&mut tx, user.id, video_id).await?,
+        },
         video.duration_seconds,
     );
     repo::insert(
@@ -166,6 +177,7 @@ async fn start_with_video(
             ip: ctx.ip,
             expires_at,
             position,
+            lesson_id,
         },
     )
     .await?;
@@ -200,7 +212,7 @@ pub async fn start_video(
     if video.owner_id != user.id && user.role != Role::Admin {
         return Err(denied());
     }
-    start_with_video(state, user, video, ctx).await
+    start_with_video(state, user, video, None, ctx).await
 }
 
 pub async fn start_lesson(
@@ -222,7 +234,7 @@ pub async fn start_lesson(
     let video = videos::find(&state.db, video_id)
         .await?
         .ok_or_else(not_found)?;
-    start_with_video(state, user, video, ctx).await
+    start_with_video(state, user, video, Some(lesson_id), ctx).await
 }
 
 /// A playlist request that passed every check.
@@ -368,19 +380,29 @@ pub async fn heartbeat(
     session_id: Uuid,
     position_seconds: Option<u32>,
 ) -> Result<(), ApiError> {
-    let duration = repo::state_for_user(&state.db, session_id, user.id)
-        .await?
+    let session = repo::state_for_user(&state.db, session_id, user.id).await?;
+    let duration = session
+        .as_ref()
         .and_then(|session| session.duration_seconds);
+    let lesson_id = session.as_ref().and_then(|session| session.lesson_id);
     // Never record a position past the end of the video.
     let position = position_seconds.map(|p| {
         let p = i32::try_from(p).unwrap_or(i32::MAX);
         duration.map_or(p, |d| p.min(d.max(0)))
     });
-    if repo::heartbeat(&state.db, session_id, user.id, position).await? {
-        Ok(())
-    } else {
-        Err(session_problem(state, user, session_id).await)
+    if !repo::heartbeat(&state.db, session_id, user.id, position).await? {
+        return Err(session_problem(state, user, session_id).await);
     }
+    // Progress is a record of the lesson, not part of keeping the screen alive: if writing it
+    // fails the heartbeat still succeeds, and the next one folds the position in.
+    if let (Some(lesson_id), Some(position)) = (lesson_id, position) {
+        if let Err(err) =
+            crate::progress::service::record(state, user.id, lesson_id, position, duration).await
+        {
+            tracing::error!(error = %err, %lesson_id, "could not record lesson progress");
+        }
+    }
+    Ok(())
 }
 
 pub async fn stop(state: &AppState, user: &AuthUser, session_id: Uuid) -> Result<(), ApiError> {
