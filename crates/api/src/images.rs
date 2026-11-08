@@ -14,7 +14,10 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use axum::http::StatusCode;
+use axum::body::Bytes;
+use axum::extract::rejection::BytesRejection;
+use axum::extract::DefaultBodyLimit;
+use axum::http::{header, HeaderMap, StatusCode};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbImage};
@@ -86,7 +89,10 @@ impl From<ImageError> for ApiError {
             ImageError::TooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "image_too_large",
-                format!("Images can be at most {} MB.", MAX_IMAGE_BYTES / (1024 * 1024)),
+                format!(
+                    "Images can be at most {} MB.",
+                    MAX_IMAGE_BYTES / (1024 * 1024)
+                ),
             ),
             ImageError::UnsupportedType => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -192,7 +198,10 @@ pub fn process(bytes: &[u8], kind: ImageKind) -> Result<Processed, ImageError> {
 
 /// Runs [`process`] off the async threads and at most a few at a time.
 pub async fn process_async(bytes: Vec<u8>, kind: ImageKind) -> Result<Processed, ImageError> {
-    let _slot = DECODE_SLOTS.acquire().await.map_err(|_| ImageError::Failed)?;
+    let _slot = DECODE_SLOTS
+        .acquire()
+        .await
+        .map_err(|_| ImageError::Failed)?;
     tokio::task::spawn_blocking(move || process(&bytes, kind))
         .await
         .map_err(|_| ImageError::Failed)?
@@ -220,9 +229,15 @@ fn crop_to_aspect(image: RgbImage, target_w: u32, target_h: u32) -> RgbImage {
     // Compare w/h with target_w/target_h without floating point.
     let wide = u64::from(w) * u64::from(target_h) > u64::from(h) * u64::from(target_w);
     let (crop_w, crop_h) = if wide {
-        ((u64::from(h) * u64::from(target_w) / u64::from(target_h)) as u32, h)
+        (
+            (u64::from(h) * u64::from(target_w) / u64::from(target_h)) as u32,
+            h,
+        )
     } else {
-        (w, (u64::from(w) * u64::from(target_h) / u64::from(target_w)) as u32)
+        (
+            w,
+            (u64::from(w) * u64::from(target_h) / u64::from(target_w)) as u32,
+        )
     };
     let (crop_w, crop_h) = (crop_w.clamp(1, w), crop_h.clamp(1, h));
     if (crop_w, crop_h) == (w, h) {
@@ -269,6 +284,33 @@ pub async fn discard(state: &AppState, key: &str) {
     }
 }
 
+/// The request body limit for image upload routes (the rest of the API allows far less).
+pub fn upload_limit() -> DefaultBodyLimit {
+    DefaultBodyLimit::max(MAX_IMAGE_BYTES)
+}
+
+/// Turns the raw request body of an image upload into bytes, or the right error: `413` when it
+/// is over the limit, `415` when the declared content type is not an image we accept.
+pub fn read_upload(
+    headers: &HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Vec<u8>, ApiError> {
+    let declared = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    if !declared_type_is_acceptable(declared) {
+        return Err(ImageError::UnsupportedType.into());
+    }
+    match body {
+        Ok(bytes) if bytes.is_empty() => Err(ImageError::Invalid.into()),
+        Ok(bytes) => Ok(bytes.to_vec()),
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            Err(ImageError::TooLarge.into())
+        }
+        Err(_) => Err(ImageError::Invalid.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,8 +341,11 @@ mod tests {
 
     #[test]
     fn a_large_png_becomes_a_16_by_9_jpeg() {
-        let done = process(&png(2400, 1800, Rgba([10, 20, 30, 255])), ImageKind::CourseThumbnail)
-            .unwrap();
+        let done = process(
+            &png(2400, 1800, Rgba([10, 20, 30, 255])),
+            ImageKind::CourseThumbnail,
+        )
+        .unwrap();
         assert_eq!((done.width, done.height), (1280, 720));
         assert_eq!(&done.jpeg[..3], [0xFF, 0xD8, 0xFF], "JPEG magic");
         assert_eq!(decode(&done.jpeg).width(), 1280);
@@ -317,9 +362,21 @@ mod tests {
 
     #[test]
     fn identical_uploads_get_the_same_name_and_different_ones_do_not() {
-        let a = process(&png(800, 450, Rgba([1, 2, 3, 255])), ImageKind::CourseThumbnail).unwrap();
-        let b = process(&png(800, 450, Rgba([1, 2, 3, 255])), ImageKind::CourseThumbnail).unwrap();
-        let c = process(&png(800, 450, Rgba([200, 2, 3, 255])), ImageKind::CourseThumbnail).unwrap();
+        let a = process(
+            &png(800, 450, Rgba([1, 2, 3, 255])),
+            ImageKind::CourseThumbnail,
+        )
+        .unwrap();
+        let b = process(
+            &png(800, 450, Rgba([1, 2, 3, 255])),
+            ImageKind::CourseThumbnail,
+        )
+        .unwrap();
+        let c = process(
+            &png(800, 450, Rgba([200, 2, 3, 255])),
+            ImageKind::CourseThumbnail,
+        )
+        .unwrap();
         assert_eq!(a.content_hash, b.content_hash);
         assert_ne!(a.content_hash, c.content_hash);
         let owner = Uuid::nil();
@@ -331,7 +388,11 @@ mod tests {
 
     #[test]
     fn transparency_is_flattened_onto_white() {
-        let done = process(&png(640, 360, Rgba([0, 0, 0, 0])), ImageKind::CourseThumbnail).unwrap();
+        let done = process(
+            &png(640, 360, Rgba([0, 0, 0, 0])),
+            ImageKind::CourseThumbnail,
+        )
+        .unwrap();
         let pixel = decode(&done.jpeg).to_rgb8().get_pixel(10, 10).0;
         assert!(pixel.iter().all(|c| *c > 245), "{pixel:?}");
     }
@@ -358,7 +419,10 @@ mod tests {
     fn damaged_and_truncated_files_are_refused_without_panicking() {
         let good = jpeg(800, 800);
         for cut in [3, 20] {
-            assert!(process(&good[..cut], ImageKind::Avatar).is_err(), "cut at {cut}");
+            assert!(
+                process(&good[..cut], ImageKind::Avatar).is_err(),
+                "cut at {cut}"
+            );
         }
         // Decoders forgive a missing tail; what comes out is still a freshly encoded JPEG.
         for cut in [good.len() / 2, good.len() - 5] {
@@ -380,12 +444,21 @@ mod tests {
     fn tiny_oversized_and_huge_images_are_refused() {
         assert_eq!(
             process(&png(100, 100, Rgba([1, 1, 1, 255])), ImageKind::Avatar).unwrap_err(),
-            ImageError::TooSmall { width: 100, height: 100 }
+            ImageError::TooSmall {
+                width: 100,
+                height: 100
+            }
         );
         assert_eq!(
-            process(&png(1000, 100, Rgba([1, 1, 1, 255])), ImageKind::CourseThumbnail)
-                .unwrap_err(),
-            ImageError::TooSmall { width: 1000, height: 100 }
+            process(
+                &png(1000, 100, Rgba([1, 1, 1, 255])),
+                ImageKind::CourseThumbnail
+            )
+            .unwrap_err(),
+            ImageError::TooSmall {
+                width: 1000,
+                height: 100
+            }
         );
         // A tiny file that claims a huge canvas (a decompression bomb) never gets decoded.
         assert_eq!(
@@ -401,11 +474,15 @@ mod tests {
     #[test]
     fn the_declared_type_is_only_a_quick_filter() {
         assert!(declared_type_is_acceptable(Some("image/png")));
-        assert!(declared_type_is_acceptable(Some("IMAGE/JPEG; charset=binary")));
+        assert!(declared_type_is_acceptable(Some(
+            "IMAGE/JPEG; charset=binary"
+        )));
         assert!(declared_type_is_acceptable(Some("image/webp")));
         assert!(!declared_type_is_acceptable(Some("image/svg+xml")));
         assert!(!declared_type_is_acceptable(Some("image/gif")));
-        assert!(!declared_type_is_acceptable(Some("application/octet-stream")));
+        assert!(!declared_type_is_acceptable(Some(
+            "application/octet-stream"
+        )));
         assert!(!declared_type_is_acceptable(None));
     }
 }

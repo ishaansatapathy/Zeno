@@ -63,11 +63,11 @@ pub struct CourseChanges {
     pub level: Option<String>,
 }
 
-fn normalise(raw: &str) -> String {
+pub(crate) fn normalise(raw: &str) -> String {
     raw.trim().nfc().collect()
 }
 
-fn text(
+pub(crate) fn text(
     errors: &mut Vec<FieldError>,
     field: &'static str,
     raw: String,
