@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use zeno_core::jobs::{self, Job};
 
 use crate::error::JobError;
+use crate::image_cleanup;
 use crate::pipeline::{self, Context};
 
 pub const JOB_KIND: &str = "transcode";
@@ -21,10 +22,19 @@ const MAX_ENCODE_ATTEMPTS: i32 = 3;
 
 /// Claims and handles at most one job. Returns whether there was one.
 pub async fn run_once(ctx: &Context, shutdown: &CancellationToken) -> Result<bool, sqlx::Error> {
-    let Some(job) = jobs::claim(&ctx.db, &[JOB_KIND], LEASE).await? else {
+    // Keep media latency predictable even when many old images become due together.
+    let job = match jobs::claim(&ctx.db, &[JOB_KIND], LEASE).await? {
+        Some(job) => Some(job),
+        None => jobs::claim(&ctx.db, &[image_cleanup::JOB_KIND], LEASE).await?,
+    };
+    let Some(job) = job else {
         return Ok(false);
     };
-    handle(ctx, job, shutdown).await;
+    if job.kind == image_cleanup::JOB_KIND {
+        image_cleanup::handle(ctx, &job).await;
+    } else {
+        handle(ctx, job, shutdown).await;
+    }
     Ok(true)
 }
 

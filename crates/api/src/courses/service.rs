@@ -257,12 +257,18 @@ pub async fn unpublish(
 
 pub async fn delete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), ApiError> {
     user.require_role(COURSE_ROLES)?;
-    load_visible(state, user, id).await?;
-    if repo::soft_delete(&state.db, id, user.id, admin(user)).await? {
-        Ok(())
-    } else {
-        Err(not_found())
+    let mut tx = state.db.begin().await?;
+    let (_, thumbnail) = repo::lock_for_thumbnail(&mut tx, id, user.id, admin(user))
+        .await?
+        .ok_or_else(not_found)?;
+    if !repo::soft_delete(&mut *tx, id, user.id, admin(user)).await? {
+        return Err(not_found());
     }
+    if let Some(key) = thumbnail {
+        crate::images::queue_cleanup(&mut *tx, &key).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Replaces the course thumbnail. `expected_version` is optional here: a picture swap rarely
@@ -319,16 +325,13 @@ async fn replace_thumbnail(
         Ok(old) => old,
         Err(err) => {
             drop(tx);
-            if let Some(key) = new_key {
-                crate::images::discard(state, key).await;
-            }
             return Err(err);
         }
     };
     let row = repo::set_thumbnail(&mut tx, id, new_key).await?;
-    tx.commit().await?;
     if let Some(old) = old.filter(|old| Some(old.as_str()) != new_key) {
-        crate::images::discard(state, &old).await;
+        crate::images::queue_cleanup(&mut *tx, &old).await?;
     }
+    tx.commit().await?;
     Ok(row)
 }

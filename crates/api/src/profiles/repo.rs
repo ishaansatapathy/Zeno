@@ -49,13 +49,14 @@ pub async fn upsert(
     db: &PgPool,
     user_id: Uuid,
     input: &ProfileInput,
-) -> Result<ProfileRow, sqlx::Error> {
+) -> Result<Option<ProfileRow>, sqlx::Error> {
     sqlx::query_as(&format!(
         "insert into creator_profiles (user_id, handle, display_name, bio, links) \
          values ($1,$2,$3,$4,$5) \
          on conflict (user_id) do update set \
             display_name = excluded.display_name, bio = excluded.bio, \
             links = excluded.links, updated_at = now() \
+         where creator_profiles.handle = excluded.handle \
          returning {COLUMNS}"
     ))
     .bind(user_id)
@@ -63,7 +64,7 @@ pub async fn upsert(
     .bind(&input.display_name)
     .bind(&input.bio)
     .bind(serde_json::to_value(&input.links).expect("links serialise"))
-    .fetch_one(db)
+    .fetch_optional(db)
     .await
 }
 

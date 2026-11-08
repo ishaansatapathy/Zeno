@@ -45,7 +45,11 @@ pub async fn put(
         }
     }
     match repo::upsert(&state.db, user.id, &input).await {
-        Ok(row) => Ok(row),
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(conflict(
+            "handle_locked",
+            "A handle cannot be changed once it is set, because shared links use it.",
+        )),
         Err(sqlx::Error::Database(db)) if db.is_unique_violation() => Err(ApiError::validation(
             vec![FieldError::new("handle", "That handle is already taken.")],
         )),
@@ -66,16 +70,13 @@ pub async fn set_avatar(
     let key = images::store(state, ImageKind::Avatar, user.id, processed).await?;
     let mut tx = state.db.begin().await?;
     let Some(old) = repo::lock_avatar(&mut tx, user.id).await? else {
-        drop(tx);
-        images::discard(state, &key).await;
         return Err(profile_required());
     };
     let row = repo::set_avatar(&mut tx, user.id, Some(&key)).await?;
-    tx.commit().await?;
-    // The same picture uploaded twice has the same key; only a different old one is removed.
     if let Some(old) = old.filter(|old| *old != key) {
-        images::discard(state, &old).await;
+        images::queue_cleanup(&mut *tx, &old).await?;
     }
+    tx.commit().await?;
     Ok(row)
 }
 
@@ -86,9 +87,9 @@ pub async fn clear_avatar(state: &AppState, user: &AuthUser) -> Result<ProfileRo
         return Err(profile_required());
     };
     let row = repo::set_avatar(&mut tx, user.id, None).await?;
-    tx.commit().await?;
     if let Some(old) = old {
-        images::discard(state, &old).await;
+        images::queue_cleanup(&mut *tx, &old).await?;
     }
+    tx.commit().await?;
     Ok(row)
 }

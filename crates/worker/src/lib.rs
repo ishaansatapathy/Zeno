@@ -4,6 +4,7 @@ pub mod config;
 pub mod error;
 pub mod ffmpeg;
 pub mod hls;
+pub mod image_cleanup;
 pub mod ladder;
 pub mod pipeline;
 pub mod preflight;

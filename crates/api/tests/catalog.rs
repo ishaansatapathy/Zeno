@@ -291,6 +291,22 @@ db_test! {
 }
 
 db_test! {
+    async fn simultaneous_profile_creation_cannot_change_a_locked_handle(pool: PgPool) {
+        let app = app(pool);
+        let creator = signup_creator(&app, "handle-race@x.in").await;
+        let (a, b) = tokio::join!(
+            put_profile(&app, &creator, "first-handle"),
+            put_profile(&app, &creator, "second-handle")
+        );
+        assert_eq!([a.status, b.status].iter().filter(|status| **status == StatusCode::OK).count(), 1);
+        assert_eq!([a.status, b.status].iter().filter(|status| **status == StatusCode::CONFLICT).count(), 1);
+        let winner = if a.status == StatusCode::OK { "first-handle" } else { "second-handle" };
+        let profile = app.get("/v1/me/profile").jar(&creator).send().await;
+        assert_eq!(profile.body["profile"]["handle"], winner);
+    }
+}
+
+db_test! {
     async fn avatars_are_validated_re_encoded_stored_by_content_and_replaced(pool: PgPool) {
         let app = app(pool.clone());
         let asha = signup_creator(&app, "avatar@x.in").await;
@@ -315,24 +331,28 @@ db_test! {
             .fetch_one(&pool).await.unwrap();
         assert!(first_key.starts_with("images/avatars/") && first_key.ends_with(".jpg"));
 
-        // ...a different picture replaces it and the old object is deleted.
+        // ...a different picture replaces it and the old object remains through cache expiry.
         let other = upload(&app, &asha, uri, noisy_png(700, 700), "image/png").await;
         assert_eq!(other.status, StatusCode::OK);
         let second_key: String = sqlx::query_scalar("select avatar_key from creator_profiles")
             .fetch_one(&pool).await.unwrap();
         assert_ne!(first_key, second_key);
-        assert_eq!(app.state.store.head(&first_key).await.unwrap(), None, "old image removed");
+        assert!(app.state.store.head(&first_key).await.unwrap().is_some(), "old image remains while catalog caches may reference it");
         assert!(app.state.store.head(&second_key).await.unwrap().is_some());
 
-        // Uploading the same picture again keeps it.
+        // Identical pixels get a separate immutable object, so a delayed cleanup cannot remove
+        // another request's live image.
         let same = upload(&app, &asha, uri, noisy_png(700, 700), "image/png").await;
         assert_eq!(same.status, StatusCode::OK);
-        assert!(app.state.store.head(&second_key).await.unwrap().is_some());
+        let third_key: String = sqlx::query_scalar("select avatar_key from creator_profiles")
+            .fetch_one(&pool).await.unwrap();
+        assert_ne!(second_key, third_key);
+        assert!(app.state.store.head(&third_key).await.unwrap().is_some());
 
         let cleared = app.req(Method::DELETE, uri).jar(&asha).send().await;
         assert_eq!(cleared.status, StatusCode::OK);
         assert!(cleared.body["profile"]["avatar_url"].is_null());
-        assert_eq!(app.state.store.head(&second_key).await.unwrap(), None);
+        assert!(app.state.store.head(&third_key).await.unwrap().is_some(), "clear only schedules cleanup");
     }
 }
 
@@ -401,16 +421,35 @@ db_test! {
             .raw_body(noisy_png(1280, 720), Some("image/png")).send().await;
         assert_eq!((stale.status, stale.code()), (StatusCode::CONFLICT, "version_conflict"));
         let left = app.state.store.list_prefix(&mine).await.unwrap();
-        assert!(left.is_empty(), "and a stale upload leaves no orphan: {left:?}");
+        assert_eq!(left.len(), 1, "a stale upload is queued for later cleanup: {left:?}");
 
         let set = upload(&app, &owner, &uri, noisy_png(1400, 800), "image/png").await;
         assert_eq!(set.status, StatusCode::OK, "{:?}", set.body);
         assert_eq!(set.body["course"]["version"].as_i64().unwrap(), version_before + 1);
+        let first_key: String = sqlx::query_scalar("select thumbnail_key from courses where id=$1")
+            .bind(id).fetch_one(&pool).await.unwrap();
         let owner_url = set.body["course"]["thumbnail_url"].as_str().unwrap();
         let (status, bytes) = fetch(owner_url).await;
         assert_eq!(status, 200);
         let decoded = image::load_from_memory_with_format(&bytes, ImageFormat::Jpeg).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (1280, 720));
+
+        // Both requests upload identical pixels against one course version. The losing request
+        // must not delete the winning request's immutable image.
+        let next_version = set.body["course"]["version"].as_i64().unwrap();
+        let same_pixels = noisy_png(1280, 720);
+        let first = app.req(Method::PUT, &uri).jar(&owner)
+            .header("if-match", &next_version.to_string())
+            .raw_body(same_pixels.clone(), Some("image/png")).send();
+        let second = app.req(Method::PUT, &uri).jar(&owner)
+            .header("if-match", &next_version.to_string())
+            .raw_body(same_pixels, Some("image/png")).send();
+        let (a, b) = tokio::join!(first, second);
+        assert_eq!([a.status, b.status].iter().filter(|status| **status == StatusCode::OK).count(), 1);
+        assert_eq!([a.status, b.status].iter().filter(|status| **status == StatusCode::CONFLICT).count(), 1);
+        let live_key: String = sqlx::query_scalar("select thumbnail_key from courses where id=$1")
+            .bind(id).fetch_one(&pool).await.unwrap();
+        assert!(app.state.store.head(&live_key).await.unwrap().is_some(), "winner's image survives loser cleanup");
 
         let page = app.get(&format!("/v1/public/courses/{slug}")).send().await;
         assert!(page.body["course"]["thumbnail_url"].is_string());
@@ -420,7 +459,19 @@ db_test! {
         let cleared = app.req(Method::DELETE, &uri).jar(&owner).send().await;
         assert_eq!(cleared.status, StatusCode::OK);
         assert!(cleared.body["course"]["thumbnail_url"].is_null());
-        assert!(app.state.store.list_prefix(&mine).await.unwrap().is_empty());
+        assert!(app.state.store.head(&first_key).await.unwrap().is_some());
+
+        let again = upload(&app, &owner, &uri, noisy_png(1280, 720), "image/png").await;
+        assert_eq!(again.status, StatusCode::OK);
+        let last_key: String = sqlx::query_scalar("select thumbnail_key from courses where id=$1")
+            .bind(id).fetch_one(&pool).await.unwrap();
+        let deleted = app.req(Method::DELETE, &format!("/v1/courses/{id}"))
+            .jar(&owner).send().await;
+        assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+        let queued: i64 = sqlx::query_scalar(
+            "select count(*) from jobs where kind='image_cleanup' and payload->>'key'=$1"
+        ).bind(&last_key).fetch_one(&pool).await.unwrap();
+        assert!(queued >= 2, "upload and course deletion each schedule cleanup");
     }
 }
 

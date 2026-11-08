@@ -214,8 +214,8 @@ pub async fn set_status<'e>(
     .await
 }
 
-pub async fn soft_delete(
-    db: &PgPool,
+pub async fn soft_delete<'e>(
+    db: impl PgExecutor<'e>,
     id: Uuid,
     actor_id: Uuid,
     admin: bool,

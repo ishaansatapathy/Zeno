@@ -8,8 +8,8 @@
 //! chunk cannot survive. Formats that can carry active content or animation bombs (SVG, GIF)
 //! are refused outright.
 //!
-//! Stored objects are named by the hash of their content, so a URL never changes meaning and can
-//! be cached forever.
+//! Stored objects have a content hash and a unique upload id. A URL never changes meaning, and
+//! concurrent uploads of identical pixels cannot delete each other's object.
 
 use std::io::Cursor;
 use std::time::Duration;
@@ -22,6 +22,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, RgbImage};
 use sha2::{Digest, Sha256};
+use sqlx::PgExecutor;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -61,10 +62,12 @@ impl ImageKind {
         }
     }
 
-    pub fn key(self, owner: Uuid, content_hash: &str) -> String {
+    pub fn key(self, owner: Uuid, content_hash: &str, upload_id: Uuid) -> String {
         match self {
-            ImageKind::CourseThumbnail => format!("images/courses/{owner}/{content_hash}.jpg"),
-            ImageKind::Avatar => format!("images/avatars/{owner}/{content_hash}.jpg"),
+            ImageKind::CourseThumbnail => {
+                format!("images/courses/{owner}/{content_hash}-{upload_id}.jpg")
+            }
+            ImageKind::Avatar => format!("images/avatars/{owner}/{content_hash}-{upload_id}.jpg"),
         }
     }
 }
@@ -248,7 +251,7 @@ fn crop_to_aspect(image: RgbImage, target_w: u32, target_h: u32) -> RgbImage {
 
 /// The address a browser should load `key` from.
 ///
-/// With `IMAGE_BASE_URL` set (a CDN in front of the bucket) the URL is permanent and cacheable.
+/// With `IMAGE_BASE_URL` set (a CDN in front of the bucket) the URL is stable while referenced.
 /// Otherwise it is a presigned link to the private bucket, good for an hour.
 pub fn public_url(state: &AppState, key: &str) -> String {
     match &state.config.image_base_url {
@@ -260,14 +263,16 @@ pub fn public_url(state: &AppState, key: &str) -> String {
     }
 }
 
-/// Stores a finished image under its content-addressed key and returns that key.
+/// Schedule cleanup before writing the object. If the later database update fails or the process
+/// crashes, the worker can still remove this otherwise orphaned upload after the cache window.
 pub async fn store(
     state: &AppState,
     kind: ImageKind,
     owner: Uuid,
     image: Processed,
 ) -> Result<String, ApiError> {
-    let key = kind.key(owner, &image.content_hash);
+    let key = kind.key(owner, &image.content_hash, Uuid::new_v4());
+    queue_cleanup(&state.db, &key).await?;
     state
         .store
         .put_bytes(&key, image.jpeg, "image/jpeg")
@@ -276,12 +281,18 @@ pub async fn store(
     Ok(key)
 }
 
-/// Removes an image nobody refers to any more. A failure is only logged: the object is
-/// unreachable either way and the next sweep of the prefix removes it.
-pub async fn discard(state: &AppState, key: &str) {
-    if let Err(err) = state.store.delete(key).await {
-        tracing::warn!(%key, error = %err, "could not delete an unused image");
-    }
+/// Cleanup is durable and delayed: public catalogue responses may be stale for six minutes, and
+/// browsers/CDNs may retain image URLs longer. The worker rechecks database references at expiry.
+pub async fn queue_cleanup<'e>(db: impl PgExecutor<'e>, key: &str) -> Result<(), ApiError> {
+    sqlx::query(
+        "insert into jobs (kind, payload, run_at, max_attempts) \
+         values ('image_cleanup', jsonb_build_object('key', $1::text), \
+                 now() + interval '24 hours', 8)",
+    )
+    .bind(key)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// The request body limit for image upload routes (the rest of the API allows far less).
@@ -381,8 +392,12 @@ mod tests {
         assert_ne!(a.content_hash, c.content_hash);
         let owner = Uuid::nil();
         assert_eq!(
-            ImageKind::Avatar.key(owner, &a.content_hash),
-            format!("images/avatars/{owner}/{}.jpg", a.content_hash)
+            ImageKind::Avatar.key(owner, &a.content_hash, Uuid::nil()),
+            format!(
+                "images/avatars/{owner}/{}-{}.jpg",
+                a.content_hash,
+                Uuid::nil()
+            )
         );
     }
 
