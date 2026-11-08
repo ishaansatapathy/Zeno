@@ -87,6 +87,34 @@ Unfinished uploads are cancelled after 24 hours. Original uploads are deleted `S
 
 Uploads are untrusted input to ffmpeg, so only an allowlist of media containers is accepted (playlists, concat scripts and other formats that reference further resources are refused before any encode); ffmpeg runs with `-protocol_whitelist file`, a scrubbed environment, a hard timeout and kill-on-cancel; output is capped at the duration limit; and metadata, chapters and subtitles are stripped. A file that cannot be processed fails for good with a short code (`unsupported_media`, `no_video_stream`, `too_long`, `resolution_too_high`); infrastructure trouble is retried with backoff.
 
+## Course API
+
+Creators and admins can build courses through a versioned API. Prices are integer paise in INR; slugs are stable after creation; deleting a course is a soft delete so future enrollment and audit history are not orphaned. Updates use optimistic concurrency: send the current `version` in the JSON body or `If-Match`; a stale editor receives `409 version_conflict` instead of silently overwriting newer work.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/courses` | Create a draft course |
+| `GET /v1/courses?limit=&cursor=` | List the signed-in creator's courses using stable keyset pagination |
+| `GET /v1/courses/:id` | Read an owned course; another creator's course looks missing |
+| `PATCH /v1/courses/:id` | Update metadata and price with optimistic concurrency |
+| `POST /v1/courses/:id/publish` | Publish only when every lesson has a ready video |
+| `POST /v1/courses/:id/unpublish` | Return a published course to draft |
+| `DELETE /v1/courses/:id` | Soft-delete and stop new access |
+| `POST /v1/courses/:id/lessons` | Attach an owned processing/ready video; optional insertion position shifts later lessons |
+| `GET /v1/courses/:id/lessons` | List dense ordered lessons, video state and computed total duration |
+| `PATCH /v1/lessons/:id` | Update lesson metadata, preview flag or attached owned video |
+| `DELETE /v1/lessons/:id` | Soft-delete a lesson and close the ordering gap |
+| `PUT /v1/courses/:id/lessons/order` | Atomically replace the complete lesson order |
+| `POST /v1/courses/:id/enroll` | Idempotently claim a published free course; paid courses point to checkout |
+| `POST /v1/courses/:id/grants` | Grant an existing user access or email a pending invitation |
+| `DELETE /v1/courses/:id/grants/:user` | Revoke a grant and end sessions that no longer have another access path |
+| `GET /v1/courses/:id/students` | Paginated creator view of enrollment history and active state |
+| `GET /v1/me/courses` | Paginated courses and entitlement state for the signed-in student |
+
+Lesson positions are dense and all ordering mutations serialize on the course row. Reorder accepts every active lesson ID exactly once; malformed sets return `422` without changing anything, and replaying the current order is a no-op. A processing video can be arranged while encoding, but publishing requires at least one active lesson and every video to be ready. A readiness-breaking lesson mutation—or deleting a video used by an active lesson—automatically returns every affected published course to draft and bumps its version. Lesson deletion retains a tombstone for future progress and analytics history.
+
+Free claims preserve revocation: a student removed by a creator or admin receives `409 access_revoked_by_creator` until an authorised manual grant restores access. Other revoked enrollments also cannot be reactivated through the free endpoint, and expired paid/manual entitlements cannot be converted into free claims. Revocations retain the actor, policy kind and audit history. Pending invitations are accepted by verifying the invited email; invitation emails contain a registration link without a bearer token.
+
 ## Playback
 
 | Endpoint | Purpose |
@@ -98,9 +126,13 @@ Uploads are untrusted input to ffmpeg, so only an allowlist of media containers 
 | `DELETE /v1/play/:session` | Stop watching and free the screen |
 | `GET /v1/keys/:video_id?t=` | `zeno-keyserver`: the 16-byte AES key, `no-store` |
 
-Who may watch: for now the video's creator and admins (preview); students will get access through course enrollment. The playback token (HMAC-SHA256, `PLAYBACK_TOKEN_SECRET`, shared by API and key server) names one session, video and user and expires with the session (twice the video's length plus an hour, between 2 and 12 hours). A token is never enough on its own: every playlist and key request also checks that its session is still open, so stopping, a password reset or deleting the video cuts playback off on the very next request.
+Who may watch is decided by one database access rule. Creators and admins may preview their videos directly through `POST /v1/videos/:id/play`; students start through `POST /v1/lessons/:id/play` and need either a published free-preview lesson or an active enrollment (`not revoked` and `not expired`) in any course containing that video. Existing enrollments keep working while a creator temporarily unpublishes to edit, and for 30 days after a course is soft-deleted; new claims require a published course. Raw video IDs never act as a student access API.
 
-An account may have `MAX_CONCURRENT_STREAMS` (default 2) sessions open. A screen silent for 3 minutes gives up its slot to the next one to press play and is told why when it returns; simultaneous presses are serialised per account, so the limit can't be overshot. The key server only answers browser requests from the web app's origin (a key URL pasted into a player on another site is refused), caps key fetches per session, and the content key is unwrapped only at that moment. Stored playlists are rewritten strictly: an unknown rendition, a foreign URI, a segment name with a path in it or a playlist without encryption is refused rather than passed on.
+The playback token (HMAC-SHA256, `PLAYBACK_TOKEN_SECRET`, shared by API and key server) names one session, video and user and expires with the session (twice the video's length plus an hour, between 2 and 12 hours). A token is never enough on its own: every playlist, heartbeat and key request re-checks both the open session and the current entitlement. Revocation ends inaccessible sessions with `access_revoked`; expiration ends them with `expired`; another valid course or free-preview path keeps the shared video playable.
+
+An account may have `MAX_CONCURRENT_STREAMS` (default 2) sessions open. A screen silent for 3 minutes gives up its slot to the next one to press play and is told why when it returns; simultaneous presses are serialised per account, so the limit can't be overshot. The key server only answers browser requests from the web app's origin (a key URL pasted into a player on another site is refused), caps key fetches per session, and applies Redis-backed per-address and per-user limits before releasing a key. It fails closed if that limiter is unavailable. The content key is unwrapped only at that moment. Stored playlists are rewritten strictly: an unknown rendition, a foreign URI, a segment name with a path in it or a playlist without encryption is refused rather than passed on.
+
+Playback and key responses are private, `no-store`, and carry `Referrer-Policy: no-referrer`; request tracing records paths but never query strings, so playback tokens are not written to application logs. For zero-downtime secret rotation, configure the versioned `PLAYBACK_TOKEN_SECRETS` and `CONTENT_KEY_SECRETS` keyrings documented in `.env.example`: new material uses the active version while retained versions continue to verify/open existing sessions and videos.
 
 The watermark (`name · phone or email · session code`) is for the player to draw over the video and keep moving; it is what makes a screen recording traceable to an account and a session.
 
@@ -108,4 +140,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline and secure playback (signed playlists, key server, screen limits, resume, watermark data) are done. Next in the plan: courses, lessons and enrollment, then checkout.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control are done. Next in the plan: the public catalog and creator profiles, then progress tracking and checkout.
