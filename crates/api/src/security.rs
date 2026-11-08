@@ -38,7 +38,13 @@ pub async fn require_same_origin(
 
 pub fn cors(client_origin: &str) -> CorsLayer {
     let layer = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([header::CONTENT_TYPE])
         .allow_credentials(true)
         .max_age(std::time::Duration::from_secs(600));
