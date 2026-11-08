@@ -40,6 +40,7 @@ rand = "0.8"
 base64 = "0.22"
 email_address = "0.2"
 url = "2"
+unicode-normalization = "0.1"
 time = "0.3"
 
 # object storage and media

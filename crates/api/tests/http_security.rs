@@ -136,7 +136,7 @@ db_test! {
 db_test! {
     async fn unbuilt_endpoints_answer_501_and_unknown_ones_404(pool: PgPool) {
         let app = app(pool.clone());
-        assert_eq!(app.post("/v1/courses").json(json!({})).send().await.status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(app.post("/v1/checkout/not-built").json(json!({})).send().await.status, StatusCode::NOT_IMPLEMENTED);
         assert_eq!(app.get("/v1/nope").send().await.status, StatusCode::NOT_FOUND);
     }
 }
