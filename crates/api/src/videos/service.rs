@@ -363,13 +363,14 @@ pub async fn delete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), A
     if !repo::soft_delete(&mut *tx, id).await? {
         return Err(not_found());
     }
+    repo::invalidate_courses_for_video(&mut tx, id).await?;
     crate::playback::repo::end_all_for_video(&mut *tx, id, "video_deleted").await?;
     tx.commit().await?;
     Ok(())
 }
 
-/// Removes the storage and then the row of deleted videos. A video whose transcode job is still
-/// live is skipped until the job ends, since the job may still be writing its output.
+/// Removes storage for deleted videos. Unreferenced rows are deleted; rows used by lesson history
+/// remain as completed tombstones. A live transcode job delays either finalisation path.
 pub async fn purge_deleted(state: &AppState) -> Result<usize, ApiError> {
     let mut purged = 0;
     for (id, source_key) in repo::purgeable(&state.db, 50).await? {

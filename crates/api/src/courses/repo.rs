@@ -174,7 +174,7 @@ pub async fn publish_readiness<'e>(
         "select count(*) as lessons, \
                 count(*) filter (where l.video_id is not null and v.status = 'ready' and v.deleted_at is null) as ready_lessons \
          from lessons l left join videos v on v.id = l.video_id \
-         where l.course_id = $1",
+         where l.course_id = $1 and l.deleted_at is null",
     )
     .bind(course_id)
     .fetch_one(db)
@@ -195,10 +195,10 @@ pub async fn set_status<'e>(
             version=version+1, updated_at=now() \
          where id=$1 and deleted_at is null and version=$2 and ($3 or creator_id=$4) \
            and (not $6 or ( \
-             exists (select 1 from lessons l where l.course_id=$1) \
+             exists (select 1 from lessons l where l.course_id=$1 and l.deleted_at is null) \
              and not exists ( \
                select 1 from lessons l left join videos v on v.id=l.video_id \
-               where l.course_id=$1 \
+               where l.course_id=$1 and l.deleted_at is null \
                  and (l.video_id is null or v.status <> 'ready' or v.deleted_at is not null) \
              ) \
            )) \
