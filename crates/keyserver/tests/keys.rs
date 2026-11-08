@@ -12,7 +12,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use zeno_core::keyvault::KeyVault;
 use zeno_core::playback::{PlaybackClaims, PlaybackSigner};
-use zeno_keyserver::{router, KeyServer, MAX_KEY_FETCHES_PER_SESSION};
+use zeno_keyserver::{router, KeyLimiter, KeyServer, MAX_KEY_FETCHES_PER_SESSION};
 
 const ORIGIN: &str = "http://localhost:3000";
 const KEY: [u8; 16] = *b"sixteen byte key";
@@ -42,6 +42,19 @@ fn app(pool: PgPool) -> Router {
         vault: vault(),
         tokens: signer(),
         client_origin: ORIGIN.parse().unwrap(),
+        limiter: KeyLimiter::memory(10_000, 10_000),
+        trusted_proxy_hops: 0,
+    })
+}
+
+fn limited_app(pool: PgPool, ip_limit: u64, user_limit: u64) -> Router {
+    router(KeyServer {
+        db: pool,
+        vault: vault(),
+        tokens: signer(),
+        client_origin: ORIGIN.parse().unwrap(),
+        limiter: KeyLimiter::memory(ip_limit, user_limit),
+        trusted_proxy_hops: 1,
     })
 }
 
@@ -165,6 +178,7 @@ db_test! {
         assert_eq!(reply.status, StatusCode::OK);
         assert_eq!(reply.body, KEY);
         assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store, private");
+        assert_eq!(reply.headers[header::REFERRER_POLICY], "no-referrer");
         assert_eq!(reply.headers[header::CONTENT_TYPE], "application/octet-stream");
         assert_eq!(reply.headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], ORIGIN);
 
@@ -176,6 +190,78 @@ db_test! {
         let fetches: i32 = sqlx::query_scalar("select key_fetches from playback_sessions where id = $1")
             .bind(s.session).fetch_one(&pool).await.unwrap();
         assert_eq!(fetches, 2);
+    }
+}
+
+db_test! {
+    async fn key_delivery_rechecks_student_enrollment_and_ends_revoked_sessions(pool: PgPool) {
+        let app = app(pool.clone());
+        let owner = Uuid::new_v4();
+        let student = Uuid::new_v4();
+        for (id, role) in [(owner, "creator"), (student, "student")] {
+            sqlx::query(
+                "insert into users (id, name, email, password_hash, role) \
+                 values ($1,'Viewer',$2,'x',$3::user_role)",
+            )
+            .bind(id)
+            .bind(format!("{id}@x.in"))
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let video = seed_video(&pool, owner, &KEY).await;
+        let course = Uuid::new_v4();
+        sqlx::query(
+            "insert into courses (id, creator_id, slug, title, description) \
+             values ($1,$2,$3,'Key access course','Description')",
+        )
+        .bind(course)
+        .bind(owner)
+        .bind(format!("key-course-{}", &course.simple().to_string()[..8]))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into lessons (course_id, position, video_id, title) \
+             values ($1,1,$2,'Lesson')",
+        )
+        .bind(course)
+        .bind(video)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into enrollments (user_id, course_id, source, granted_by) \
+             values ($1,$2,'grant',$3)",
+        )
+        .bind(student)
+        .bind(course)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let session = seed_session(&pool, student, video).await;
+        assert_eq!(get(&app, &session.url(), Some(ORIGIN)).await.status, StatusCode::OK);
+
+        sqlx::query(
+            "update enrollments set revoked_at=now(), revoke_reason='Refunded' \
+             where user_id=$1 and course_id=$2",
+        )
+        .bind(student)
+        .bind(course)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(get(&app, &session.url(), Some(ORIGIN)).await.status, StatusCode::FORBIDDEN);
+        let reason: String = sqlx::query_scalar(
+            "select end_reason from playback_sessions where id=$1",
+        )
+        .bind(session.session)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason, "access_revoked");
     }
 }
 
@@ -282,6 +368,25 @@ db_test! {
 }
 
 db_test! {
+    async fn ip_and_user_rate_limits_return_retry_after(pool: PgPool) {
+        let s = seed(&pool).await;
+        let ip_limited = limited_app(pool.clone(), 1, 100);
+        let first = get(&ip_limited, &s.url(), Some(ORIGIN)).await;
+        assert_eq!(first.status, StatusCode::OK);
+        let second = get(&ip_limited, &s.url(), Some(ORIGIN)).await;
+        assert_eq!(second.status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(second.headers.get(header::RETRY_AFTER).is_some());
+
+        let another = seed(&pool).await;
+        let user_limited = limited_app(pool.clone(), 100, 1);
+        assert_eq!(get(&user_limited, &another.url(), Some(ORIGIN)).await.status, StatusCode::OK);
+        let denied = get(&user_limited, &another.url(), Some(ORIGIN)).await;
+        assert_eq!(denied.status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(denied.headers.get(header::RETRY_AFTER).is_some());
+    }
+}
+
+db_test! {
     async fn a_key_sealed_under_another_secret_is_an_error_not_a_leak(pool: PgPool) {
         let app = app(pool.clone());
         let s = seed(&pool).await;
@@ -298,77 +403,5 @@ db_test! {
     async fn health_answers(pool: PgPool) {
         let reply = get(&app(pool), "/health", None).await;
         assert_eq!((reply.status, reply.body.as_slice()), (StatusCode::OK, &b"ok"[..]));
-    }
-}
-
-db_test! {
-    async fn key_delivery_rechecks_student_enrollment_and_ends_revoked_sessions(pool: PgPool) {
-        let app = app(pool.clone());
-        let owner = Uuid::new_v4();
-        let student = Uuid::new_v4();
-        for (id, role) in [(owner, "creator"), (student, "student")] {
-            sqlx::query(
-                "insert into users (id, name, email, password_hash, role) \
-                 values ($1,'Viewer',$2,'x',$3::user_role)",
-            )
-            .bind(id)
-            .bind(format!("{id}@x.in"))
-            .bind(role)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
-        let video = seed_video(&pool, owner, &KEY).await;
-        let course = Uuid::new_v4();
-        sqlx::query(
-            "insert into courses (id, creator_id, slug, title, description) \
-             values ($1,$2,$3,'Key access course','Description')",
-        )
-        .bind(course)
-        .bind(owner)
-        .bind(format!("key-course-{}", &course.simple().to_string()[..8]))
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "insert into lessons (course_id, position, video_id, title) \
-             values ($1,1,$2,'Lesson')",
-        )
-        .bind(course)
-        .bind(video)
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "insert into enrollments (user_id, course_id, source, granted_by) \
-             values ($1,$2,'grant',$3)",
-        )
-        .bind(student)
-        .bind(course)
-        .bind(owner)
-        .execute(&pool)
-        .await
-        .unwrap();
-        let session = seed_session(&pool, student, video).await;
-        assert_eq!(get(&app, &session.url(), Some(ORIGIN)).await.status, StatusCode::OK);
-
-        sqlx::query(
-            "update enrollments set revoked_at=now(), revoke_reason='Refunded' \
-             where user_id=$1 and course_id=$2",
-        )
-        .bind(student)
-        .bind(course)
-        .execute(&pool)
-        .await
-        .unwrap();
-        assert_eq!(get(&app, &session.url(), Some(ORIGIN)).await.status, StatusCode::FORBIDDEN);
-        let reason: String = sqlx::query_scalar(
-            "select end_reason from playback_sessions where id=$1",
-        )
-        .bind(session.session)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(reason, "access_revoked");
     }
 }

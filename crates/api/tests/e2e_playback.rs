@@ -20,7 +20,7 @@ use zeno_api::mail::MemoryMailer;
 use zeno_core::keyvault::KeyVault;
 use zeno_core::playback::PlaybackSigner;
 use zeno_core::storage::S3Store;
-use zeno_keyserver::KeyServer;
+use zeno_keyserver::{KeyLimiter, KeyServer};
 use zeno_worker::config::{Limits, WorkerConfig};
 
 fn ffmpeg() -> String {
@@ -115,6 +115,8 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
         vault: vault(),
         tokens: signer.clone(),
         client_origin: ORIGIN.parse().unwrap(),
+        limiter: KeyLimiter::memory(10_000, 10_000),
+        trusted_proxy_hops: 0,
     }))
     .await;
 

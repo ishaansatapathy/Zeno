@@ -3314,6 +3314,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "http-body-util",
+ "redis",
  "serde",
  "serde_json",
  "sqlx",
