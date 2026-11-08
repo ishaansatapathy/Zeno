@@ -231,3 +231,34 @@ pub async fn soft_delete(
     .await?;
     Ok(result.rows_affected() == 1)
 }
+
+/// Locks a course the actor may edit and returns its version and current thumbnail key.
+pub async fn lock_for_thumbnail(
+    db: &mut PgConnection,
+    id: Uuid,
+    actor_id: Uuid,
+    admin: bool,
+) -> Result<Option<(i32, Option<String>)>, sqlx::Error> {
+    sqlx::query_as(
+        "select version, thumbnail_key from courses          where id=$1 and deleted_at is null and ($2 or creator_id=$3) for update",
+    )
+    .bind(id)
+    .bind(admin)
+    .bind(actor_id)
+    .fetch_optional(db)
+    .await
+}
+
+pub async fn set_thumbnail(
+    db: &mut PgConnection,
+    id: Uuid,
+    key: Option<&str>,
+) -> Result<CourseRow, sqlx::Error> {
+    sqlx::query_as(&format!(
+        "update courses set thumbnail_key=$2, version=version+1, updated_at=now()          where id=$1 returning {COLUMNS}"
+    ))
+    .bind(id)
+    .bind(key)
+    .fetch_one(db)
+    .await
+}

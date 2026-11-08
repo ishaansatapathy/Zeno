@@ -264,3 +264,71 @@ pub async fn delete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), A
         Err(not_found())
     }
 }
+
+/// Replaces the course thumbnail. `expected_version` is optional here: a picture swap rarely
+/// conflicts with text edits, but a caller that sends one gets the usual `409` on a mismatch.
+pub async fn set_thumbnail(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    bytes: Vec<u8>,
+    expected_version: Option<i32>,
+) -> Result<CourseRow, ApiError> {
+    user.require_role(COURSE_ROLES)?;
+    // Fail on ownership before spending CPU on a decode.
+    load_visible(state, user, id).await?;
+    let processed =
+        crate::images::process_async(bytes, crate::images::ImageKind::CourseThumbnail).await?;
+    let key = crate::images::store(
+        state,
+        crate::images::ImageKind::CourseThumbnail,
+        id,
+        processed,
+    )
+    .await?;
+    replace_thumbnail(state, user, id, Some(&key), expected_version).await
+}
+
+pub async fn clear_thumbnail(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    expected_version: Option<i32>,
+) -> Result<CourseRow, ApiError> {
+    user.require_role(COURSE_ROLES)?;
+    replace_thumbnail(state, user, id, None, expected_version).await
+}
+
+async fn replace_thumbnail(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    new_key: Option<&str>,
+    expected_version: Option<i32>,
+) -> Result<CourseRow, ApiError> {
+    let mut tx = state.db.begin().await?;
+    let locked = repo::lock_for_thumbnail(&mut tx, id, user.id, admin(user)).await?;
+    let outcome = match locked {
+        None => Err(not_found()),
+        Some((version, _)) if expected_version.is_some_and(|expected| expected != version) => {
+            Err(version_conflict())
+        }
+        Some((_, old)) => Ok(old),
+    };
+    let old = match outcome {
+        Ok(old) => old,
+        Err(err) => {
+            drop(tx);
+            if let Some(key) = new_key {
+                crate::images::discard(state, key).await;
+            }
+            return Err(err);
+        }
+    };
+    let row = repo::set_thumbnail(&mut tx, id, new_key).await?;
+    tx.commit().await?;
+    if let Some(old) = old.filter(|old| Some(old.as_str()) != new_key) {
+        crate::images::discard(state, &old).await;
+    }
+    Ok(row)
+}

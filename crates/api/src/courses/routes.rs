@@ -1,6 +1,8 @@
+use axum::body::Bytes;
+use axum::extract::rejection::BytesRejection;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use uuid::Uuid;
 
@@ -19,6 +21,12 @@ pub fn router() -> Router<AppState> {
         .route("/:id", get(show).patch(update).delete(remove))
         .route("/:id/publish", post(publish))
         .route("/:id/unpublish", post(unpublish))
+        .route(
+            "/:id/thumbnail",
+            put(set_thumbnail)
+                .delete(clear_thumbnail)
+                .layer(crate::images::upload_limit()),
+        )
         .merge(crate::courses::lessons::routes::course_router())
         .merge(crate::enrollments::routes::course_router())
 }
@@ -85,7 +93,7 @@ async fn create(
     Ok((
         StatusCode::CREATED,
         Json(CourseEnvelope {
-            course: CourseResponse::from(&course),
+            course: CourseResponse::build(&state, &course),
         }),
     ))
 }
@@ -102,7 +110,10 @@ async fn list(
         .transpose()?;
     let (courses, next) = service::list(&state, &user, cursor, query.limit).await?;
     Ok(Json(CourseListEnvelope {
-        courses: courses.iter().map(CourseResponse::from).collect(),
+        courses: courses
+            .iter()
+            .map(|course| CourseResponse::build(&state, course))
+            .collect(),
         next_cursor: next.map(CourseCursor::encode),
     }))
 }
@@ -114,7 +125,7 @@ async fn show(
 ) -> Result<Json<CourseEnvelope>, ApiError> {
     let course = service::get(&state, &user, parse_id(&id)?).await?;
     Ok(Json(CourseEnvelope {
-        course: CourseResponse::from(&course),
+        course: CourseResponse::build(&state, &course),
     }))
 }
 
@@ -129,7 +140,7 @@ async fn update(
     let version = expected_version(&headers, body_version)?;
     let course = service::update(&state, &user, parse_id(&id)?, version, changes).await?;
     Ok(Json(CourseEnvelope {
-        course: CourseResponse::from(&course),
+        course: CourseResponse::build(&state, &course),
     }))
 }
 
@@ -143,7 +154,7 @@ async fn publish(
     let version = expected_version(&headers, Some(body.version))?;
     let course = service::publish(&state, &user, parse_id(&id)?, version).await?;
     Ok(Json(CourseEnvelope {
-        course: CourseResponse::from(&course),
+        course: CourseResponse::build(&state, &course),
     }))
 }
 
@@ -157,7 +168,7 @@ async fn unpublish(
     let version = expected_version(&headers, Some(body.version))?;
     let course = service::unpublish(&state, &user, parse_id(&id)?, version).await?;
     Ok(Json(CourseEnvelope {
-        course: CourseResponse::from(&course),
+        course: CourseResponse::build(&state, &course),
     }))
 }
 
@@ -168,6 +179,35 @@ async fn remove(
 ) -> Result<StatusCode, ApiError> {
     service::delete(&state, &user, parse_id(&id)?).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_thumbnail(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Json<CourseEnvelope>, ApiError> {
+    let id = parse_id(&id)?;
+    let version = header_version(&headers)?;
+    let bytes = crate::images::read_upload(&headers, body)?;
+    let course = service::set_thumbnail(&state, &user, id, bytes, version).await?;
+    Ok(Json(CourseEnvelope {
+        course: CourseResponse::build(&state, &course),
+    }))
+}
+
+async fn clear_thumbnail(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CourseEnvelope>, ApiError> {
+    let version = header_version(&headers)?;
+    let course = service::clear_thumbnail(&state, &user, parse_id(&id)?, version).await?;
+    Ok(Json(CourseEnvelope {
+        course: CourseResponse::build(&state, &course),
+    }))
 }
 
 #[cfg(test)]

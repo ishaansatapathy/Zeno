@@ -104,7 +104,7 @@ fn price(errors: &mut Vec<FieldError>, value: i64) {
     }
 }
 
-fn language(errors: &mut Vec<FieldError>, raw: String) -> String {
+pub(crate) fn language(errors: &mut Vec<FieldError>, raw: String) -> String {
     let value = normalise(&raw).to_ascii_lowercase();
     let valid = (2..=MAX_LANGUAGE).contains(&value.len())
         && value
@@ -119,7 +119,7 @@ fn language(errors: &mut Vec<FieldError>, raw: String) -> String {
     value
 }
 
-fn level(errors: &mut Vec<FieldError>, raw: String) -> String {
+pub(crate) fn level(errors: &mut Vec<FieldError>, raw: String) -> String {
     let value = normalise(&raw).to_ascii_lowercase();
     if !matches!(
         value.as_str(),
@@ -307,10 +307,22 @@ pub struct CourseResponse {
     pub status: CourseStatus,
     pub language: Option<String>,
     pub level: String,
+    pub thumbnail_url: Option<String>,
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub published_at: Option<DateTime<Utc>>,
+}
+
+impl CourseResponse {
+    pub fn build(state: &crate::state::AppState, course: &CourseRow) -> Self {
+        let mut response = Self::from(course);
+        response.thumbnail_url = course
+            .thumbnail_key
+            .as_deref()
+            .map(|key| crate::images::public_url(state, key));
+        response
+    }
 }
 
 impl From<&CourseRow> for CourseResponse {
@@ -327,6 +339,7 @@ impl From<&CourseRow> for CourseResponse {
             status: course.status,
             language: course.language.clone(),
             level: course.level.clone(),
+            thumbnail_url: None,
             version: course.version,
             created_at: course.created_at,
             updated_at: course.updated_at,
