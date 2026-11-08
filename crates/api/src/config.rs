@@ -23,6 +23,9 @@ pub struct ApiConfig {
     pub key_server_url: String,
     /// Playback sessions one account may have open at once.
     pub max_concurrent_streams: u32,
+    /// Where course and avatar images are served from, without a trailing slash: a CDN in front
+    /// of the bucket. Unset, images are served through short-lived presigned links instead.
+    pub image_base_url: Option<String>,
 }
 
 impl ApiConfig {
@@ -38,6 +41,10 @@ impl ApiConfig {
         let playback = PlaybackSigner::from_env()?;
         let key_server_url = parse_public_url("KEY_SERVER_URL", &required("KEY_SERVER_URL")?)?;
         let max_concurrent_streams = parse_or("MAX_CONCURRENT_STREAMS", 2u32)?;
+        let image_base_url = match std::env::var("IMAGE_BASE_URL") {
+            Ok(raw) if !raw.trim().is_empty() => Some(parse_public_url("IMAGE_BASE_URL", &raw)?),
+            _ => None,
+        };
         if max_concurrent_streams == 0 {
             return Err(ConfigError::Invalid {
                 name: "MAX_CONCURRENT_STREAMS",
@@ -64,6 +71,15 @@ impl ApiConfig {
                     reason: "must use https in production".into(),
                 });
             }
+            if image_base_url
+                .as_deref()
+                .is_some_and(|url| !url.starts_with("https://"))
+            {
+                return Err(ConfigError::Invalid {
+                    name: "IMAGE_BASE_URL",
+                    reason: "must use https in production".into(),
+                });
+            }
             if !client_origin.starts_with("https://") {
                 return Err(ConfigError::Invalid {
                     name: "CLIENT_URL",
@@ -84,6 +100,7 @@ impl ApiConfig {
             playback,
             key_server_url,
             max_concurrent_streams,
+            image_base_url,
         })
     }
 }

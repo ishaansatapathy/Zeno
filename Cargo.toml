@@ -51,6 +51,7 @@ futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
 tempfile = "3"
 ring = "0.17"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 
 # plumbing
 tracing = "0.1"

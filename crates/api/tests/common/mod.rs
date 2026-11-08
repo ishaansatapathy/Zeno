@@ -100,6 +100,7 @@ pub fn make_state_with(
         playback: zeno_core::playback::PlaybackSigner::new(PLAYBACK_SECRET).unwrap(),
         key_server_url: KEY_SERVER_URL.into(),
         max_concurrent_streams: MAX_STREAMS,
+        image_base_url: None,
     };
     tweak(&mut config);
     let store = S3Store::new(&config.storage).unwrap();

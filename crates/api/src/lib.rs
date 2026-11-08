@@ -6,6 +6,7 @@ pub mod courses;
 pub mod enrollments;
 pub mod error;
 pub mod health;
+pub mod images;
 pub mod mail;
 pub mod net;
 pub mod outbox;
