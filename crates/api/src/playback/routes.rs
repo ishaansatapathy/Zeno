@@ -45,20 +45,8 @@ pub struct PlaybackEnvelope {
     pub playback: PlaybackResponse,
 }
 
-/// `POST /v1/videos/:id/play`
-pub async fn start(
-    State(state): State<AppState>,
-    user: AuthUser,
-    Client(ctx): Client,
-    Path(id): Path<String>,
-) -> Result<(StatusCode, Json<PlaybackEnvelope>), ApiError> {
-    let id = Uuid::parse_str(&id).map_err(|_| ApiError::Http {
-        status: StatusCode::NOT_FOUND,
-        code: "not_found",
-        message: "Video not found.".into(),
-    })?;
-    let started = service::start(&state, &user, id, &ctx).await?;
-    Ok((
+fn started_response(started: service::Started) -> (StatusCode, Json<PlaybackEnvelope>) {
+    (
         StatusCode::CREATED,
         Json(PlaybackEnvelope {
             playback: PlaybackResponse {
@@ -76,6 +64,40 @@ pub async fn start(
                 },
             },
         }),
+    )
+}
+
+/// `POST /v1/videos/:id/play` — owner/admin preview only.
+pub async fn start_video(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Client(ctx): Client,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<PlaybackEnvelope>), ApiError> {
+    let id = Uuid::parse_str(&id).map_err(|_| ApiError::Http {
+        status: StatusCode::NOT_FOUND,
+        code: "not_found",
+        message: "Video not found.".into(),
+    })?;
+    Ok(started_response(
+        service::start_video(&state, &user, id, &ctx).await?,
+    ))
+}
+
+/// `POST /v1/lessons/:id/play` — owner/admin, preview, or active enrollment.
+pub async fn start_lesson(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Client(ctx): Client,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<PlaybackEnvelope>), ApiError> {
+    let id = Uuid::parse_str(&id).map_err(|_| ApiError::Http {
+        status: StatusCode::NOT_FOUND,
+        code: "not_found",
+        message: "Lesson not found.".into(),
+    })?;
+    Ok(started_response(
+        service::start_lesson(&state, &user, id, &ctx).await?,
     ))
 }
 

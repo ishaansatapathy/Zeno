@@ -19,7 +19,7 @@ pub fn router() -> Router<AppState> {
         .route("/:id/upload", get(resume))
         .route("/:id/complete", post(complete))
         .route("/:id/abort", post(abort))
-        .route("/:id/play", post(crate::playback::routes::start))
+        .route("/:id/play", post(crate::playback::routes::start_video))
 }
 
 /// A malformed id is a 404 in the API's own format, not axum's plain-text 400.

@@ -122,19 +122,30 @@ pub struct Playable {
     pub renditions: Value,
 }
 
-/// Marks the session as seen and returns it, but only while it is open, unexpired, and its video
-/// is still ready and not deleted.
+/// Marks an authorised session as seen. A session whose entitlement disappeared is atomically
+/// ended instead, so the very request that observes revocation cannot refresh its lifetime.
 pub async fn touch_playable<'e>(
     db: impl PgExecutor<'e>,
     session_id: Uuid,
 ) -> Result<Option<Playable>, sqlx::Error> {
     sqlx::query_as(
-        "update playback_sessions s set last_seen_at = now() \
-         from videos v \
-         where s.id = $1 and v.id = s.video_id \
-           and s.ended_at is null and s.expires_at > now() \
-           and v.status = 'ready' and v.deleted_at is null \
-         returning s.user_id, s.video_id, s.expires_at, v.renditions",
+        "with candidate as materialized ( \
+             select s.id, s.user_id, s.video_id, s.expires_at, v.renditions, \
+                case \
+                    when s.expires_at <= now() then 'expired' \
+                    when v.deleted_at is not null then 'video_deleted' \
+                    when v.status <> 'ready' then 'access_revoked' \
+                    else video_access_state(s.user_id, s.video_id) \
+                end as access_state \
+             from playback_sessions s join videos v on v.id=s.video_id \
+             where s.id=$1 and s.ended_at is null \
+         ), ended as ( \
+             update playback_sessions s set ended_at=now(), end_reason=c.access_state \
+             from candidate c where s.id=c.id and c.access_state <> 'allowed' \
+         ) \
+         update playback_sessions s set last_seen_at=now() \
+         from candidate c where s.id=c.id and c.access_state='allowed' \
+         returning c.user_id, c.video_id, c.expires_at, c.renditions",
     )
     .bind(session_id)
     .fetch_optional(db)
@@ -166,7 +177,7 @@ pub async fn state_for_user<'e>(
     .await
 }
 
-/// Records a heartbeat. False if the session is no longer open.
+/// Records a heartbeat only while both the session and the viewer's entitlement are live.
 pub async fn heartbeat<'e>(
     db: impl PgExecutor<'e>,
     session_id: Uuid,
@@ -174,9 +185,22 @@ pub async fn heartbeat<'e>(
     position: Option<i32>,
 ) -> Result<bool, sqlx::Error> {
     let result = sqlx::query(
-        "update playback_sessions set last_seen_at = now(), \
-             last_position_seconds = coalesce($3, last_position_seconds) \
-         where id = $1 and user_id = $2 and ended_at is null and expires_at > now()",
+        "with candidate as materialized ( \
+             select s.id, case \
+                 when s.expires_at <= now() then 'expired' \
+                 when v.deleted_at is not null then 'video_deleted' \
+                 when v.status <> 'ready' then 'access_revoked' \
+                 else video_access_state(s.user_id, s.video_id) \
+             end as access_state \
+             from playback_sessions s join videos v on v.id=s.video_id \
+             where s.id=$1 and s.user_id=$2 and s.ended_at is null \
+         ), ended as ( \
+             update playback_sessions s set ended_at=now(), end_reason=c.access_state \
+             from candidate c where s.id=c.id and c.access_state <> 'allowed' \
+         ) \
+         update playback_sessions s set last_seen_at=now(), \
+             last_position_seconds=coalesce($3, last_position_seconds) \
+         from candidate c where s.id=c.id and c.access_state='allowed'",
     )
     .bind(session_id)
     .bind(user_id)

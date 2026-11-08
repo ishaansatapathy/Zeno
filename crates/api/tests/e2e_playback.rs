@@ -134,10 +134,10 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
     // Upload a real lecture through the API.
     let scratch = tempfile::tempdir().unwrap();
     let source = make_video(scratch.path());
-    let jar = signup_creator(&app, "asha@x.in").await;
+    let creator = signup_creator(&app, "asha@x.in").await;
     let created = app
         .post("/v1/videos")
-        .jar(&jar)
+        .jar(&creator)
         .json(json!({"filename": "Lecture.mp4", "size_bytes": source.len(), "content_type": "video/mp4"}))
         .send()
         .await;
@@ -151,7 +151,7 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
     .is_success());
     let done = app
         .post(&format!("/v1/videos/{video}/complete"))
-        .jar(&jar)
+        .jar(&creator)
         .send()
         .await;
     assert_eq!(done.status, StatusCode::OK, "{:?}", done.body);
@@ -184,15 +184,52 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
     );
     let shown = app
         .get(&format!("/v1/videos/{video}"))
-        .jar(&jar)
+        .jar(&creator)
         .send()
         .await;
     assert_eq!(shown.body["video"]["status"], "ready", "{:?}", shown.body);
 
-    // Press play, then let ffmpeg be the player.
+    // Build and publish a free course, then enroll a real student. The player path below is the
+    // student lesson route—not the creator-only raw video preview route.
+    let course = app
+        .post("/v1/courses")
+        .jar(&creator)
+        .json(json!({
+            "title": "End-to-end course",
+            "description": "A real encoded lecture",
+            "price_paise": 0
+        }))
+        .send()
+        .await;
+    assert_eq!(course.status, StatusCode::CREATED, "{:?}", course.body);
+    let course_id = Uuid::parse_str(course.body["course"]["id"].as_str().unwrap()).unwrap();
+    let lesson = app
+        .post(&format!("/v1/courses/{course_id}/lessons"))
+        .jar(&creator)
+        .json(json!({"title": "Lecture", "video_id": video}))
+        .send()
+        .await;
+    assert_eq!(lesson.status, StatusCode::CREATED, "{:?}", lesson.body);
+    let lesson_id = Uuid::parse_str(lesson.body["lesson"]["id"].as_str().unwrap()).unwrap();
+    let published = app
+        .post(&format!("/v1/courses/{course_id}/publish"))
+        .jar(&creator)
+        .json(json!({"version": 2}))
+        .send()
+        .await;
+    assert_eq!(published.status, StatusCode::OK, "{:?}", published.body);
+    let student = signup_verified(&app, "student@x.in").await;
+    let enrolled = app
+        .post(&format!("/v1/courses/{course_id}/enroll"))
+        .jar(&student)
+        .send()
+        .await;
+    assert_eq!(enrolled.status, StatusCode::CREATED, "{:?}", enrolled.body);
+
+    // Press play as the student, then let ffmpeg be the player.
     let res = app
-        .post(&format!("/v1/videos/{video}/play"))
-        .jar(&jar)
+        .post(&format!("/v1/lessons/{lesson_id}/play"))
+        .jar(&student)
         .json(json!({}))
         .send()
         .await;
@@ -224,7 +261,7 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
     // After the viewer stops, the same URL plays no more.
     let stopped = app
         .req(axum::http::Method::DELETE, &format!("/v1/play/{session}"))
-        .jar(&jar)
+        .jar(&student)
         .send()
         .await;
     assert_eq!(stopped.status, StatusCode::NO_CONTENT);

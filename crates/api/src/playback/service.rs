@@ -13,6 +13,7 @@ use zeno_core::storage::StorageError;
 use crate::auth::extractor::AuthUser;
 use crate::auth::service::ClientContext;
 use crate::error::ApiError;
+use crate::playback::access::{self, AccessState};
 use crate::playback::playlist::{self, RewriteError, STORED_PLAYLIST_NAME};
 use crate::playback::repo::{self, NewSession};
 use crate::state::AppState;
@@ -55,12 +56,6 @@ fn conflict(code: &'static str, message: impl Into<String>) -> ApiError {
         code,
         message: message.into(),
     }
-}
-
-/// Who may watch a video. For now its creator and admins (to preview); students gain access
-/// through course enrollment once courses exist.
-fn can_watch(user: &AuthUser, video: &VideoRow) -> bool {
-    video.owner_id == user.id || user.role == Role::Admin
 }
 
 /// Long enough to watch the whole video with pauses, never shorter than two hours nor longer
@@ -113,16 +108,13 @@ pub struct Started {
     pub watermark: Watermark,
 }
 
-pub async fn start(
+async fn start_with_video(
     state: &AppState,
     user: &AuthUser,
-    video_id: Uuid,
+    video: VideoRow,
     ctx: &ClientContext,
 ) -> Result<Started, ApiError> {
-    let video = videos::find(&state.db, video_id)
-        .await?
-        .filter(|video| can_watch(user, video))
-        .ok_or_else(not_found)?;
+    let video_id = video.id;
     if video.status != VideoStatus::Ready {
         return Err(conflict(
             "not_ready",
@@ -192,6 +184,45 @@ pub async fn start(
         resume_from_seconds: position,
         watermark: watermark(&viewer, session_id),
     })
+}
+
+/// Direct video playback is a creator/admin preview surface. Student entitlements are resolved
+/// only through the lesson route so raw video identifiers never become an access API.
+pub async fn start_video(
+    state: &AppState,
+    user: &AuthUser,
+    video_id: Uuid,
+    ctx: &ClientContext,
+) -> Result<Started, ApiError> {
+    let video = videos::find(&state.db, video_id)
+        .await?
+        .ok_or_else(not_found)?;
+    if video.owner_id != user.id && user.role != Role::Admin {
+        return Err(denied());
+    }
+    start_with_video(state, user, video, ctx).await
+}
+
+pub async fn start_lesson(
+    state: &AppState,
+    user: &AuthUser,
+    lesson_id: Uuid,
+    ctx: &ClientContext,
+) -> Result<Started, ApiError> {
+    let video_id = access::lesson_video(&state.db, lesson_id)
+        .await?
+        .ok_or_else(|| ApiError::Http {
+            status: StatusCode::NOT_FOUND,
+            code: "not_found",
+            message: "Lesson not found.".into(),
+        })?;
+    if access::for_video(&state.db, user.id, video_id).await? != AccessState::Allowed {
+        return Err(denied());
+    }
+    let video = videos::find(&state.db, video_id)
+        .await?
+        .ok_or_else(not_found)?;
+    start_with_video(state, user, video, ctx).await
 }
 
 /// A playlist request that passed every check.
@@ -316,6 +347,8 @@ async fn session_problem(state: &AppState, user: &AuthUser, session_id: Uuid) ->
                 }
                 Some("password_reset") => "Your password was changed. Press play to continue.",
                 Some("video_deleted") => "This video is no longer available.",
+                Some("access_revoked") => "Your access to this course was revoked.",
+                Some("expired") => "Your course access has expired. Renew it to continue.",
                 _ => "This playback session has ended. Press play to continue.",
             }
             .into(),

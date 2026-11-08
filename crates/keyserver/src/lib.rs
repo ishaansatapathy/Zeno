@@ -142,13 +142,24 @@ async fn key(
     };
 
     let granted: Option<Granted> = match sqlx::query_as(
-        "update playback_sessions s set last_seen_at = now(), key_fetches = s.key_fetches + 1 \
-         from videos v, video_keys k \
-         where s.id = $1 and s.user_id = $2 and s.video_id = $3 \
-           and v.id = s.video_id and k.video_id = s.video_id \
-           and s.ended_at is null and s.expires_at > now() \
-           and v.status = 'ready' and v.deleted_at is null \
-         returning s.key_fetches, k.wrapped_key",
+        "with candidate as materialized ( \
+             select s.id, k.wrapped_key, case \
+                 when s.expires_at <= now() then 'expired' \
+                 when v.deleted_at is not null then 'video_deleted' \
+                 when v.status <> 'ready' then 'access_revoked' \
+                 else video_access_state(s.user_id, s.video_id) \
+             end as access_state \
+             from playback_sessions s \
+             join videos v on v.id=s.video_id \
+             join video_keys k on k.video_id=s.video_id \
+             where s.id=$1 and s.user_id=$2 and s.video_id=$3 and s.ended_at is null \
+         ), ended as ( \
+             update playback_sessions s set ended_at=now(), end_reason=c.access_state \
+             from candidate c where s.id=c.id and c.access_state <> 'allowed' \
+         ) \
+         update playback_sessions s set last_seen_at=now(), key_fetches=s.key_fetches+1 \
+         from candidate c where s.id=c.id and c.access_state='allowed' \
+         returning s.key_fetches, c.wrapped_key",
     )
     .bind(claims.session_id)
     .bind(claims.user_id)

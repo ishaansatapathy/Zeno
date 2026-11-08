@@ -94,8 +94,18 @@ pub struct Enrollment {
     pub id: Uuid,
     pub user_id: Uuid,
     pub course_id: Uuid,
-    pub payment_id: Uuid,
+    pub payment_id: Option<Uuid>,
     pub expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "enrollment_source", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentSource {
+    Payment,
+    Free,
+    Grant,
+    Admin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

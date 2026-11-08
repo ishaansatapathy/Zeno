@@ -300,3 +300,75 @@ db_test! {
         assert_eq!((reply.status, reply.body.as_slice()), (StatusCode::OK, &b"ok"[..]));
     }
 }
+
+db_test! {
+    async fn key_delivery_rechecks_student_enrollment_and_ends_revoked_sessions(pool: PgPool) {
+        let app = app(pool.clone());
+        let owner = Uuid::new_v4();
+        let student = Uuid::new_v4();
+        for (id, role) in [(owner, "creator"), (student, "student")] {
+            sqlx::query(
+                "insert into users (id, name, email, password_hash, role) \
+                 values ($1,'Viewer',$2,'x',$3::user_role)",
+            )
+            .bind(id)
+            .bind(format!("{id}@x.in"))
+            .bind(role)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let video = seed_video(&pool, owner, &KEY).await;
+        let course = Uuid::new_v4();
+        sqlx::query(
+            "insert into courses (id, creator_id, slug, title, description) \
+             values ($1,$2,$3,'Key access course','Description')",
+        )
+        .bind(course)
+        .bind(owner)
+        .bind(format!("key-course-{}", &course.simple().to_string()[..8]))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into lessons (course_id, position, video_id, title) \
+             values ($1,1,$2,'Lesson')",
+        )
+        .bind(course)
+        .bind(video)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into enrollments (user_id, course_id, source, granted_by) \
+             values ($1,$2,'grant',$3)",
+        )
+        .bind(student)
+        .bind(course)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let session = seed_session(&pool, student, video).await;
+        assert_eq!(get(&app, &session.url(), Some(ORIGIN)).await.status, StatusCode::OK);
+
+        sqlx::query(
+            "update enrollments set revoked_at=now(), revoke_reason='Refunded' \
+             where user_id=$1 and course_id=$2",
+        )
+        .bind(student)
+        .bind(course)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(get(&app, &session.url(), Some(ORIGIN)).await.status, StatusCode::FORBIDDEN);
+        let reason: String = sqlx::query_scalar(
+            "select end_reason from playback_sessions where id=$1",
+        )
+        .bind(session.session)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(reason, "access_revoked");
+    }
+}

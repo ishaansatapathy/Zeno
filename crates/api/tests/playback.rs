@@ -174,6 +174,7 @@ db_test! {
         assert_eq!(master.status, StatusCode::OK, "{:?}", master.body);
         assert_eq!(master.headers[header::CONTENT_TYPE], "application/vnd.apple.mpegurl");
         assert_eq!(master.headers[header::CACHE_CONTROL], "no-store, private");
+        assert_eq!(master.headers[header::REFERRER_POLICY], "no-referrer");
         let token = token_of(url);
         let variants: Vec<&str> = text(&master).lines().filter(|l| !l.starts_with('#')).collect();
         assert_eq!(variants, [format!("144p.m3u8?t={token}"), format!("audio.m3u8?t={token}")]);
@@ -206,9 +207,9 @@ db_test! {
         let admin = Jar::of(&login(&app, "boss@x.in", PASSWORD).await);
         let video = ready_video(&app, &owner, &pool).await;
 
-        assert_eq!(play(&app, &rival, video).await.status, StatusCode::NOT_FOUND);
-        // Students get access through course enrollment, which does not exist yet.
-        assert_eq!(play(&app, &student, video).await.status, StatusCode::NOT_FOUND);
+        assert_eq!(play(&app, &rival, video).await.status, StatusCode::FORBIDDEN);
+        // Student entitlements are intentionally accepted only through `/lessons/:id/play`.
+        assert_eq!(play(&app, &student, video).await.status, StatusCode::FORBIDDEN);
         assert_eq!(app.post(&format!("/v1/videos/{video}/play")).json(json!({})).send().await.status, StatusCode::UNAUTHORIZED);
         assert_eq!(play(&app, &admin, video).await.status, StatusCode::CREATED);
         assert_eq!(app.post("/v1/videos/nope/play").jar(&owner).json(json!({})).send().await.status, StatusCode::NOT_FOUND);

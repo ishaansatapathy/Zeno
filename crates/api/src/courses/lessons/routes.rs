@@ -20,7 +20,12 @@ pub fn course_router() -> Router<AppState> {
 }
 
 pub fn item_router() -> Router<AppState> {
-    Router::new().route("/:id", axum::routing::patch(update).delete(remove))
+    Router::new()
+        .route("/:id", axum::routing::patch(update).delete(remove))
+        .route(
+            "/:id/play",
+            axum::routing::post(crate::playback::routes::start_lesson),
+        )
 }
 
 fn parse_id(raw: &str, subject: &'static str) -> Result<Uuid, ApiError> {

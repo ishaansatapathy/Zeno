@@ -193,6 +193,7 @@ pub async fn verify_email(
         .await?
         .ok_or_else(invalid_token)?;
     repo::mark_email_verified(&mut *tx, user_id).await?;
+    crate::enrollments::repo::accept_invites_for_user(&mut tx, user_id).await?;
     tx.commit().await?;
 
     let user = repo::find_user_by_id(&state.db, user_id)

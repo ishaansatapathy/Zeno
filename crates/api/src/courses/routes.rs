@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/:id/publish", post(publish))
         .route("/:id/unpublish", post(unpublish))
         .merge(crate::courses::lessons::routes::course_router())
+        .merge(crate::enrollments::routes::course_router())
 }
 
 fn parse_id(raw: &str) -> Result<Uuid, ApiError> {
