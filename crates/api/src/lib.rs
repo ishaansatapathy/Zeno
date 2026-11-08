@@ -1,6 +1,7 @@
 //! Zeno HTTP API.
 
 pub mod auth;
+pub mod catalog;
 pub mod config;
 pub mod courses;
 pub mod enrollments;
@@ -69,6 +70,7 @@ pub fn build_app(state: AppState) -> Router {
     Router::new()
         .merge(health::router())
         .nest("/v1/auth", auth::routes::router())
+        .nest("/v1/public", catalog::routes::router())
         .nest("/v1/courses", courses::routes::router())
         .nest(
             "/v1/me",
