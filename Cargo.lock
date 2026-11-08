@@ -3424,6 +3424,7 @@ dependencies = [
  "chrono",
  "dotenvy",
  "futures-util",
+ "redis",
  "reqwest",
  "ring",
  "rustls",

@@ -6,4 +6,5 @@ pub mod jobs;
 pub mod keyvault;
 pub mod model;
 pub mod playback;
+pub mod ratelimit;
 pub mod storage;
