@@ -115,6 +115,31 @@ Lesson positions are dense and all ordering mutations serialize on the course ro
 
 Free claims preserve revocation: a student removed by a creator or admin receives `409 access_revoked_by_creator` until an authorised manual grant restores access. Other revoked enrollments also cannot be reactivated through the free endpoint, and expired paid/manual entitlements cannot be converted into free claims. Revocations retain the actor, policy kind and audit history. Pending invitations are accepted by verifying the invited email; invitation emails contain a registration link without a bearer token.
 
+## Public catalog
+
+No account is needed to browse. These endpoints return a whitelisted projection (never a database row), only ever reach published, undeleted courses, and answer `404` identically for "hidden" and "never existed". They are cacheable: `Cache-Control: public, max-age=60, stale-while-revalidate=300` plus a content-derived `ETag` (send `If-None-Match` to get an empty `304`).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/public/courses` | Browse and search. `q` (up to 100 characters), `language`, `level`, `free=true`, `min_price`, `max_price` (paise), `sort=relevance\|newest\|price_asc\|price_desc`, `page` (1-50), `limit` (1-24, default 12). Answers `{courses, page, has_more}` |
+| `GET /v1/public/courses/:slug` | The course page: description, price, creator, lesson titles and durations. A lesson carries its `lesson_id` only when it is a free preview, since that is the only one a visitor can play. No ids, versions, status or storage keys appear |
+| `GET /v1/public/creators/:handle` | A creator's profile and their published courses |
+
+Search uses Postgres full-text search with the `simple` configuration (no stemming, so mixed Hindi and English text works), ranked with title matches above short-description above long-description, plus typo tolerance on titles for queries of four or more characters. The query is parsed with `websearch_to_tsquery`, which accepts any text and never errors, so quotes, operators and SQL fragments are inert. Unknown query parameters (campaign tags on shared links) are ignored; malformed known ones are `400`/`422` with the usual error body.
+
+A creator without a profile can still sell: the page then shows their account name and no handle.
+
+### Creator profile and images
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/me/profile` | Your profile, or `null` |
+| `PUT /v1/me/profile` | Create or update: `handle`, `display_name`, `bio` (500 characters), up to five `links` (plain `https://` only). A handle is lowercase letters, digits and single hyphens (3-30), not a reserved word, unique, and **permanent** once set because shared links use it (`409 handle_locked`) |
+| `PUT /v1/me/profile/avatar`, `DELETE ...` | Set or remove the picture. Needs a profile first |
+| `PUT /v1/courses/:id/thumbnail`, `DELETE ...` | Set or remove a course thumbnail. Optional `If-Match: <version>`; a change bumps the course version |
+
+Image uploads are the raw image as the body (`Content-Type: image/jpeg`, `image/png` or `image/webp`, at most 5 MB). Nothing a creator sends is stored or served as sent: the bytes are sniffed (the declared type is not believed), decoded under hard limits (4096 pixels a side, 128 MiB of memory, four decodes at once), rotated by EXIF orientation, centre-cropped, scaled down (never up) and re-encoded as a fresh JPEG, which drops all metadata and anything that was not pixels. SVG and GIF are refused. Thumbnails end up 1280 x 720 at most, avatars 512 x 512. Objects are named by content hash (`images/courses/<id>/<hash>.jpg`), so a URL never changes meaning, and the replaced object is deleted. With `IMAGE_BASE_URL` set (a CDN in front of the bucket) image URLs are permanent and cacheable; without it they are presigned links good for an hour.
+
 ## Playback
 
 | Endpoint | Purpose |
@@ -140,4 +165,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control are done. Next in the plan: the public catalog and creator profiles, then progress tracking and checkout.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images are done. Next in the plan: progress tracking and the rate limiter, then checkout.
