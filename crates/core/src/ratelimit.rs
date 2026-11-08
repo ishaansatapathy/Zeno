@@ -135,6 +135,8 @@ pub struct RateLimiter {
 
 enum Backend {
     Memory(Mutex<HashMap<String, Windows>>),
+    /// Every check fails, as when the counter store is unreachable.
+    Failing,
     Redis(Box<RedisBackend>),
 }
 
@@ -169,6 +171,15 @@ impl RateLimiter {
         Self {
             backend: Arc::new(Backend::Memory(Mutex::new(HashMap::new()))),
             clock: Arc::new(clock),
+        }
+    }
+
+    /// A limiter whose backend is permanently unreachable, to exercise fail-open and fail-closed
+    /// behaviour.
+    pub fn failing() -> Self {
+        Self {
+            backend: Arc::new(Backend::Failing),
+            clock: Arc::new(system_clock),
         }
     }
 
@@ -230,6 +241,7 @@ impl RateLimiter {
                     (false, entry.current, entry.previous)
                 }
             }
+            Backend::Failing => return Err(LimitError("backend unreachable".into())),
             Backend::Redis(redis) => {
                 let mut conn = redis.conn.clone();
                 let result: Vec<u64> = redis
