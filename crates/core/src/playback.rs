@@ -6,10 +6,12 @@
 //! The token alone is never enough: both services also check that the session it names is still
 //! open, so ending a session takes effect at once rather than when the token expires.
 //!
-//! Format: `v1.` + base64url(payload) + `.` + base64url(tag), where the payload is the fixed
-//! 56 bytes `session_id || video_id || user_id || expires_at (unix seconds, big endian)`. A fixed
-//! binary layout leaves nothing to parse ambiguously.
+//! Rotatable format: `v2.<key-id>.` + base64url(payload) + `.` + base64url(tag). The payload is
+//! the fixed 56 bytes `session_id || video_id || user_id || expires_at (unix seconds, big endian)`.
+//! Legacy `v1` tokens remain verifiable during migration. A fixed binary layout leaves nothing
+//! to parse ambiguously.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -21,13 +23,15 @@ use uuid::Uuid;
 
 use crate::config::{required, ConfigError};
 
-const PREFIX: &str = "v1.";
+const LEGACY_PREFIX: &str = "v1.";
+const PREFIX: &str = "v2.";
 const PAYLOAD_LEN: usize = 16 * 3 + 8;
 const TAG_LEN: usize = 32;
 /// Domain separation: a tag made for anything else under the same secret never verifies here.
-const CONTEXT: &[u8] = b"zeno-playback-token-v1";
+const LEGACY_CONTEXT: &[u8] = b"zeno-playback-token-v1";
+const CONTEXT: &[u8] = b"zeno-playback-token-v2";
 /// Longest token accepted before any decoding is attempted.
-const MAX_TOKEN_LEN: usize = 160;
+const MAX_TOKEN_LEN: usize = 180;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaybackClaims {
@@ -49,7 +53,8 @@ pub enum TokenError {
 
 #[derive(Clone)]
 pub struct PlaybackSigner {
-    key: Arc<hmac::Key>,
+    active: Option<u8>,
+    keys: Arc<BTreeMap<u8, hmac::Key>>,
 }
 
 impl fmt::Debug for PlaybackSigner {
@@ -60,37 +65,100 @@ impl fmt::Debug for PlaybackSigner {
 
 impl PlaybackSigner {
     pub fn from_env() -> Result<Self, ConfigError> {
-        Self::new(&required("PLAYBACK_TOKEN_SECRET")?)
+        match std::env::var("PLAYBACK_TOKEN_SECRETS") {
+            Ok(raw) if !raw.trim().is_empty() => {
+                let active = required("PLAYBACK_TOKEN_ACTIVE")?
+                    .trim()
+                    .parse::<u8>()
+                    .map_err(|_| ConfigError::Invalid {
+                        name: "PLAYBACK_TOKEN_ACTIVE",
+                        reason: "must be a key id from PLAYBACK_TOKEN_SECRETS".into(),
+                    })?;
+                Self::from_keyring(&raw, active)
+            }
+            _ => Self::new(&required("PLAYBACK_TOKEN_SECRET")?),
+        }
     }
 
     /// `secret` must be at least 32 bytes (`openssl rand -base64 48`).
     pub fn new(secret: &str) -> Result<Self, ConfigError> {
-        if secret.len() < 32 {
-            return Err(ConfigError::Invalid {
-                name: "PLAYBACK_TOKEN_SECRET",
-                reason: "must be at least 32 bytes".into(),
-            });
-        }
+        let key = parse_key("PLAYBACK_TOKEN_SECRET", secret)?;
+        let mut keys = BTreeMap::new();
+        keys.insert(0, key);
         Ok(Self {
-            key: Arc::new(hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes())),
+            active: None,
+            keys: Arc::new(keys),
         })
     }
 
-    fn tag(&self, payload: &[u8]) -> hmac::Tag {
-        let mut ctx = hmac::Context::with_key(&self.key);
-        ctx.update(CONTEXT);
+    /// Parses `id:secret,id:secret`. New tokens carry `active`; every listed key remains a
+    /// verifier so rolling deploys and already-open sessions survive rotation.
+    pub fn from_keyring(raw: &str, active: u8) -> Result<Self, ConfigError> {
+        let invalid = |reason: &str| ConfigError::Invalid {
+            name: "PLAYBACK_TOKEN_SECRETS",
+            reason: reason.into(),
+        };
+        let mut keys = BTreeMap::new();
+        for entry in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            let (id, secret) = entry
+                .split_once(':')
+                .ok_or_else(|| invalid("expected comma-separated id:secret entries"))?;
+            let id = id
+                .parse::<u8>()
+                .map_err(|_| invalid("key ids must be integers from 0 to 255"))?;
+            if keys
+                .insert(id, parse_key("PLAYBACK_TOKEN_SECRETS", secret)?)
+                .is_some()
+            {
+                return Err(invalid("key ids must be unique"));
+            }
+        }
+        if keys.is_empty() {
+            return Err(invalid("must contain at least one key"));
+        }
+        if !keys.contains_key(&active) {
+            return Err(ConfigError::Invalid {
+                name: "PLAYBACK_TOKEN_ACTIVE",
+                reason: "does not name a key in PLAYBACK_TOKEN_SECRETS".into(),
+            });
+        }
+        Ok(Self {
+            active: Some(active),
+            keys: Arc::new(keys),
+        })
+    }
+
+    fn tag(key: &hmac::Key, context: &[u8], payload: &[u8]) -> hmac::Tag {
+        let mut ctx = hmac::Context::with_key(key);
+        ctx.update(context);
         ctx.update(payload);
         ctx.sign()
     }
 
     pub fn sign(&self, claims: &PlaybackClaims) -> String {
         let payload = encode(claims);
-        let tag = self.tag(&payload);
-        format!(
-            "{PREFIX}{}.{}",
-            URL_SAFE_NO_PAD.encode(payload),
-            URL_SAFE_NO_PAD.encode(tag.as_ref())
-        )
+        match self.active {
+            Some(id) => {
+                let key = &self.keys[&id];
+                let mut signed = Vec::with_capacity(1 + payload.len());
+                signed.push(id);
+                signed.extend_from_slice(&payload);
+                let tag = Self::tag(key, CONTEXT, &signed);
+                format!(
+                    "{PREFIX}{id}.{}.{}",
+                    URL_SAFE_NO_PAD.encode(payload),
+                    URL_SAFE_NO_PAD.encode(tag.as_ref())
+                )
+            }
+            None => {
+                let tag = Self::tag(&self.keys[&0], LEGACY_CONTEXT, &payload);
+                format!(
+                    "{LEGACY_PREFIX}{}.{}",
+                    URL_SAFE_NO_PAD.encode(payload),
+                    URL_SAFE_NO_PAD.encode(tag.as_ref())
+                )
+            }
+        }
     }
 
     /// Checks the signature first and only then looks at what the token claims.
@@ -98,8 +166,48 @@ impl PlaybackSigner {
         if token.len() > MAX_TOKEN_LEN {
             return Err(TokenError::Malformed);
         }
-        let rest = token.strip_prefix(PREFIX).ok_or(TokenError::Malformed)?;
-        let (payload, tag) = rest.split_once('.').ok_or(TokenError::Malformed)?;
+        let (key, context, payload, tag, key_id) = if let Some(rest) = token.strip_prefix(PREFIX) {
+            let mut parts = rest.split('.');
+            let id = parts
+                .next()
+                .and_then(|s| s.parse::<u8>().ok())
+                .ok_or(TokenError::Malformed)?;
+            let payload = parts.next().ok_or(TokenError::Malformed)?;
+            let tag = parts.next().ok_or(TokenError::Malformed)?;
+            if parts.next().is_some() {
+                return Err(TokenError::Malformed);
+            }
+            let key = self.keys.get(&id).ok_or(TokenError::BadSignature)?;
+            (key, CONTEXT, payload, tag, Some(id))
+        } else if let Some(rest) = token.strip_prefix(LEGACY_PREFIX) {
+            let (payload, tag) = rest.split_once('.').ok_or(TokenError::Malformed)?;
+            // Legacy tokens did not carry an id. During a rotation, try every retained key.
+            let payload_bytes = URL_SAFE_NO_PAD
+                .decode(payload)
+                .map_err(|_| TokenError::Malformed)?;
+            let tag_bytes = URL_SAFE_NO_PAD
+                .decode(tag)
+                .map_err(|_| TokenError::Malformed)?;
+            if payload_bytes.len() != PAYLOAD_LEN || tag_bytes.len() != TAG_LEN {
+                return Err(TokenError::Malformed);
+            }
+            let verified = self.keys.values().any(|key| {
+                let mut message = Vec::with_capacity(LEGACY_CONTEXT.len() + payload_bytes.len());
+                message.extend_from_slice(LEGACY_CONTEXT);
+                message.extend_from_slice(&payload_bytes);
+                hmac::verify(key, &message, &tag_bytes).is_ok()
+            });
+            if !verified {
+                return Err(TokenError::BadSignature);
+            }
+            let claims = decode(&payload_bytes).ok_or(TokenError::Malformed)?;
+            if claims.expires_at <= now {
+                return Err(TokenError::Expired);
+            }
+            return Ok(claims);
+        } else {
+            return Err(TokenError::Malformed);
+        };
         let payload = URL_SAFE_NO_PAD
             .decode(payload)
             .map_err(|_| TokenError::Malformed)?;
@@ -109,10 +217,13 @@ impl PlaybackSigner {
         if payload.len() != PAYLOAD_LEN || tag.len() != TAG_LEN {
             return Err(TokenError::Malformed);
         }
-        let mut message = Vec::with_capacity(CONTEXT.len() + payload.len());
-        message.extend_from_slice(CONTEXT);
+        let mut message = Vec::with_capacity(context.len() + payload.len() + 1);
+        message.extend_from_slice(context);
+        if let Some(id) = key_id {
+            message.push(id);
+        }
         message.extend_from_slice(&payload);
-        hmac::verify(&self.key, &message, &tag).map_err(|_| TokenError::BadSignature)?;
+        hmac::verify(key, &message, &tag).map_err(|_| TokenError::BadSignature)?;
 
         let claims = decode(&payload).ok_or(TokenError::Malformed)?;
         if claims.expires_at <= now {
@@ -120,6 +231,16 @@ impl PlaybackSigner {
         }
         Ok(claims)
     }
+}
+
+fn parse_key(name: &'static str, secret: &str) -> Result<hmac::Key, ConfigError> {
+    if secret.len() < 32 {
+        return Err(ConfigError::Invalid {
+            name,
+            reason: "every secret must be at least 32 bytes".into(),
+        });
+    }
+    Ok(hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes()))
 }
 
 fn encode(claims: &PlaybackClaims) -> Vec<u8> {
@@ -257,5 +378,35 @@ mod tests {
     fn short_secrets_are_rejected_and_debug_hides_the_key() {
         assert!(PlaybackSigner::new("short").is_err());
         assert_eq!(format!("{:?}", signer()), "PlaybackSigner(..)");
+    }
+
+    #[test]
+    fn key_rotation_keeps_old_and_legacy_sessions_alive() {
+        let old_secret = "old-playback-secret-that-is-long-enough";
+        let new_secret = "new-playback-secret-that-is-long-enough";
+        let c = claims(Duration::hours(1));
+        let legacy = PlaybackSigner::new(old_secret).unwrap().sign(&c);
+        let old = PlaybackSigner::from_keyring(&format!("1:{old_secret},2:{new_secret}"), 1)
+            .unwrap()
+            .sign(&c);
+        let rotated =
+            PlaybackSigner::from_keyring(&format!("1:{old_secret},2:{new_secret}"), 2).unwrap();
+        assert!(rotated.sign(&c).starts_with("v2.2."));
+        assert_eq!(rotated.verify(&legacy, Utc::now()), Ok(c));
+        assert_eq!(rotated.verify(&old, Utc::now()), Ok(c));
+    }
+
+    #[test]
+    fn unknown_or_tampered_key_ids_are_refused() {
+        let ring = PlaybackSigner::from_keyring(
+            "1:first-playback-secret-that-is-long-enough,2:second-playback-secret-that-is-long-enough",
+            2,
+        )
+        .unwrap();
+        let token = ring.sign(&claims(Duration::hours(1)));
+        assert_eq!(
+            ring.verify(&token.replacen("v2.2.", "v2.9.", 1), Utc::now()),
+            Err(TokenError::BadSignature)
+        );
     }
 }
