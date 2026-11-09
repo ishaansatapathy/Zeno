@@ -557,6 +557,48 @@ db_test! {
     }
 }
 
+db_test! {
+    async fn a_receipt_outbox_failure_rolls_back_the_payment_and_redelivery_queues_it_once(pool: PgPool) {
+        let shop = shop(pool).await;
+        sqlx::query(
+            "create function fail_receipt() returns trigger language plpgsql as \
+             $$ begin raise exception 'simulated outbox failure'; end $$",
+        )
+        .execute(&shop.pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "create trigger fail_receipt before insert on email_outbox \
+             for each row execute function fail_receipt()",
+        )
+        .execute(&shop.pool)
+        .await
+        .unwrap();
+
+        let failed = pay(&shop, "evt_receipt", "pay_receipt").await;
+        assert_eq!(failed.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(order_status(&shop).await, "pending");
+        for table in ["payments", "enrollments", "order_events", "webhook_events"] {
+            assert_eq!(n(&shop, &format!("select count(*) from {table}")).await, 0, "{table}");
+        }
+        assert_eq!(n(&shop, "select count(*) from email_outbox where subject like 'Payment received%'").await, 0);
+
+        sqlx::query("drop trigger fail_receipt on email_outbox")
+            .execute(&shop.pool)
+            .await
+            .unwrap();
+        let retried = pay(&shop, "evt_receipt", "pay_receipt").await;
+        assert_eq!(retried.status, StatusCode::OK, "{:?}", retried.body);
+        assert_eq!(outcome(&retried), "enrolled");
+        assert_eq!(n(&shop, "select count(*) from email_outbox where subject like 'Payment received%'").await, 1);
+        assert_eq!(n(&shop, "select count(*) from webhook_events").await, 1);
+        assert_eq!(n(&shop, "select count(*) from enrollments").await, 1);
+        let duplicate = pay(&shop, "evt_receipt", "pay_receipt").await;
+        assert_eq!(duplicate.status, StatusCode::OK);
+        assert_eq!(n(&shop, "select count(*) from email_outbox where subject like 'Payment received%'").await, 1);
+    }
+}
+
 // ---- amounts and identities -------------------------------------------------------------------
 
 db_test! {

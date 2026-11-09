@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::mail::OutgoingEmail;
@@ -39,6 +39,20 @@ pub async fn enqueue(
     email: OutgoingEmail,
     ttl: ChronoDuration,
 ) -> Result<(), sqlx::Error> {
+    let mut conn = state.db.acquire().await?;
+    enqueue_in(&mut conn, email, ttl).await?;
+    drop(conn);
+    kick(state);
+    Ok(())
+}
+
+/// Queues a message inside the caller's transaction. The caller kicks delivery only after it
+/// commits; the retry loop still picks the row up if the process dies before that kick.
+pub async fn enqueue_in(
+    conn: &mut PgConnection,
+    email: OutgoingEmail,
+    ttl: ChronoDuration,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "insert into email_outbox (to_address, subject, body, expires_at) values ($1, $2, $3, $4)",
     )
@@ -46,15 +60,18 @@ pub async fn enqueue(
     .bind(email.subject)
     .bind(email.text)
     .bind(Utc::now() + ttl)
-    .execute(&state.db)
+    .execute(conn)
     .await?;
+    Ok(())
+}
 
+/// Starts delivery of already committed outbox rows without delaying the request.
+pub fn kick(state: &AppState) {
     let state = state.clone();
     state
         .background
         .clone()
         .spawn(async move { dispatch_due(&state).await });
-    Ok(())
 }
 
 /// Sends everything that is due. Safe to run from many instances at once.

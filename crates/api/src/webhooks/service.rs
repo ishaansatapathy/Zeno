@@ -1,5 +1,6 @@
 use chrono::Duration;
 use serde_json::{json, Value};
+use sqlx::PgConnection;
 
 use crate::error::ApiError;
 use crate::mail::OutgoingEmail;
@@ -80,6 +81,11 @@ pub async fn receive(state: &AppState, event_id: &str, body: &[u8]) -> Result<Re
         },
     };
 
+    let receipt_queued = match result.receipt {
+        Some(receipt) => queue_receipt(&mut tx, state, receipt).await?,
+        None => false,
+    };
+
     repo::finish_event(
         &mut tx,
         record,
@@ -96,8 +102,8 @@ pub async fn receive(state: &AppState, event_id: &str, body: &[u8]) -> Result<Re
         needs_review = result.outcome.needs_review(),
         "webhook handled"
     );
-    if let Some(receipt) = result.receipt {
-        send_receipt(state, receipt).await;
+    if receipt_queued {
+        outbox::kick(state);
     }
     Ok(Received::Handled(result.outcome))
 }
@@ -106,22 +112,20 @@ fn rupees(paise: i64) -> String {
     format!("Rs {}.{:02}", paise / 100, paise % 100)
 }
 
-/// Queued after the payment is committed. If queueing fails the payment still stands; the
-/// failure is logged, not turned into a retry, because a retry would find the event handled.
-async fn send_receipt(state: &AppState, receipt: Receipt) {
-    let email: Result<Option<String>, sqlx::Error> =
-        sqlx::query_scalar("select email from users where id = $1")
-            .bind(receipt.user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map(Option::flatten);
-    let to = match email {
-        Ok(Some(to)) => to,
-        Ok(None) => return,
-        Err(error) => {
-            tracing::error!(?error, order = %receipt.order_id, "could not look up a receipt address");
-            return;
-        }
+/// The receipt joins the payment transaction. A failed outbox write rolls the payment and event
+/// back, so the provider can retry the same event without losing the receipt.
+async fn queue_receipt(
+    conn: &mut PgConnection,
+    state: &AppState,
+    receipt: Receipt,
+) -> Result<bool, sqlx::Error> {
+    let to: Option<String> = sqlx::query_scalar("select email from users where id = $1")
+        .bind(receipt.user_id)
+        .fetch_optional(&mut *conn)
+        .await?
+        .flatten();
+    let Some(to) = to else {
+        return Ok(false);
     };
     let message = OutgoingEmail {
         to,
@@ -134,9 +138,8 @@ async fn send_receipt(state: &AppState, receipt: Receipt) {
             receipt.order_id
         ),
     };
-    if let Err(error) = outbox::enqueue(state, message, Duration::days(RECEIPT_TTL_DAYS)).await {
-        tracing::error!(?error, order = %receipt.order_id, "could not queue a receipt");
-    }
+    outbox::enqueue_in(conn, message, Duration::days(RECEIPT_TTL_DAYS)).await?;
+    Ok(true)
 }
 
 #[cfg(test)]
