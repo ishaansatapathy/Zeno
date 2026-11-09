@@ -127,6 +127,9 @@ enum Class {
     /// The person who placed the order (in these probes, the student who is not enrolled);
     /// everyone else, the course's creator and admins included, sees nothing.
     Buyer,
+    /// A server-to-server call authorised by a signature, not by who is signed in: every caller
+    /// here, whatever they hold, is refused without one.
+    Webhook,
     /// Not built yet: answers 501 to everyone, without identifying them.
     NotBuilt,
     /// Authorised by the playback token alone (players send no cookies).
@@ -171,6 +174,7 @@ fn expect(class: Class, actor: Actor) -> Out {
         (Class::Buyer, Anonymous) => Out::Unauthorized,
         (Class::Buyer, Outsider) => Out::Allowed,
         (Class::Buyer, _) => Out::Hidden,
+        (Class::Webhook, _) => Out::Unauthorized,
         (Class::NotBuilt, _) => Out::NotBuilt,
         (Class::TokenValid, _) => Out::TokenAccepted,
         (Class::TokenRefused, _) => Out::Forbidden,
@@ -547,8 +551,9 @@ fn rows() -> Vec<Row> {
         row(get.clone(), "/v1/play/{session}/master.m3u8", TokenRefused).token(Token::OtherSession),
         row(get.clone(), "/v1/play/{session}/{file}", TokenValid).token(Token::Valid),
         row(get.clone(), "/v1/play/{session}/{file}", TokenRefused).token(Token::Missing),
+        // The provider's webhook: refused for everyone, whoever they are signed in as, without a valid signature
+        row(post.clone(), "/v1/webhooks/razorpay", Webhook).json(|_, _| json!({"event": "payment.captured"})),
         // Planned, not built
-        row(post.clone(), "/v1/webhooks/razorpay", NotBuilt),
         row(get.clone(), "/v1/analytics/courses/{course}", NotBuilt),
     ]
 }
