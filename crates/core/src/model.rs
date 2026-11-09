@@ -108,6 +108,26 @@ pub enum EnrollmentSource {
     Admin,
 }
 
+/// Where an order is in its life. `created` and `pending` are the open states: at most one open
+/// order exists per user and course.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "order_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum OrderStatus {
+    Created,
+    Pending,
+    Paid,
+    Failed,
+    Expired,
+    Refunded,
+}
+
+impl OrderStatus {
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::Created | Self::Pending)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaymentStatus {
