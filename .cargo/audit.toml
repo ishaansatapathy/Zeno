@@ -5,4 +5,9 @@ ignore = [
     # reports it is not part of any build. Remove this once sqlx drops it from the lockfile
     # or a fixed rsa is released.
     "RUSTSEC-2023-0071",
+    # `libsqlite3-sys` (C SQLite CVE-2026-119375) is in Cargo.lock for the same reason: the
+    # sqlx-macros dependency graph lists the SQLite driver as optional. We use Postgres only, and
+    # `cargo tree --workspace --target all -i libsqlite3-sys` reports it is not part of any
+    # build. Remove this once sqlx drops it from the lockfile or a fixed release is picked up.
+    "RUSTSEC-2026-0459",
 ]
