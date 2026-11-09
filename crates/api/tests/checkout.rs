@@ -132,7 +132,7 @@ async fn rows(pool: &PgPool, sql: &str) -> i64 {
     count(pool, sql).await
 }
 
-/// Lets a held claim on the provider call lapse, as 15 seconds would.
+/// Lets a held claim on the provider call lapse without waiting for its full duration.
 async fn claim_lapses(pool: &PgPool, order: Uuid) {
     sqlx::query("update orders set attempt_lease_until = now() - interval '1 second' where id=$1")
         .bind(order)
@@ -303,6 +303,48 @@ db_test! {
         }
         assert_eq!(w.provider.orders().len(), 1);
         assert_eq!(w.provider.calls(Op::CreateOrder), 1);
+    }
+}
+
+db_test! {
+    async fn a_slow_recovery_cannot_outlive_its_claim_and_create_a_second_provider_order(pool: PgPool) {
+        let w = world(pool.clone()).await;
+        let user = AuthUser {
+            id: user_id(&pool, "buyer@checkout.in").await,
+            role: Role::Student,
+            session_id: Uuid::new_v4(),
+        };
+
+        // The first create gave no answer. The recovered attempt finds no order, then its
+        // create call remains in flight longer than the old 15-second claim.
+        w.provider.inject(Op::CreateOrder, Fault::Fail(ProviderError::Timeout));
+        assert!(service::checkout(&w.app.state, &user, w.course.id, None).await.is_err());
+        let order: Uuid = sqlx::query_scalar("select id from orders").fetch_one(&pool).await.unwrap();
+        claim_lapses(&pool, order).await;
+        w.provider.inject(Op::CreateOrder, Fault::Delay(Duration::from_secs(17)));
+
+        let state = w.app.state.clone();
+        let course_id = w.course.id;
+        let first = tokio::spawn(async move { service::checkout(&state, &user, course_id, None).await });
+        let started = tokio::time::Instant::now();
+        while w.provider.calls(Op::CreateOrder) < 2 {
+            assert!(started.elapsed() < Duration::from_secs(3), "recovery never reached create");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(15_200)).await;
+
+        let other = AuthUser {
+            id: user_id(&pool, "buyer@checkout.in").await,
+            role: Role::Student,
+            session_id: Uuid::new_v4(),
+        };
+        let peer = service::checkout(&w.app.state, &other, w.course.id, None).await;
+        if let Ok(peer) = peer {
+            assert_eq!(peer.order.id, order, "the peer must share the recovered order");
+        }
+        assert!(first.await.unwrap().is_ok());
+        assert_eq!(w.provider.calls(Op::CreateOrder), 2, "one uncertain call, one recovery");
+        assert_eq!(w.provider.orders().len(), 1, "no duplicate provider order");
     }
 }
 

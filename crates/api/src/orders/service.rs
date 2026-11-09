@@ -263,7 +263,17 @@ async fn settle(state: &AppState, order: OrderRow) -> Result<OrderRow, ApiError>
     let started = Instant::now();
     loop {
         if let Some(earlier_attempts) = repo::claim_attempt(&state.db, order.id).await? {
-            return create_at_provider(state, order, earlier_attempts).await;
+            return match tokio::time::timeout(
+                repo::ATTEMPT_WORK_TIMEOUT,
+                create_at_provider(state, order, earlier_attempts),
+            )
+            .await
+            {
+                Ok(result) => result,
+                // The provider may have carried out a cancelled request. Leave the claim until
+                // it lapses; the next caller must look up the receipt before creating again.
+                Err(_) => Err(provider_failure(ProviderError::Timeout)),
+            };
         }
         // Someone else is on it, or it has moved on. Look at where it stands now.
         let current = repo::by_id(&state.db, order.id)

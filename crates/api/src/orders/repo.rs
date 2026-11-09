@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use sqlx::{PgConnection, PgExecutor};
 use uuid::Uuid;
@@ -10,9 +12,11 @@ const ORDER_SELECT: &str = "id, user_id, course_id, amount_paise, currency, pric
     status, provider, provider_order_id, idempotency_key, provider_attempts, expires_at, \
     created_at, (status in ('created','pending') and expires_at <= now()) as lapsed";
 
-/// How long one request may talk to the provider about an order before others may step in. A bit
-/// more than the provider call's own timeout.
-const ATTEMPT_LEASE_SECS: i32 = 15;
+/// The claim outlives the entire bounded provider recovery operation, including receipt lookup
+/// retries and a possible create call. A timed-out operation is cancelled before the claim lapses.
+const ATTEMPT_LEASE_SECS: i32 = 60;
+pub const ATTEMPT_WORK_TIMEOUT: Duration = Duration::from_secs(45);
+const _: () = assert!(ATTEMPT_LEASE_SECS as u64 > ATTEMPT_WORK_TIMEOUT.as_secs());
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OrderRow {
