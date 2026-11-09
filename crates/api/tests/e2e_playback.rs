@@ -257,7 +257,9 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
 
     // A token that is not this session's own gets nowhere.
     let token = master.split("?t=").nth(1).unwrap();
-    let wrong = master.replace(token, &format!("{}A", &token[..token.len() - 1]));
+    // Change the last character to a different one (it is "A" about one time in 64).
+    let swapped = if token.ends_with('A') { 'B' } else { 'A' };
+    let wrong = master.replace(token, &format!("{}{swapped}", &token[..token.len() - 1]));
     assert!(!play_with_ffmpeg(&wrong).await.0);
 
     // After the viewer stops, the same URL plays no more.
