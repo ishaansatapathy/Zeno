@@ -17,7 +17,8 @@ chrono.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 url.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util"] }
+tokio = { workspace = true, features = ["fs", "io-util", "time"] }
+async-trait.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
 rusty-s3.workspace = true
