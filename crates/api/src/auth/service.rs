@@ -242,13 +242,14 @@ pub async fn login(
 
     let known_user = user.as_ref().map(|u| u.id);
     let Some(user) = user.filter(|_| valid) else {
-        limits::record_login_failure(&*state.counters, &email, ctx.ip).await;
+        let counter_result = limits::record_login_failure(&*state.counters, &email, ctx.ip).await;
         audit::record(
             state,
             Event::new(Kind::LoginFailed, ctx)
                 .maybe_user(known_user)
                 .email(&email),
         );
+        counter_result?;
         return Err(ApiError::unauthorized(
             "invalid_credentials",
             "Invalid email or password.",

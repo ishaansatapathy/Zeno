@@ -162,6 +162,7 @@ pub struct SessionState {
     pub expired: bool,
     pub duration_seconds: Option<i32>,
     pub lesson_id: Option<Uuid>,
+    pub video_id: Uuid,
 }
 
 pub async fn state_for_user<'e>(
@@ -171,7 +172,7 @@ pub async fn state_for_user<'e>(
 ) -> Result<Option<SessionState>, sqlx::Error> {
     sqlx::query_as(
         "select s.ended_at is not null as ended, s.end_reason, s.expires_at <= now() as expired, \
-                v.duration_seconds, s.lesson_id \
+                v.duration_seconds, s.lesson_id, s.video_id \
          from playback_sessions s join videos v on v.id = s.video_id \
          where s.id = $1 and s.user_id = $2",
     )

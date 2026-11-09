@@ -13,23 +13,22 @@ const LOGIN_PAIR_LIMIT: u64 = 5;
 /// Failures allowed from one address across all accounts, which stops password spraying.
 const LOGIN_IP_LIMIT: u64 = 30;
 
-/// Counts a hit and returns `Some(retry_after_secs)` once over the limit.
-///
-/// If the counter store is down this fails open and logs loudly: locking every user out of
-/// sign-in because Redis is unavailable is the worse trade, and Argon2 cost still bounds
-/// guessing speed.
-pub async fn hit(store: &dyn CounterStore, key: &str, limit: u64, window: Duration) -> Option<u64> {
-    let count = match store.incr(key, window).await {
-        Ok(count) => count,
-        Err(err) => {
-            tracing::error!(error = ?err, "rate limiter unavailable; failing open");
-            return None;
-        }
-    };
+/// Counts a hit and returns `Some(retry_after_secs)` once over the limit. Authentication and
+/// upload write budgets fail closed when Redis is unavailable.
+pub async fn hit(
+    store: &dyn CounterStore,
+    key: &str,
+    limit: u64,
+    window: Duration,
+) -> Result<Option<u64>, ApiError> {
+    let count = store.incr(key, window).await.map_err(|err| {
+        tracing::error!(error = ?err, "auth counter unavailable; failing closed");
+        ApiError::Unavailable("rate limiting is unavailable")
+    })?;
     if count <= limit {
-        return None;
+        return Ok(None);
     }
-    Some(retry_after(store, key, window).await)
+    Ok(Some(retry_after(store, key, window).await))
 }
 
 pub async fn enforce(
@@ -38,7 +37,7 @@ pub async fn enforce(
     limit: u64,
     window: Duration,
 ) -> Result<(), ApiError> {
-    match hit(store, key, limit, window).await {
+    match hit(store, key, limit, window).await? {
         None => Ok(()),
         Some(retry_after_secs) => Err(ApiError::TooManyRequests { retry_after_secs }),
     }
@@ -79,18 +78,27 @@ pub async fn ensure_login_allowed(
                 });
             }
             Ok(_) => {}
-            Err(err) => tracing::error!(error = ?err, "login guard unavailable; failing open"),
+            Err(err) => {
+                tracing::error!(error = ?err, "login guard unavailable; failing closed");
+                return Err(ApiError::Unavailable("rate limiting is unavailable"));
+            }
         }
     }
     Ok(())
 }
 
-pub async fn record_login_failure(store: &dyn CounterStore, email: &str, ip: Option<IpAddr>) {
+pub async fn record_login_failure(
+    store: &dyn CounterStore,
+    email: &str,
+    ip: Option<IpAddr>,
+) -> Result<(), ApiError> {
     for key in [pair_key(email, ip), ip_key(ip)] {
-        if let Err(err) = store.incr(&key, LOGIN_WINDOW).await {
+        store.incr(&key, LOGIN_WINDOW).await.map_err(|err| {
             tracing::error!(error = ?err, "could not record login failure");
-        }
+            ApiError::Unavailable("rate limiting is unavailable")
+        })?;
     }
+    Ok(())
 }
 
 pub async fn clear_login_failures(store: &dyn CounterStore, email: &str, ip: Option<IpAddr>) {
@@ -104,6 +112,44 @@ mod tests {
     use super::*;
     use crate::auth::counters::MemoryCounters;
 
+    struct FailedCounters;
+
+    #[async_trait::async_trait]
+    impl CounterStore for FailedCounters {
+        async fn incr(&self, _: &str, _: Duration) -> anyhow::Result<u64> {
+            anyhow::bail!("redis down")
+        }
+        async fn get(&self, _: &str) -> anyhow::Result<u64> {
+            anyhow::bail!("redis down")
+        }
+        async fn ttl(&self, _: &str) -> anyhow::Result<Option<Duration>> {
+            anyhow::bail!("redis down")
+        }
+        async fn clear(&self, _: &str) -> anyhow::Result<()> {
+            anyhow::bail!("redis down")
+        }
+        async fn ping(&self) -> anyhow::Result<()> {
+            anyhow::bail!("redis down")
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_budgets_fail_closed_when_redis_is_down() {
+        let store = FailedCounters;
+        assert!(matches!(
+            hit(&store, "register", 10, HOUR).await,
+            Err(ApiError::Unavailable(_))
+        ));
+        assert!(matches!(
+            ensure_login_allowed(&store, "x@example.com", None).await,
+            Err(ApiError::Unavailable(_))
+        ));
+        assert!(matches!(
+            record_login_failure(&store, "x@example.com", None).await,
+            Err(ApiError::Unavailable(_))
+        ));
+    }
+
     fn ip(s: &str) -> Option<IpAddr> {
         Some(s.parse().unwrap())
     }
@@ -113,9 +159,9 @@ mod tests {
         let store = MemoryCounters::default();
         let w = Duration::from_secs(60);
         for _ in 0..3 {
-            assert_eq!(hit(&store, "k", 3, w).await, None);
+            assert_eq!(hit(&store, "k", 3, w).await.unwrap(), None);
         }
-        assert!(hit(&store, "k", 3, w).await.is_some());
+        assert!(hit(&store, "k", 3, w).await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -126,7 +172,9 @@ mod tests {
             ensure_login_allowed(&store, "victim@x.in", a)
                 .await
                 .unwrap();
-            record_login_failure(&store, "victim@x.in", a).await;
+            record_login_failure(&store, "victim@x.in", a)
+                .await
+                .unwrap();
         }
         assert!(matches!(
             ensure_login_allowed(&store, "victim@x.in", a).await,
@@ -139,7 +187,9 @@ mod tests {
     async fn attacker_cannot_lock_the_victim_out_from_a_different_address() {
         let store = MemoryCounters::default();
         for _ in 0..5 {
-            record_login_failure(&store, "victim@x.in", ip("6.6.6.6")).await;
+            record_login_failure(&store, "victim@x.in", ip("6.6.6.6"))
+                .await
+                .unwrap();
         }
         ensure_login_allowed(&store, "victim@x.in", ip("1.1.1.1"))
             .await
@@ -151,7 +201,9 @@ mod tests {
         let store = MemoryCounters::default();
         let attacker = ip("6.6.6.6");
         for i in 0..30 {
-            record_login_failure(&store, &format!("user{i}@x.in"), attacker).await;
+            record_login_failure(&store, &format!("user{i}@x.in"), attacker)
+                .await
+                .unwrap();
         }
         assert!(ensure_login_allowed(&store, "fresh@x.in", attacker)
             .await
@@ -163,11 +215,11 @@ mod tests {
         let store = MemoryCounters::default();
         let a = ip("1.1.1.1");
         for _ in 0..4 {
-            record_login_failure(&store, "me@x.in", a).await;
+            record_login_failure(&store, "me@x.in", a).await.unwrap();
         }
         clear_login_failures(&store, "me@x.in", a).await;
         for _ in 0..4 {
-            record_login_failure(&store, "me@x.in", a).await;
+            record_login_failure(&store, "me@x.in", a).await.unwrap();
         }
         ensure_login_allowed(&store, "me@x.in", a).await.unwrap();
     }
@@ -176,8 +228,8 @@ mod tests {
     async fn retry_after_is_reported_in_seconds_and_at_least_one() {
         let store = MemoryCounters::default();
         let w = Duration::from_secs(90);
-        hit(&store, "k", 0, w).await;
-        let retry = hit(&store, "k", 0, w).await.unwrap();
+        hit(&store, "k", 0, w).await.unwrap();
+        let retry = hit(&store, "k", 0, w).await.unwrap().unwrap();
         assert!((1..=90).contains(&retry));
     }
 }

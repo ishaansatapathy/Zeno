@@ -138,6 +138,14 @@ pub async fn update(
         },
     )
     .await?;
+    if video_id != current.video_id {
+        // Progress belongs to the video taught by this lesson. A replacement starts a fresh
+        // lesson, including completion and resume position, in the same transaction as the edit.
+        sqlx::query("delete from lesson_progress where lesson_id = $1")
+            .bind(lesson_id)
+            .execute(&mut *tx)
+            .await?;
+    }
     let version = repo::bump_course_version(&mut tx, course.id).await?;
     let lesson = repo::find_one(&mut tx, lesson_id).await?;
     tx.commit().await?;

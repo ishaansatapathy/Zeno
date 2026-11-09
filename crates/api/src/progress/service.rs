@@ -13,6 +13,7 @@ pub async fn record(
     state: &AppState,
     user_id: Uuid,
     lesson_id: Uuid,
+    video_id: Uuid,
     position: i32,
     duration: Option<i32>,
 ) -> Result<(), sqlx::Error> {
@@ -21,6 +22,11 @@ pub async fn record(
         None => position.max(0),
     };
     let mut tx = state.db.begin().await?;
+    // Serialize with a creator replacing the lesson's video. Heartbeats from a session bound to
+    // the old video must never recreate the progress that replacement just cleared.
+    if !repo::still_this_video(&mut tx, lesson_id, video_id).await? {
+        return Ok(());
+    }
     if !repo::insert_first(&mut tx, user_id, lesson_id, Stored::first(position)).await? {
         if let Some((prev, elapsed)) = repo::lock(&mut tx, user_id, lesson_id).await? {
             let next = logic::advance(prev, position, elapsed, duration);

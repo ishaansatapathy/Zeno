@@ -142,7 +142,7 @@ Image uploads are the raw image as the body (`Content-Type: image/jpeg`, `image/
 
 ## Progress
 
-Heartbeats (every 30 s while a lesson plays) fold into per-lesson progress, kept after the playback session itself is swept, so a student's place survives. Resume now belongs to the lesson: press play again and it restarts where they were (or from the start if they were within 15 s of the end).
+Heartbeats (every 30 s while a lesson plays) fold into per-lesson progress, kept after the playback session itself is swept, so a student's place survives. Resume now belongs to the lesson: press play again and it restarts where they were (or from the start if they were within 15 s of the end). Replacing a lesson's video resets its progress and completion; heartbeats from sessions bound to the old video cannot restore it.
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -164,6 +164,8 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `progress_read` | account | 120 / minute | lets requests through |
 
 A refused request gets `429` with a `Retry-After` computed from the window (not a guess). The address is the real client: `X-Forwarded-For` is believed only as far as `TRUSTED_PROXY_HOPS` says, so a forged header buys nothing. Behind a proxy that variable must be set, or everyone shares the proxy's address and one bucket.
+
+Authentication and upload write counters use a separate Redis counter store. Registration, login, recovery and upload creation return `503` if that store is unavailable, so their budgets cannot silently fail open.
 
 ## Authorization matrix
 

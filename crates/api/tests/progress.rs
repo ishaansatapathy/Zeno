@@ -193,6 +193,52 @@ db_test! {
 }
 
 db_test! {
+    async fn replacing_a_lesson_video_resets_progress_and_old_sessions_cannot_restore_it(pool: PgPool) {
+        let app = app(pool.clone());
+        let (creator, student, course) = world(&app, &pool, "replace").await;
+        let old_session = session_of(&play(&app, &student, course.lesson).await);
+        beat(&app, &student, old_session, 0).await;
+        thirty_seconds_later(&pool, course.lesson).await;
+        beat(&app, &student, old_session, 30).await;
+        assert_eq!(row(&pool, course.lesson).await.2, 30);
+
+        // Keep the original video accessible through another lesson, so its existing session
+        // still heartbeats successfully after the first lesson changes video.
+        let another = app.post(&format!("/v1/courses/{}/lessons", course.id)).jar(&creator)
+            .json(json!({"title": "Original video", "video_id": course.video})).send().await;
+        assert_eq!(another.status, StatusCode::CREATED);
+        let second_lesson = Uuid::parse_str(another.body["lesson"]["id"].as_str().unwrap()).unwrap();
+        let second_session = play(&app, &student, second_lesson).await;
+        assert_eq!(second_session.body["playback"]["resume_from_seconds"], 0,
+            "another lesson using the same video starts with its own progress");
+        app.req(Method::DELETE, &format!("/v1/play/{}", session_of(&second_session)))
+            .jar(&student).send().await;
+        let new_video = Uuid::new_v4();
+        let owner = owner_of(&pool, course.id).await;
+        sqlx::query(
+            "insert into videos(id, owner_id, title, original_filename, content_type, size_bytes, \
+             part_size, source_key, status, duration_seconds) \
+             values($1,$2,'Replacement','new.mp4','video/mp4',1,5242880,$3,'ready',$4)"
+        ).bind(new_video).bind(owner).bind(format!("uploads/{new_video}"))
+            .bind(LESSON_SECONDS).execute(&pool).await.unwrap();
+        let changed = app.req(Method::PATCH, &format!("/v1/lessons/{}", course.lesson))
+            .jar(&creator).json(json!({"video_id": new_video})).send().await;
+        assert_eq!(changed.status, StatusCode::OK, "{:?}", changed.body);
+        let count: i64 = sqlx::query_scalar("select count(*) from lesson_progress where lesson_id=$1")
+            .bind(course.lesson).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "old video completion and resume are cleared");
+
+        assert_eq!(beat(&app, &student, old_session, 60).await.status, StatusCode::NO_CONTENT);
+        let count: i64 = sqlx::query_scalar("select count(*) from lesson_progress where lesson_id=$1")
+            .bind(course.lesson).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "old session cannot recreate the cleared row");
+        let new_session = play(&app, &student, course.lesson).await;
+        assert_eq!(new_session.status, StatusCode::CREATED);
+        assert_eq!(new_session.body["playback"]["resume_from_seconds"], 0);
+    }
+}
+
+db_test! {
     async fn resume_near_the_end_starts_over(pool: PgPool) {
         let app = app(pool.clone());
         let (_creator, student, course) = world(&app, &pool, "end").await;

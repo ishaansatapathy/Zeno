@@ -4,6 +4,20 @@ use uuid::Uuid;
 
 use crate::progress::logic::Stored;
 
+pub async fn still_this_video(
+    db: &mut PgConnection,
+    lesson_id: Uuid,
+    video_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let current: Option<Uuid> = sqlx::query_scalar(
+        "select video_id from lessons where id=$1 and deleted_at is null for share",
+    )
+    .bind(lesson_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(current == Some(video_id))
+}
+
 /// Where the viewer last was in this lesson.
 pub async fn last_position<'e>(
     db: impl PgExecutor<'e>,

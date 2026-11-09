@@ -73,7 +73,7 @@ enum Out {
 
 impl Out {
     fn holds(self, status: u16) -> bool {
-        let reachable = status < 500 && status != 404 && status != 405;
+        let reachable = status < 500 && !matches!(status, 401 | 403 | 404 | 405);
         match self {
             Out::Open => reachable,
             Out::Allowed => reachable && status != 401 && status != 403,
@@ -86,11 +86,21 @@ impl Out {
     }
 }
 
+#[test]
+fn public_route_expectation_rejects_auth_gates() {
+    assert!(!Out::Open.holds(401));
+    assert!(!Out::Open.holds(403));
+    assert!(Out::Open.holds(200));
+}
+
 /// Who may call a route, as a policy.
 #[derive(Clone, Copy, Debug)]
 enum Class {
     /// Anyone, signed in or not.
     Public,
+    /// Public auth endpoints probed with deliberately invalid credentials: rejection is about
+    /// those credentials, not an account gate on the route.
+    InvalidCredential,
     /// Any signed-in account.
     Signed,
     /// Creators and admins; the route is not about one particular resource.
@@ -126,6 +136,7 @@ fn expect(class: Class, actor: Actor) -> Out {
     use Actor::*;
     match (class, actor) {
         (Class::Public, _) => Out::Open,
+        (Class::InvalidCredential, _) => Out::Unauthorized,
         (Class::Signed, Anonymous) => Out::Unauthorized,
         (Class::Signed, _) => Out::Allowed,
         (Class::Creator, Anonymous) => Out::Unauthorized,
@@ -446,8 +457,8 @@ fn rows() -> Vec<Row> {
         }),
         row(post.clone(), "/v1/auth/verify-email", Public).json(|_, _| json!({"token": "nope"})),
         row(post.clone(), "/v1/auth/resend-verification", Public).json(|_, _| json!({"email": "nobody@matrix.in"})),
-        row(post.clone(), "/v1/auth/login", Public).json(|_, _| json!({"email": "nobody@matrix.in", "password": PASSWORD})),
-        row(post.clone(), "/v1/auth/refresh", Public).cookieless(),
+        row(post.clone(), "/v1/auth/login", InvalidCredential).json(|_, actor| json!({"email": format!("nobody-{}@matrix.in", actor_name(actor)), "password": PASSWORD})),
+        row(post.clone(), "/v1/auth/refresh", InvalidCredential).cookieless(),
         row(post.clone(), "/v1/auth/logout", Public).cookieless(),
         row(post.clone(), "/v1/auth/forgot-password", Public).json(|_, _| json!({"email": "nobody@matrix.in"})),
         row(post.clone(), "/v1/auth/reset-password", Public).json(|_, _| json!({"token": "nope", "password": PASSWORD})),

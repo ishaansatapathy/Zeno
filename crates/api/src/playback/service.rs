@@ -155,15 +155,9 @@ async fn start_with_video(
     // owner's preview) falls back to the last session.
     let remembered = match lesson_id {
         Some(lesson) => progress::last_position(&mut *tx, user.id, lesson).await?,
-        None => None,
+        None => repo::last_position(&mut tx, user.id, video_id).await?,
     };
-    let position = resume_point(
-        match remembered {
-            Some(position) => Some(position),
-            None => repo::last_position(&mut tx, user.id, video_id).await?,
-        },
-        video.duration_seconds,
-    );
+    let position = resume_point(remembered, video.duration_seconds);
     repo::insert(
         &mut tx,
         &NewSession {
@@ -385,6 +379,7 @@ pub async fn heartbeat(
         .as_ref()
         .and_then(|session| session.duration_seconds);
     let lesson_id = session.as_ref().and_then(|session| session.lesson_id);
+    let video_id = session.as_ref().map(|session| session.video_id);
     // Never record a position past the end of the video.
     let position = position_seconds.map(|p| {
         let p = i32::try_from(p).unwrap_or(i32::MAX);
@@ -395,9 +390,11 @@ pub async fn heartbeat(
     }
     // Progress is a record of the lesson, not part of keeping the screen alive: if writing it
     // fails the heartbeat still succeeds, and the next one folds the position in.
-    if let (Some(lesson_id), Some(position)) = (lesson_id, position) {
-        if let Err(err) =
-            crate::progress::service::record(state, user.id, lesson_id, position, duration).await
+    if let (Some(lesson_id), Some(video_id), Some(position)) = (lesson_id, video_id, position) {
+        if let Err(err) = crate::progress::service::record(
+            state, user.id, lesson_id, video_id, position, duration,
+        )
+        .await
         {
             tracing::error!(error = %err, %lesson_id, "could not record lesson progress");
         }

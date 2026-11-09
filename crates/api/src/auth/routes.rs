@@ -99,7 +99,7 @@ async fn resend_verification(
     // Past the per-address cap we stay silent instead of erroring, so the cap itself
     // reveals nothing about the account and can't be used to spam someone's inbox.
     let within_cap = limits::hit(&*state.counters, &format!("verify:email:{email}"), 3, HOUR)
-        .await
+        .await?
         .is_none();
     if within_cap {
         service::defer(&state, "resend verification", move |state| async move {
@@ -173,7 +173,7 @@ async fn forgot_password(
     )
     .await?;
     let within_cap = limits::hit(&*state.counters, &format!("reset:email:{email}"), 3, HOUR)
-        .await
+        .await?
         .is_none();
     if within_cap {
         service::defer(&state, "forgot password", move |state| async move {
