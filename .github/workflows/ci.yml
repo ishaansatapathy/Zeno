@@ -59,12 +59,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # The worker's tests run real ffmpeg (with libx264) on generated videos.
-      # The package mirror once stalled for 26 minutes, so every request has a short timeout, is
+      # The package mirror sometimes stalls mid-download (once for 26 minutes, and apt's own
+      # per-request timeout does not catch it), so each attempt is killed after 3 minutes and
       # retried, and the step itself is capped.
       - run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends ffmpeg
-        timeout-minutes: 8
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update \
+              && sudo timeout 180 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends ffmpeg; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or stalled; retrying"
+            sleep 5
+          done
+          exit 1
+        timeout-minutes: 12
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
