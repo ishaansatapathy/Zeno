@@ -9,7 +9,6 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/checkout/:course_id", post(not_implemented))
         .route("/v1/webhooks/razorpay", post(not_implemented))
         .route("/v1/analytics/courses/:id", get(not_implemented))
 }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 use tokio::sync::Notify;
+use zeno_core::payments::PaymentProvider;
 use zeno_core::ratelimit::RateLimiter;
 use zeno_core::storage::S3Store;
 
@@ -68,6 +69,7 @@ pub struct AppState {
     pub background: Background,
     pub store: S3Store,
     pub limiter: RateLimiter,
+    pub payments: Arc<dyn PaymentProvider>,
 }
 
 impl AppState {
@@ -80,6 +82,11 @@ impl AppState {
         store: S3Store,
     ) -> Self {
         let tokens = Arc::new(TokenKeys::new(config.jwt_access_secret.as_bytes()));
+        // The provider comes from configuration, which already refused "fake" in production.
+        let payments = config
+            .payments
+            .build()
+            .expect("the payment provider could not be built from its configuration");
         Self {
             db,
             config: Arc::new(config),
@@ -90,7 +97,14 @@ impl AppState {
             background: Background::default(),
             store,
             limiter: RateLimiter::memory(),
+            payments,
         }
+    }
+
+    /// Replaces the provider built from configuration, to hold on to a handle on it in tests.
+    pub fn with_payments(mut self, payments: Arc<dyn PaymentProvider>) -> Self {
+        self.payments = payments;
+        self
     }
 
     /// Replaces the per-process request counters with shared ones (Redis) or, in tests, a

@@ -1,5 +1,5 @@
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, Method};
+use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tower_http::cors::CorsLayer;
@@ -45,7 +45,10 @@ pub fn cors(client_origin: &str) -> CorsLayer {
             Method::PATCH,
             Method::DELETE,
         ])
-        .allow_headers([header::CONTENT_TYPE])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            HeaderName::from_static("idempotency-key"),
+        ])
         .allow_credentials(true)
         .max_age(std::time::Duration::from_secs(600));
     match HeaderValue::from_str(client_origin) {

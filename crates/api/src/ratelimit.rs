@@ -70,6 +70,19 @@ pub mod policies {
         rule: Rule::per_minute(20),
         fail: Fail::Closed,
     };
+    /// Starting checkout, per account. Each call may cost a provider API call, and a person starts
+    /// a handful at most.
+    pub const CHECKOUT: Policy = Policy {
+        name: "checkout",
+        rule: Rule::per_minute(10),
+        fail: Fail::Closed,
+    };
+    /// Reading one's own orders (a page polls while a payment settles), per account.
+    pub const ORDER_READ: Policy = Policy {
+        name: "order_read",
+        rule: Rule::per_minute(120),
+        fail: Fail::Open,
+    };
     /// Reading one's own progress, per account.
     pub const PROGRESS_READ: Policy = Policy {
         name: "progress_read",

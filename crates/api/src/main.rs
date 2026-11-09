@@ -27,6 +27,10 @@ async fn main() -> anyhow::Result<()> {
         bail!("no production mail transport is configured yet; refusing to start in production");
     }
 
+    if config.payments.uses_test_keys() && config.core.env.is_production() {
+        tracing::warn!("production is configured with Razorpay test keys: no real money will move");
+    }
+
     let db = zeno_core::db::connect(&config.core.database_url, 10)
         .await
         .context("could not connect to Postgres")?;
@@ -61,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .with_limiter(zeno_core::ratelimit::RateLimiter::redis(redis));
 
+    tracing::info!(provider = state.payments.name(), "payments ready");
     zeno_api::auth::cleanup::spawn_periodic(state.clone());
 
     zeno_api::outbox::spawn_retry_loop(state.clone());

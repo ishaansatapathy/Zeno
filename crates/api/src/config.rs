@@ -1,4 +1,6 @@
 use url::Url;
+
+use crate::payments::PaymentsConfig;
 use zeno_core::config::{parse_or, required, Config, ConfigError};
 use zeno_core::playback::PlaybackSigner;
 use zeno_core::storage::StorageConfig;
@@ -26,6 +28,10 @@ pub struct ApiConfig {
     /// Where course and avatar images are served from, without a trailing slash: a CDN in front
     /// of the bucket. Unset, images are served through short-lived presigned links instead.
     pub image_base_url: Option<String>,
+    /// Which payment provider runs; production refuses the fake one.
+    pub payments: PaymentsConfig,
+    /// Minutes a checkout stays payable before its order expires.
+    pub order_ttl_minutes: u32,
 }
 
 impl ApiConfig {
@@ -45,6 +51,14 @@ impl ApiConfig {
             Ok(raw) if !raw.trim().is_empty() => Some(parse_public_url("IMAGE_BASE_URL", &raw)?),
             _ => None,
         };
+        let payments = PaymentsConfig::from_env(core.env.is_production())?;
+        let order_ttl_minutes = parse_or("ORDER_TTL_MINUTES", 30u32)?;
+        if !(5..=1440).contains(&order_ttl_minutes) {
+            return Err(ConfigError::Invalid {
+                name: "ORDER_TTL_MINUTES",
+                reason: "must be between 5 and 1440".into(),
+            });
+        }
         if max_concurrent_streams == 0 {
             return Err(ConfigError::Invalid {
                 name: "MAX_CONCURRENT_STREAMS",
@@ -101,6 +115,8 @@ impl ApiConfig {
             key_server_url,
             max_concurrent_streams,
             image_base_url,
+            payments,
+            order_ttl_minutes,
         })
     }
 }

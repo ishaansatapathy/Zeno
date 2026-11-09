@@ -15,6 +15,7 @@ use zeno_api::config::ApiConfig;
 use zeno_api::mail::{Mailer, MemoryMailer, OutgoingEmail};
 use zeno_api::state::AppState;
 use zeno_core::config::{Config, Environment};
+use zeno_core::payments::FakeProvider;
 use zeno_core::storage::{S3Store, StorageConfig};
 
 pub const ORIGIN: &str = "http://localhost:3000";
@@ -66,6 +67,22 @@ pub fn build_with_mailer(pool: PgPool, send: Arc<dyn Mailer>, record: MemoryMail
     }
 }
 
+/// An app whose payment provider is a [`FakeProvider`] the test keeps a handle on, to make the
+/// provider misbehave and to play the customer paying.
+pub fn app_with_provider(pool: PgPool) -> (App, FakeProvider) {
+    let provider = FakeProvider::new();
+    let mailer = MemoryMailer::default();
+    let state = make_state(pool.clone(), false, 0, Arc::new(mailer.clone()))
+        .with_payments(Arc::new(provider.clone()));
+    let app = App {
+        router: zeno_api::build_app(state.clone()),
+        mailer,
+        pool,
+        state,
+    };
+    (app, provider)
+}
+
 pub fn make_state(
     pool: PgPool,
     cookie_secure: bool,
@@ -101,6 +118,8 @@ pub fn make_state_with(
         key_server_url: KEY_SERVER_URL.into(),
         max_concurrent_streams: MAX_STREAMS,
         image_base_url: None,
+        payments: zeno_api::payments::PaymentsConfig::Fake,
+        order_ttl_minutes: 30,
     };
     tweak(&mut config);
     let store = S3Store::new(&config.storage).unwrap();

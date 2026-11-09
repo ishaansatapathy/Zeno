@@ -124,6 +124,9 @@ enum Class {
     SessionViewer,
     /// Enrolled students only; everyone else, creators included, sees nothing.
     EnrolledOnly,
+    /// The person who placed the order (in these probes, the student who is not enrolled);
+    /// everyone else, the course's creator and admins included, sees nothing.
+    Buyer,
     /// Not built yet: answers 501 to everyone, without identifying them.
     NotBuilt,
     /// Authorised by the playback token alone (players send no cookies).
@@ -165,6 +168,9 @@ fn expect(class: Class, actor: Actor) -> Out {
         (Class::EnrolledOnly, Anonymous) => Out::Unauthorized,
         (Class::EnrolledOnly, Student) => Out::Allowed,
         (Class::EnrolledOnly, _) => Out::Hidden,
+        (Class::Buyer, Anonymous) => Out::Unauthorized,
+        (Class::Buyer, Outsider) => Out::Allowed,
+        (Class::Buyer, _) => Out::Hidden,
         (Class::NotBuilt, _) => Out::NotBuilt,
         (Class::TokenValid, _) => Out::TokenAccepted,
         (Class::TokenRefused, _) => Out::Forbidden,
@@ -256,6 +262,8 @@ struct World {
     token: String,
     other_token: String,
     student: Uuid,
+    /// An order placed by the outsider.
+    order: Uuid,
     slug: String,
     handle: &'static str,
     outsider_email: String,
@@ -270,6 +278,7 @@ struct Actors {
     anonymous: Jar,
     owner_id: Uuid,
     student_id: Uuid,
+    outsider_id: Uuid,
 }
 
 impl Actors {
@@ -324,6 +333,7 @@ async fn actors(app: &App, pool: &PgPool) -> Actors {
         anonymous: Jar::default(),
         owner_id,
         student_id: user_id(pool, "student@matrix.in").await,
+        outsider_id: user_id(pool, "outsider@matrix.in").await,
     }
 }
 
@@ -384,6 +394,19 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
     .execute(pool)
     .await
     .unwrap();
+    let order = Uuid::new_v4();
+    sqlx::query(
+        "insert into orders (id, user_id, course_id, amount_paise, price_snapshot, status,             provider, provider_order_id, expires_at)          values ($1, $2, $3, 49900,             jsonb_build_object('v', 1, 'course_id', $3::text, 'course_title', 'Matrix course',                 'course_slug', $4::text, 'creator_id', $5::text, 'list_price_paise', 49900,                 'discount_paise', 0, 'amount_paise', 49900, 'currency', 'INR'),             'pending', 'fake', $6, now() + interval '30 minutes')",
+    )
+    .bind(order)
+    .bind(actors.outsider_id)
+    .bind(course)
+    .bind(&slug)
+    .bind(actors.owner_id)
+    .bind(format!("order_matrix_{}", order.simple()))
+    .execute(pool)
+    .await
+    .unwrap();
     let sign = |session_id: Uuid| {
         app.state.config.playback.sign(&PlaybackClaims {
             session_id,
@@ -420,6 +443,7 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
         token: sign(session),
         other_token: sign(Uuid::new_v4()),
         student: actors.student_id,
+        order,
         slug,
         handle: "matrix-owner",
         outsider_email: "outsider@matrix.in".into(),
@@ -433,6 +457,7 @@ fn fill(path: &str, world: &World) -> String {
         .replace("{upload}", &world.upload.to_string())
         .replace("{session}", &world.session.to_string())
         .replace("{student}", &world.student.to_string())
+        .replace("{order}", &world.order.to_string())
         .replace("{slug}", &world.slug)
         .replace("{handle}", world.handle)
         .replace("{file}", "144p.m3u8")
@@ -487,6 +512,10 @@ fn rows() -> Vec<Row> {
         row(post.clone(), "/v1/lessons/{lesson}/play", LessonPlay),
         // Enrollment
         row(post.clone(), "/v1/courses/{course}/enroll", Signed),
+        // Payments: anyone signed in may start checkout (what comes of it depends on the course,
+        // not the person); an order is its buyer's alone.
+        row(post.clone(), "/v1/checkout/{course}", Signed),
+        row(get.clone(), "/v1/orders/{order}", Buyer),
         row(post.clone(), "/v1/courses/{course}/grants", Owned).json(|w, _| json!({"user": w.outsider_email})),
         row(delete.clone(), "/v1/courses/{course}/grants/{student}?reason=matrix", Owned),
         row(get.clone(), "/v1/courses/{course}/students", Owned),
@@ -519,7 +548,6 @@ fn rows() -> Vec<Row> {
         row(get.clone(), "/v1/play/{session}/{file}", TokenValid).token(Token::Valid),
         row(get.clone(), "/v1/play/{session}/{file}", TokenRefused).token(Token::Missing),
         // Planned, not built
-        row(post.clone(), "/v1/checkout/{course}", NotBuilt),
         row(post.clone(), "/v1/webhooks/razorpay", NotBuilt),
         row(get.clone(), "/v1/analytics/courses/{course}", NotBuilt),
     ]
