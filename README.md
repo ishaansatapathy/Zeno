@@ -162,10 +162,35 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `heartbeat` | account | 30 / minute | lets requests through |
 | `enroll` | account | 20 / minute | refuses (`503`) |
 | `progress_read` | account | 120 / minute | lets requests through |
+| `checkout` | account | 10 / minute | refuses (`503`) |
+| `order_read` | account | 120 / minute | lets requests through |
 
 A refused request gets `429` with a `Retry-After` computed from the window (not a guess). The address is the real client: `X-Forwarded-For` is believed only as far as `TRUSTED_PROXY_HOPS` says, so a forged header buys nothing. Behind a proxy that variable must be set, or everyone shares the proxy's address and one bucket.
 
 Authentication and upload write counters use a separate Redis counter store. Registration, login, recovery and upload creation return `503` if that store is unavailable, so their budgets cannot silently fail open.
+
+## Payments
+
+Money moves in two halves that never mix. An **order** is the intention to buy, made by the server at checkout; a **payment** is what the provider later tells us happened. Enrollment is granted only from a verified server-side event, never from anything the browser says (the "payment successful" callback may only make a page poll sooner).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/checkout/:course_id` | Start or resume checkout for a paid course. No body. Returns the order and the parameters for the provider's checkout widget. `201` for a new order, `200` when the open one is returned |
+| `GET /v1/orders/:id` | One order, for the person who placed it. Anyone else, the course's creator and admins included, gets `404` |
+
+The client sends **only a course id**. Amount, currency and title are read from the database at that moment and frozen in the order (`price_snapshot`), so changing the price or the title mid-checkout changes nothing for an order already made, and there is no request field through which a price could be argued. Only INR is supported.
+
+What checkout refuses, with the code in `error.code`: a free course (`not_payable`, use `/enroll`), a course that is not published (`course_unavailable`), your own course (`own_course`), a course you already have (`already_enrolled`), access a creator revoked (`access_revoked_by_creator`; one ended by a refund or by expiring can be bought again), and an idempotency key already used for another course (`idempotency_key_reused`).
+
+**One open order per person per course**, enforced by a partial unique index: a double click, a second tab and twenty parallel requests all share one order and one provider order. The optional `Idempotency-Key` header (1 to 64 characters: letters, digits, `- _ . :`) makes a retry return the order the first request made, whatever has happened to it since.
+
+**The provider can fail at the worst moment.** Creating an order is the one provider call that is never retried, because a retry after a timeout could create a second order. Instead the order id is sent as the provider's `receipt`; a request takes a short database claim (15 s) before talking to the provider, so concurrent requests wait for it rather than create beside it; and after an answer that never came, the next attempt looks the order up by receipt and adopts it. A clear refusal (connection refused, bad request) releases the claim at once; an unknown outcome (timeout, 5xx) keeps it until it lapses. The provider's answer is checked against what was asked (amount, currency, receipt) before the order is opened. Provider outages are `503`, a provider refusal is `502` without the provider's wording.
+
+Orders live 30 minutes (`ORDER_TTL_MINUTES`, 5 to 1440). A read treats an open order past its time as `expired` immediately; starting checkout again asks the provider whether the old order was paid in its last moments (if so, `payment_processing` and no second order next to a payment in flight; if the provider cannot say, `503`), then marks it expired and makes a new one at today's price.
+
+Provider selection is configuration, decided at startup: `PAYMENT_PROVIDER=razorpay` with `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` (at least 16 characters; `RAZORPAY_WEBHOOK_SECRET_PREVIOUS` keeps the old one valid while it is being rotated), or `PAYMENT_PROVIDER=fake` for development. Production refuses the fake provider and refuses to start with no provider chosen. The Razorpay client (`zeno_core::payments`) has a 10 s total and 3 s connect timeout, retries only reads, never follows redirects (the request carries the API secret), refuses provider ids that could rewrite a URL path, and keeps credentials out of every error and `Debug` output. The fake provider can be told to fail, to fail *after* doing the work, or to answer slowly, which is how the unhappy paths above are tested without a network.
+
+Who gets paid is settled in the plan (decision D1): Zeno's own provider account collects, and creators are paid from a ledger. Orders carry the course's creator in the snapshot so that ledger can be built from them.
 
 ## Authorization matrix
 
@@ -196,4 +221,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Next in the plan: checkout and payments.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout and the payment provider boundary are done too. Next in the plan: webhooks, which are what actually grant enrollment.
