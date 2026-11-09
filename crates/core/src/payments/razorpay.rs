@@ -149,10 +149,11 @@ impl RazorpayProvider {
 }
 
 fn transport_error(error: reqwest::Error) -> ProviderError {
-    if error.is_timeout() {
-        ProviderError::Timeout
-    } else if error.is_connect() {
+    // Checked first: a connect attempt that times out is reported as both, and nothing was sent.
+    if error.is_connect() {
         ProviderError::Unreachable(error.without_url().to_string())
+    } else if error.is_timeout() {
+        ProviderError::Timeout
     } else {
         ProviderError::Unavailable(error.without_url().to_string())
     }
