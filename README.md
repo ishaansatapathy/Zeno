@@ -164,6 +164,7 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `progress_read` | account | 120 / minute | lets requests through |
 | `checkout` | account | 10 / minute | refuses (`503`) |
 | `order_read` | account | 120 / minute | lets requests through |
+| `webhook_rejected` | client address, forged webhooks only | 30 / minute | lets requests through |
 
 A refused request gets `429` with a `Retry-After` computed from the window (not a guess). The address is the real client: `X-Forwarded-For` is believed only as far as `TRUSTED_PROXY_HOPS` says, so a forged header buys nothing. Behind a proxy that variable must be set, or everyone shares the proxy's address and one bucket.
 
@@ -191,6 +192,19 @@ Orders live 30 minutes (`ORDER_TTL_MINUTES`, 5 to 1440). A read treats an open o
 Provider selection is configuration, decided at startup: `PAYMENT_PROVIDER=razorpay` with `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` (at least 16 characters; `RAZORPAY_WEBHOOK_SECRET_PREVIOUS` keeps the old one valid while it is being rotated), or `PAYMENT_PROVIDER=fake` for development. Production refuses the fake provider and refuses to start with no provider chosen. The Razorpay client (`zeno_core::payments`) has a 10 s total and 3 s connect timeout, retries only reads, never follows redirects (the request carries the API secret), refuses provider ids that could rewrite a URL path, and keeps credentials out of every error and `Debug` output. The fake provider can be told to fail, to fail *after* doing the work, or to answer slowly, which is how the unhappy paths above are tested without a network.
 
 Who gets paid is settled in the plan (decision D1): Zeno's own provider account collects, and creators are paid from a ledger. Orders carry the course's creator in the snapshot so that ledger can be built from them.
+
+### Webhooks
+
+`POST /v1/webhooks/razorpay` is the only place a payment becomes access. It is server to server: no cookies and no account, the signature is the credential.
+
+- **Authenticity.** The signature (`X-Razorpay-Signature`, HMAC-SHA256 of the raw body) is checked on the exact bytes received, before anything is parsed, in constant time, against the current webhook secret and, during a rotation, the previous one. A missing or wrong signature is `401` and is not recorded; only forgeries count against a per-address limit (30 a minute), so a flood of them is slowed while the provider's real traffic is never limited. Bodies are capped at 256 KiB.
+- **Exactly once.** The event is recorded and handled in a single transaction. A crash or a database error rolls back everything, including the note that it arrived, and the provider's retry starts clean; a second delivery, even at the same instant, waits for the first and finds it done (`duplicate`). The event id header is not signed, so it is not the only guard: the books also key on the payment's own id, and replaying a captured body under a made-up event id still enrolls once.
+- **Trust only what matches.** A payment is applied only if it belongs to one of our orders and its amount and currency equal what the order asked for. Otherwise nobody is enrolled, the answer is still `200` (so the provider stops retrying), and the event is stored with `needs_review` set. The enrollment goes to whoever owns the order, never to anyone a payload names.
+- **Order of events does not matter.** `payment.captured` and `order.paid` for one payment enroll once; a late `payment.failed` never undoes a payment; a failed attempt followed by a successful one ends paid; a refund that overtakes its payment is recorded so the payment, when it arrives, grants nothing; an order that expired before the money arrived is still honoured, because the money was taken.
+- **Money is never lost sight of.** A second payment for a paid order is stored with status `duplicate`, and the database allows only one `confirmed` payment per order. A payment for access a creator had blocked is recorded and does not undo the block. A payment for someone who already had the course keeps their access and links the payment. All of these set `needs_review`, listed by `webhook_events_review_idx`, and each leaves a row in `order_events`, the append-only trail of what happened to an order.
+- **Refunds.** A full `refund.processed` (from us or made in the provider's dashboard) marks the payment and order refunded, ends the access that payment bought and the playback in progress. A person who is refunded may buy again and gets the same enrollment back. Partial refunds and `refund.failed` change nothing and are flagged. A receipt is emailed after the payment commits.
+
+The state changes live in `webhooks/settlement.rs` as plain functions over a connection, so reconciliation can call the same code instead of growing a second state machine.
 
 ## Authorization matrix
 
@@ -221,4 +235,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout and the payment provider boundary are done too. Next in the plan: webhooks, which are what actually grant enrollment.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout, the payment provider boundary and the webhooks that grant enrollment are done too. Next in the plan: reconciliation and refunds.
