@@ -1,16 +1,14 @@
 //! Routes from the planned REST API that are not built yet. They answer 501 rather than
 //! 404 so clients can tell "not implemented" from "wrong URL".
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/v1/webhooks/razorpay", post(not_implemented))
-        .route("/v1/analytics/courses/:id", get(not_implemented))
+    Router::new().route("/v1/analytics/courses/:id", get(not_implemented))
 }
 
 async fn not_implemented() -> (StatusCode, Json<Value>) {

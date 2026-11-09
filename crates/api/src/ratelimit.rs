@@ -77,6 +77,14 @@ pub mod policies {
         rule: Rule::per_minute(10),
         fail: Fail::Closed,
     };
+    /// Webhook calls whose signature did not check out, per client address. Only failures are
+    /// counted, so a flood of forgeries is turned away while the provider's real traffic is not
+    /// limited at all.
+    pub const WEBHOOK_REJECTED: Policy = Policy {
+        name: "webhook_rejected",
+        rule: Rule::per_minute(30),
+        fail: Fail::Open,
+    };
     /// Reading one's own orders (a page polls while a payment settles), per account.
     pub const ORDER_READ: Policy = Policy {
         name: "order_read",
@@ -117,6 +125,18 @@ pub async fn enforce(state: &AppState, policy: &Policy, subject: &str) -> Result
             }
         },
     }
+}
+
+/// Counts one request against the caller's address (as `limit_by_address` does, for a single
+/// handler that wants to count only some of its requests).
+pub async fn enforce_address(
+    state: &AppState,
+    policy: &Policy,
+    headers: &axum::http::HeaderMap,
+    peer: Option<IpAddr>,
+) -> Result<(), ApiError> {
+    let ip = client_ip(headers, peer, state.config.trusted_proxy_hops);
+    enforce(state, policy, &limit_bucket(ip)).await
 }
 
 pub async fn enforce_user(state: &AppState, policy: &Policy, user: Uuid) -> Result<(), ApiError> {
