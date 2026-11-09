@@ -140,6 +140,35 @@ A creator without a profile can still sell: the page then shows their account na
 
 Image uploads are the raw image as the body (`Content-Type: image/jpeg`, `image/png` or `image/webp`, at most 5 MB). Nothing a creator sends is stored or served as sent: the bytes are sniffed (the declared type is not believed), decoded under hard limits (4096 pixels a side, 128 MiB of memory, four decodes at once), rotated by EXIF orientation, centre-cropped, scaled down (never up) and re-encoded as a fresh JPEG, which drops all metadata and anything that was not pixels. SVG and GIF are refused. Thumbnails end up 1280 x 720 at most, avatars 512 x 512. Each upload gets an immutable key containing its content hash and a unique upload id (`images/courses/<id>/<hash>-<upload-id>.jpg`). Replaced and failed uploads are queued for cleanup after 24 hours; the worker checks database references before deleting. With `IMAGE_BASE_URL` set (a CDN in front of the bucket) image URLs are stable while referenced and cacheable; without it they are presigned links good for an hour.
 
+## Progress
+
+Heartbeats (every 30 s while a lesson plays) fold into per-lesson progress, kept after the playback session itself is swept, so a student's place survives. Resume now belongs to the lesson: press play again and it restarts where they were (or from the start if they were within 15 s of the end).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/me/continue-watching` | The unfinished lesson each course was last played in, newest first (at most ten). A lesson you can no longer open (revoked, expired, video removed) is left out |
+| `GET /v1/courses/:id/progress` | Every lesson of a course you are enrolled in with its progress and the course's percent complete. Anyone else, creators included, gets `404` |
+
+The server never takes "I finished" on trust. Three numbers are kept per lesson: where the viewer is (resume follows them wherever they seek), the furthest point reached, and *credible watch time*, which grows only by forward movement the clock can account for (up to twice real time plus a few seconds, never more than two minutes per heartbeat). Dragging the slider from minute 3 to minute 55 earns a few seconds, not 52 minutes, and a burst of heartbeats cannot manufacture time. A lesson is completed when both watched time and furthest point reach 90% of its length, and stays completed. Two screens heartbeating at once take turns on a row lock, so the same seconds are never counted twice.
+
+## Rate limits
+
+One sliding-window limiter (`zeno_core::ratelimit`) serves every instance through a single atomic Redis script, so a budget is shared however many API servers run. Each limit is a named policy in `crates/api/src/ratelimit.rs`:
+
+| Policy | Subject | Budget | Redis down |
+| --- | --- | --- | --- |
+| `public_catalog` | client address (IPv6 by /64) | 120 / minute | lets requests through |
+| `play_start` | account | 20 / minute | refuses (`503`) |
+| `heartbeat` | account | 30 / minute | lets requests through |
+| `enroll` | account | 20 / minute | refuses (`503`) |
+| `progress_read` | account | 120 / minute | lets requests through |
+
+A refused request gets `429` with a `Retry-After` computed from the window (not a guess). The address is the real client: `X-Forwarded-For` is believed only as far as `TRUSTED_PROXY_HOPS` says, so a forged header buys nothing. Behind a proxy that variable must be set, or everyone shares the proxy's address and one bucket.
+
+## Authorization matrix
+
+`crates/api/tests/authz_matrix.rs` calls every route as an anonymous visitor, an enrolled student, a student who is not enrolled, the owning creator, another creator and an admin, each time against freshly created resources, and compares the status with a declared policy. A second test reads the router source and fails if any `.route(...)` is missing from the table, or the table lists a route that no longer exists. A new endpoint therefore cannot ship without someone deciding who may call it.
+
 ## Playback
 
 | Endpoint | Purpose |
@@ -165,4 +194,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images are done. Next in the plan: progress tracking and the rate limiter, then checkout.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Next in the plan: checkout and payments.
