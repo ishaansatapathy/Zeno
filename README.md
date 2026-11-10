@@ -164,6 +164,8 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `progress_read` | account | 120 / minute | lets requests through |
 | `checkout` | account | 10 / minute | refuses (`503`) |
 | `order_read` | account | 120 / minute | lets requests through |
+| `coupon_write` | account | 30 / minute | refuses (`503`) |
+| `coupon_try` | account | 20 / minute | refuses (`503`) |
 | `webhook_rejected` | client address, forged webhooks only | 30 / minute | lets requests through |
 | `refund_request` | account | 5 / minute | refuses (`503`) |
 | `refund_action` | account | 20 / minute | refuses (`503`) |
@@ -238,6 +240,39 @@ Provider errors back off (a minute, doubling to an hour, with jitter); each pass
 
 `payment.dispute.*` events are recorded against the order and flagged for review (`webhook_events.needs_review`). Nothing is revoked or refunded automatically: a dispute is a negotiation with the customer's bank, and which way it goes is a person's call. Run `select * from webhook_events where needs_review and reviewed_at is null order by received_at` to see everything waiting.
 
+### Coupons
+
+| Endpoint | Who | Purpose |
+| --- | --- | --- |
+| `POST /v1/coupons` | a creator | Make a coupon: `code`, `kind` (`percent` 1 to 100, or `flat` in paise), optional `course_id`, `valid_from`, `valid_until`, `max_redemptions`, `per_user_limit` (default 1) |
+| `GET /v1/coupons` | a creator | Their own coupons, newest first |
+| `PATCH /v1/coupons/:id` | its creator, or an admin | Switch off (`active: false`), move `valid_until`, raise or lower `max_redemptions` (never below what is already used). The discount itself is fixed: make a new coupon |
+| `POST /v1/checkout/:course_id/preview` | a signed-in student | `{"coupon": "CODE"}` returns the price this person would pay, creating and using nothing |
+| `POST /v1/checkout/:course_id` | a signed-in student | As before; the body may now carry `{"coupon": "CODE"}`. Nothing else in it is read |
+
+**The server prices it.** The discount is computed when the order is made, in integer paise: a percent is rounded *down*, the buyer pays at least Rs 1 (the provider's minimum, so a discount that would leave less is held back to Rs 1), and a discount that covers the whole price makes the course **free**: the buyer is enrolled (source `free`) with no order and no provider call. A coupon that would change nothing is refused rather than used up. The discount, the list price and the coupon are frozen in the order, shown on `GET /v1/orders/:id`, and what the payment webhook is checked against.
+
+**Codes** are matched case-insensitively and ignoring surrounding space (stored upper-case), and belong to the creator who made them: another creator's code does not exist for your course, and a switched-off code is "not found", so neither reveals anything. Each refusal has its own `422` code: `coupon_not_found`, `coupon_not_applicable` (made for another course), `coupon_not_started`, `coupon_expired`, `coupon_exhausted`, `coupon_limit_reached` (this person has used it), `coupon_no_effect`. Trying codes is limited to 20 a minute per account.
+
+**Limits hold under any load.** Using a coupon is one conditional `UPDATE ... WHERE redeemed_count < max_redemptions`, which takes a row lock, so redemptions of one coupon happen one at a time: a hundred buyers racing for ten redemptions get exactly ten (the test does this). The per-person limit is checked under the same lock. An order and its redemption are made in one transaction.
+
+**Given back when unpaid.** An order that expires without payment (found by the reconciliation job, or cleared when the buyer starts again) releases its redemption in the same statement. If the customer pays after all, the payment takes the redemption back, even past the limit: the money is in and the discount was used. Asking with a different coupon replaces the open order (after asking the provider whether it was paid, as for an expired one); the same coupon again shares it and is not a second use. A paid order keeps its redemption, and so does a refunded one, so an offer cannot be farmed by buying and refunding. A refund returns what was actually paid.
+
+### Invoices
+
+Off by default (`INVOICES_ENABLED`), because how Zeno must invoice (GST) is a question for a chartered accountant and decision D8 says not to guess. A plain receipt email is sent for every payment either way. With the flag on:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /v1/orders/:id/invoice` | The invoice for the buyer's own order, as JSON |
+| `GET /v1/orders/:id/invoice.pdf` | The same as a PDF download (`private, no-store`) |
+
+- **Numbered without gaps.** `ZNO/2026-27/000001`: a prefix, the Indian financial year (April to March, by Indian time: 18:30 UTC on 31 March is already the new year), and a counter that restarts each year. The counter is advanced in the same transaction that writes the invoice and the payment's enrollment, so a number is never skipped, never reused and never spent on a sale that was rolled back. Ten simultaneous sales get ten consecutive numbers.
+- **Issued with the sale.** The invoice is written in the webhook transaction (and by reconciliation, which uses the same code), and the receipt email quotes its number. An order paid before the flag was turned on is invoiced the first time the buyer asks. Duplicate payments and refunds-before-payment get none.
+- **Immutable.** A database trigger refuses any `UPDATE`, `DELETE` or `TRUNCATE` on `invoices`. What is printed is copied when it is issued, so renaming the course or the buyer later changes nothing. A refunded order keeps its invoice; a credit note is not built.
+- **No tax.** There is no GSTIN, no tax split and no credit note; the data has an empty `tax` slot for later.
+- **The PDF** is written by a small built-in writer (`invoices/pdf.rs`) using the standard Helvetica fonts, with correct cross-reference offsets and every string escaped. Long text wraps onto additional pages instead of being cut. The standard fonts cover Latin-1 only; if the invoice contains text that they cannot display, the PDF endpoint returns `409 invoice_pdf_unsupported_text` instead of changing the buyer's name. The JSON form always has the exact text. Embedded fonts and text shaping are still needed for Unicode PDFs.
+
 ## Authorization matrix
 
 `crates/api/tests/authz_matrix.rs` calls every route as an anonymous visitor, an enrolled student, a student who is not enrolled, the owning creator, another creator and an admin, each time against freshly created resources, and compares the status with a declared policy. A second test reads the router source and fails if any `.route(...)` is missing from the table, or the table lists a route that no longer exists. A new endpoint therefore cannot ship without someone deciding who may call it.
@@ -267,4 +302,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout, the payment provider boundary and the webhooks that grant enrollment are done too. Reconciliation, refunds and dispute handling are done as well. Next in the plan: coupons and invoices.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout, the payment provider boundary and the webhooks that grant enrollment are done too. Reconciliation, refunds and dispute handling are done as well. Coupons and invoices (off until the tax side is advised on) are done too. Next in the plan: the creator earnings ledger.
