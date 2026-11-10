@@ -98,6 +98,19 @@ pub mod policies {
         rule: Rule::per_minute(20),
         fail: Fail::Closed,
     };
+    /// A creator making or changing coupons, per account.
+    pub const COUPON_WRITE: Policy = Policy {
+        name: "coupon_write",
+        rule: Rule::per_minute(30),
+        fail: Fail::Closed,
+    };
+    /// Trying a coupon code (previewing or checking out with one), per account. Codes can be
+    /// guessed, so guessing is slow.
+    pub const COUPON_TRY: Policy = Policy {
+        name: "coupon_try",
+        rule: Rule::per_minute(20),
+        fail: Fail::Closed,
+    };
     /// Reading one's own orders (a page polls while a payment settles), per account.
     pub const ORDER_READ: Policy = Policy {
         name: "order_read",

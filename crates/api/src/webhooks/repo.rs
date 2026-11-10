@@ -249,6 +249,62 @@ pub async fn insert_payment_enrollment(
     .await
 }
 
+/// Creates an enrollment from a source other than payment (a coupon that made the course free).
+/// `None` when someone else created it first.
+pub async fn insert_enrollment(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    course_id: Uuid,
+    source: EnrollmentSource,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        "insert into enrollments (user_id, course_id, source) \
+         values ($1, $2, $3) on conflict (user_id, course_id) do nothing returning id",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .bind(source)
+    .fetch_optional(conn)
+    .await
+}
+
+/// Gives back access that ended (a refund, an expiry) through a source that has no payment.
+pub async fn reactivate_enrollment(
+    conn: &mut PgConnection,
+    enrollment_id: Uuid,
+    source: EnrollmentSource,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "update enrollments set source = $2, payment_id = null, granted_by = null, \
+            expires_at = null, revoked_at = null, revoked_by = null, revocation_kind = null, \
+            revoke_reason = null, updated_at = now() where id = $1",
+    )
+    .bind(enrollment_id)
+    .bind(source)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// A payment arrived for an order that had already expired, and expiring it had given its coupon
+/// back. The buyer paid the discounted price, so the redemption is theirs again (even if that
+/// takes the coupon past its limit: the money is in). `true` if a coupon was taken back.
+pub async fn reclaim_coupon(conn: &mut PgConnection, order_id: Uuid) -> Result<bool, sqlx::Error> {
+    let reclaimed: Option<i32> = sqlx::query_scalar(
+        "with taken as ( \
+            update coupon_redemptions set released_at = null \
+            where order_id = $1 and released_at is not null returning coupon_id), \
+         counted as ( \
+            update coupons c set redeemed_count = c.redeemed_count + 1, updated_at = now() \
+            from taken t where c.id = t.coupon_id returning 1) \
+         select count(*)::int from taken",
+    )
+    .bind(order_id)
+    .fetch_optional(conn)
+    .await?;
+    Ok(reclaimed.is_some_and(|n| n > 0))
+}
+
 /// Gives back access that had ended (a refund, an expiry) because the person has paid again.
 pub async fn reactivate_with_payment(
     conn: &mut PgConnection,

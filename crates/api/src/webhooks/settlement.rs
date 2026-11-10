@@ -261,6 +261,16 @@ pub async fn apply_captured(
         payment_facts(payment),
     )
     .await?;
+    if order.status == OrderStatus::Expired && repo::reclaim_coupon(conn, order.id).await? {
+        repo::add_order_event(
+            conn,
+            order.id,
+            "coupon_reclaimed",
+            Some(payment_row),
+            json!({"reason": "paid after the order expired"}),
+        )
+        .await?;
+    }
 
     let outcome = match grant(conn, &order, payment_row, &payment.id).await? {
         Grant::Enrolled => Outcome::Enrolled,

@@ -101,6 +101,20 @@ pub async fn upsert(
     })
 }
 
+pub async fn find<'e>(
+    db: impl PgExecutor<'e>,
+    user_id: Uuid,
+    course_id: Uuid,
+) -> Result<Option<EnrollmentRow>, sqlx::Error> {
+    sqlx::query_as(&format!(
+        "select {ENROLLMENT_COLUMNS} from enrollments where user_id=$1 and course_id=$2"
+    ))
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(db)
+    .await
+}
+
 pub async fn record_event(
     db: &mut PgConnection,
     enrollment_id: Uuid,

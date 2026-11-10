@@ -3,17 +3,23 @@ use std::time::{Duration, Instant};
 
 use axum::http::StatusCode;
 use uuid::Uuid;
-use zeno_core::model::{CourseStatus, OrderStatus};
+use zeno_core::model::{CourseStatus, EnrollmentSource, OrderStatus};
 use zeno_core::payments::{CreateOrder, ProviderError, ProviderOrder, ProviderOrderStatus};
 
 use crate::auth::extractor::AuthUser;
+use crate::coupons::pricing::Priced;
+use crate::coupons::repo as coupon_repo;
+use crate::coupons::service::{self as coupons, Evaluated, Target};
+use crate::enrollments::repo::{self as enrollments, EnrollmentRow};
 use crate::error::ApiError;
 use crate::orders::dto::{
-    CheckoutParams, OrderCourse, OrderEnvelope, OrderResponse, PriceSnapshot,
+    CheckoutParams, CouponBrief, CouponSnapshot, OrderCourse, OrderEnvelope, OrderResponse,
+    PriceSnapshot, PriceView,
 };
 use crate::orders::repo::{self, CourseForCheckout, NewOrder, OrderRow};
 use crate::refunds::dto::RefundResponse;
 use crate::state::AppState;
+use crate::webhooks::repo as webhooks;
 
 /// How long a request waits for another request that is already creating the same order at the
 /// provider, before telling the client to try again.
@@ -69,12 +75,110 @@ pub fn provider_failure(error: ProviderError) -> ApiError {
     }
 }
 
+/// The person is now enrolled: the coupon made the course free, so there is no order to pay.
+pub struct Enrolled {
+    pub enrollment: EnrollmentRow,
+    pub price: PriceView,
+}
+
+pub enum Outcome {
+    /// An order to pay (new, or the one already open).
+    Order(Checkout),
+    Enrolled(Enrolled),
+}
+
+/// Checkout without a coupon: always an order.
 pub async fn checkout(
     state: &AppState,
     user: &AuthUser,
     course_id: Uuid,
     idempotency_key: Option<&str>,
 ) -> Result<Checkout, ApiError> {
+    match checkout_with(state, user, course_id, idempotency_key, None).await? {
+        Outcome::Order(checkout) => Ok(checkout),
+        Outcome::Enrolled(_) => Err(ApiError::Internal(anyhow::anyhow!(
+            "a checkout without a coupon cannot be free"
+        ))),
+    }
+}
+
+/// What a course costs this person, with the coupon if one is given. Creates nothing and uses
+/// nothing up.
+pub async fn preview(
+    state: &AppState,
+    user: &AuthUser,
+    course_id: Uuid,
+    coupon_code: Option<&str>,
+) -> Result<PriceView, ApiError> {
+    let course = repo::course(&state.db, course_id)
+        .await?
+        .filter(|course| !course.deleted)
+        .ok_or_else(|| not_found("Course"))?;
+    ensure_purchasable(&course, user)?;
+    ensure_not_enrolled(state, user, course_id).await?;
+    let open = repo::open_order(&state.db, user.id, course_id).await?;
+    let evaluated = match coupon_code {
+        Some(code) => Some(
+            coupons::evaluate(
+                &state.db,
+                course.creator_id,
+                course_id,
+                course.price_paise,
+                user.id,
+                code,
+                open.as_ref().map(|order| order.id),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    Ok(price_view(course.price_paise, evaluated.as_ref()))
+}
+
+fn price_view(list_price_paise: i64, evaluated: Option<&Evaluated>) -> PriceView {
+    let Some(evaluated) = evaluated else {
+        return PriceView {
+            list_price_paise,
+            discount_paise: 0,
+            amount_paise: list_price_paise,
+            free: false,
+            coupon: None,
+        };
+    };
+    let coupon = Some(CouponBrief {
+        code: evaluated.coupon.code.clone(),
+        kind: evaluated.coupon.kind,
+        value: evaluated.coupon.value,
+    });
+    match evaluated.priced {
+        Priced::Charge {
+            list_paise,
+            discount_paise,
+            amount_paise,
+        } => PriceView {
+            list_price_paise: list_paise,
+            discount_paise,
+            amount_paise,
+            free: false,
+            coupon,
+        },
+        Priced::Free { list_paise } => PriceView {
+            list_price_paise: list_paise,
+            discount_paise: list_paise,
+            amount_paise: 0,
+            free: true,
+            coupon,
+        },
+    }
+}
+
+pub async fn checkout_with(
+    state: &AppState,
+    user: &AuthUser,
+    course_id: Uuid,
+    idempotency_key: Option<&str>,
+    coupon_code: Option<&str>,
+) -> Result<Outcome, ApiError> {
     // A repeated request with the same key gets the order it made the first time, whatever has
     // happened to that order since (paid, expired). This comes before every other check.
     if let Some(key) = idempotency_key {
@@ -82,10 +186,10 @@ pub async fn checkout(
             if existing.course_id != course_id {
                 return Err(key_reused());
             }
-            return Ok(Checkout {
+            return Ok(Outcome::Order(Checkout {
                 order: settle(state, existing).await?,
                 created: false,
-            });
+            }));
         }
     }
 
@@ -95,7 +199,49 @@ pub async fn checkout(
         .ok_or_else(|| not_found("Course"))?;
     ensure_purchasable(&course, user)?;
     ensure_not_enrolled(state, user, course_id).await?;
-    retire_lapsed_order(state, user.id, course_id).await?;
+
+    let open = repo::open_order(&state.db, user.id, course_id).await?;
+    let evaluated = match coupon_code {
+        Some(code) => Some(
+            coupons::evaluate(
+                &state.db,
+                course.creator_id,
+                course_id,
+                course.price_paise,
+                user.id,
+                code,
+                open.as_ref().map(|order| order.id),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    make_room_for_new_order(state, open, evaluated.as_ref().map(|e| e.coupon.id)).await?;
+
+    // Free: the coupon covers everything, so there is nothing to pay and no provider to ask.
+    if let Some(
+        evaluated @ Evaluated {
+            priced: Priced::Free { .. },
+            ..
+        },
+    ) = &evaluated
+    {
+        return enroll_free_with_coupon(state, user, &course, evaluated)
+            .await
+            .map(Outcome::Enrolled);
+    }
+    let (amount_paise, discount_paise, coupon) = match &evaluated {
+        Some(Evaluated {
+            priced:
+                Priced::Charge {
+                    amount_paise,
+                    discount_paise,
+                    ..
+                },
+            coupon,
+        }) => (*amount_paise, *discount_paise, Some(coupon)),
+        _ => (course.price_paise, 0, None),
+    };
 
     let snapshot = PriceSnapshot {
         v: 1,
@@ -104,39 +250,136 @@ pub async fn checkout(
         course_slug: course.slug.clone(),
         creator_id: course.creator_id,
         list_price_paise: course.price_paise,
-        discount_paise: 0,
-        amount_paise: course.price_paise,
+        discount_paise,
+        amount_paise,
         currency: course.currency.clone(),
         refund_window_days: course.refund_window_days,
+        coupon: coupon.map(|coupon| CouponSnapshot {
+            id: coupon.id,
+            code: coupon.code.clone(),
+            kind: coupon.kind,
+            value: coupon.value,
+        }),
     };
     let snapshot = serde_json::to_value(&snapshot).map_err(anyhow::Error::from)?;
     let new = NewOrder {
         id: Uuid::new_v4(),
         user_id: user.id,
         course_id,
-        amount_paise: course.price_paise,
+        amount_paise,
         currency: &course.currency,
         price_snapshot: &snapshot,
         provider: state.payments.name(),
         idempotency_key,
         ttl_minutes: i32::try_from(state.config.order_ttl_minutes).unwrap_or(30),
     };
-    let mut conn = state.db.acquire().await?;
-    let inserted = repo::insert(&mut conn, &new).await?;
-    drop(conn);
 
-    let (order, created) = match inserted {
-        Some(order) => (order, true),
+    // The order and the coupon it uses are made together or not at all.
+    let mut tx = state.db.begin().await?;
+    let (order, created) = match repo::insert(&mut tx, &new).await? {
+        Some(order) => {
+            if let Some(coupon) = coupon {
+                coupons::redeem(
+                    &mut tx,
+                    user.id,
+                    coupon,
+                    Target::Order(order.id),
+                    discount_paise,
+                )
+                .await?;
+            }
+            tx.commit().await?;
+            (order, true)
+        }
         // The user already has an open order for this course (a double click, a second tab) or
-        // another request with this key got there first: they share one order.
-        None => (
-            existing_after_conflict(state, user.id, course_id, idempotency_key).await?,
-            false,
-        ),
+        // another request with this key got there first: they share one order. Nothing was
+        // redeemed, because nothing was made.
+        None => {
+            tx.rollback().await?;
+            (
+                existing_after_conflict(state, user.id, course_id, idempotency_key).await?,
+                false,
+            )
+        }
     };
-    Ok(Checkout {
+    Ok(Outcome::Order(Checkout {
         order: settle(state, order).await?,
         created,
+    }))
+}
+
+/// The coupon covers the whole price: enroll them, and use the coupon, in one transaction.
+async fn enroll_free_with_coupon(
+    state: &AppState,
+    user: &AuthUser,
+    course: &CourseForCheckout,
+    evaluated: &Evaluated,
+) -> Result<Enrolled, ApiError> {
+    let mut tx = state.db.begin().await?;
+    let mut granted = None;
+    // Twice: the second only if someone created the enrollment between our look and our insert.
+    for _ in 0..2 {
+        match webhooks::enrollment_for_update(&mut tx, user.id, course.id).await? {
+            None => {
+                if let Some(id) =
+                    webhooks::insert_enrollment(&mut tx, user.id, course.id, EnrollmentSource::Free)
+                        .await?
+                {
+                    granted = Some((id, "created"));
+                    break;
+                }
+            }
+            Some(current) => {
+                if !current.revoked && !current.expired {
+                    return Err(conflict(
+                        "already_enrolled",
+                        "You already have access to this course.",
+                    ));
+                }
+                let ended_by_money_or_time = current.revoked
+                    && matches!(
+                        current.revocation_kind.as_deref(),
+                        Some("payment" | "system")
+                    );
+                if ended_by_money_or_time || (!current.revoked && current.expired) {
+                    webhooks::reactivate_enrollment(&mut tx, current.id, EnrollmentSource::Free)
+                        .await?;
+                    granted = Some((current.id, "reactivated"));
+                    break;
+                }
+                return Err(conflict(
+                    "access_revoked_by_creator",
+                    "Access was revoked. Contact the course creator to restore it.",
+                ));
+            }
+        }
+    }
+    let (enrollment_id, action) =
+        granted.ok_or_else(|| anyhow::anyhow!("enrollment kept appearing and disappearing"))?;
+    coupons::redeem(
+        &mut tx,
+        user.id,
+        &evaluated.coupon,
+        Target::Enrollment(enrollment_id),
+        course.price_paise,
+    )
+    .await?;
+    enrollments::record_event(
+        &mut tx,
+        enrollment_id,
+        Some(user.id),
+        action,
+        EnrollmentSource::Free,
+        Some(&format!("Free with coupon {}", evaluated.coupon.code)),
+    )
+    .await?;
+    tx.commit().await?;
+    let enrollment = enrollments::find(&state.db, user.id, course.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("the enrollment just made is missing"))?;
+    Ok(Enrolled {
+        enrollment,
+        price: price_view(course.price_paise, Some(evaluated)),
     })
 }
 
@@ -200,18 +443,27 @@ async fn ensure_not_enrolled(
     Ok(())
 }
 
-/// Clears away this user's open order for the course if it has run out of time, so a new one can
-/// be made. Before doing so, asks the provider whether the customer paid in the last moments:
-/// a second order beside a payment in flight is how people get charged twice.
-async fn retire_lapsed_order(
+/// Clears the way for a new order when the user's open one cannot be the answer: it has run out
+/// of time, or the buyer now wants a different coupon than it carries. Before doing so, asks the
+/// provider whether the customer paid in the last moments: a second order beside a payment in
+/// flight is how people get charged twice. An open order that is still good (and, if a coupon was
+/// asked for, carries that coupon) is left alone and shared.
+async fn make_room_for_new_order(
     state: &AppState,
-    user_id: Uuid,
-    course_id: Uuid,
+    open: Option<OrderRow>,
+    wanted_coupon: Option<Uuid>,
 ) -> Result<(), ApiError> {
-    let Some(open) = repo::open_order(&state.db, user_id, course_id).await? else {
+    let Some(open) = open else {
         return Ok(());
     };
-    if !open.lapsed {
+    let replace = if open.lapsed {
+        true
+    } else if let Some(wanted) = wanted_coupon {
+        coupon_repo::coupon_of_order(&state.db, open.id).await? != Some(wanted)
+    } else {
+        false
+    };
+    if !replace {
         return Ok(());
     }
     if let Some(provider_order_id) = &open.provider_order_id {
@@ -430,6 +682,9 @@ pub fn envelope(
                 slug: snapshot.course_slug,
             },
             amount_paise: order.amount_paise,
+            list_price_paise: snapshot.list_price_paise,
+            discount_paise: snapshot.discount_paise,
+            coupon_code: snapshot.coupon.as_ref().map(|coupon| coupon.code.clone()),
             currency: order.currency.clone(),
             expires_at: order.expires_at,
             created_at: order.created_at,

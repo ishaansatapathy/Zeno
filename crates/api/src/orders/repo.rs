@@ -152,16 +152,26 @@ pub async fn open_order<'e>(
     .await
 }
 
-/// Marks an open order expired. Does nothing if it already moved on (a payment may have landed).
+/// Marks an open order expired and gives back the coupon it was holding, in one statement. Does
+/// nothing if the order already moved on (a payment may have landed).
 pub async fn expire<'e>(db: impl PgExecutor<'e>, order_id: Uuid) -> Result<u64, sqlx::Error> {
-    Ok(sqlx::query(
-        "update orders set status = 'expired', attempt_lease_until = null, updated_at = now() \
-         where id = $1 and status in ('created','pending')",
+    let expired: i64 = sqlx::query_scalar(
+        "with expired as ( \
+            update orders set status = 'expired', attempt_lease_until = null, updated_at = now() \
+            where id = $1 and status in ('created','pending') returning id), \
+         released as ( \
+            update coupon_redemptions r set released_at = now() from expired e \
+            where r.order_id = e.id and r.released_at is null returning r.coupon_id), \
+         given_back as ( \
+            update coupons c set redeemed_count = c.redeemed_count - n.uses, updated_at = now() \
+            from (select coupon_id, count(*)::int as uses from released group by coupon_id) n \
+            where c.id = n.coupon_id returning c.id) \
+         select count(*) from expired",
     )
     .bind(order_id)
-    .execute(db)
-    .await?
-    .rows_affected())
+    .fetch_one(db)
+    .await?;
+    Ok(u64::try_from(expired).unwrap_or(0))
 }
 
 pub struct NewOrder<'a> {
