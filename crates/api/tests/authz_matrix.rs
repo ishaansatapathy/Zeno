@@ -268,6 +268,8 @@ struct World {
     student: Uuid,
     /// An order placed by the outsider.
     order: Uuid,
+    /// A coupon made by the owner.
+    coupon: Uuid,
     slug: String,
     handle: &'static str,
     outsider_email: String,
@@ -398,6 +400,16 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
     .execute(pool)
     .await
     .unwrap();
+    let coupon = Uuid::new_v4();
+    sqlx::query(
+        "insert into coupons (id, creator_id, code, kind, value) values ($1, $2, $3, 'percent', 10)",
+    )
+    .bind(coupon)
+    .bind(actors.owner_id)
+    .bind(format!("M{}", coupon.simple().to_string()[..10].to_uppercase()))
+    .execute(pool)
+    .await
+    .unwrap();
     let order = Uuid::new_v4();
     sqlx::query(
         "insert into orders (id, user_id, course_id, amount_paise, price_snapshot, status,             provider, provider_order_id, expires_at)          values ($1, $2, $3, 49900,             jsonb_build_object('v', 1, 'course_id', $3::text, 'course_title', 'Matrix course',                 'course_slug', $4::text, 'creator_id', $5::text, 'list_price_paise', 49900,                 'discount_paise', 0, 'amount_paise', 49900, 'currency', 'INR'),             'pending', 'fake', $6, now() + interval '30 minutes')",
@@ -448,6 +460,7 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
         other_token: sign(Uuid::new_v4()),
         student: actors.student_id,
         order,
+        coupon,
         slug,
         handle: "matrix-owner",
         outsider_email: "outsider@matrix.in".into(),
@@ -462,6 +475,7 @@ fn fill(path: &str, world: &World) -> String {
         .replace("{session}", &world.session.to_string())
         .replace("{student}", &world.student.to_string())
         .replace("{order}", &world.order.to_string())
+        .replace("{coupon}", &world.coupon.to_string())
         .replace("{slug}", &world.slug)
         .replace("{handle}", world.handle)
         .replace("{file}", "144p.m3u8")
@@ -519,6 +533,11 @@ fn rows() -> Vec<Row> {
         // Payments: anyone signed in may start checkout (what comes of it depends on the course,
         // not the person); an order is its buyer's alone.
         row(post.clone(), "/v1/checkout/{course}", Signed),
+        row(post.clone(), "/v1/checkout/{course}/preview", Signed).json(|_, _| json!({"coupon": "NOSUCH"})),
+        // Coupons: creators make their own; only the owner (or an admin) changes one.
+        row(post.clone(), "/v1/coupons", Creator).json(|_, a| json!({"code": format!("MATRIX{}", actor_name(a).to_uppercase()), "kind": "percent", "value": 10})),
+        row(get.clone(), "/v1/coupons", Creator),
+        row(patch.clone(), "/v1/coupons/{coupon}", Owned).json(|_, _| json!({"active": true})),
         row(get.clone(), "/v1/orders/{order}", Buyer),
         // Refunds: a buyer asks; only the course's creator (or an admin) decides.
         row(post.clone(), "/v1/orders/{order}/request-refund", Buyer).json(|_, _| json!({"reason": "Not what I expected"})),
