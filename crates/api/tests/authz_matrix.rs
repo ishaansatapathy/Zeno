@@ -539,6 +539,8 @@ fn rows() -> Vec<Row> {
         row(get.clone(), "/v1/coupons", Creator),
         row(patch.clone(), "/v1/coupons/{coupon}", Owned).json(|_, _| json!({"active": true})),
         row(get.clone(), "/v1/orders/{order}", Buyer),
+        row(get.clone(), "/v1/orders/{order}/invoice", Buyer),
+        row(get.clone(), "/v1/orders/{order}/invoice.pdf", Buyer),
         // Refunds: a buyer asks; only the course's creator (or an admin) decides.
         row(post.clone(), "/v1/orders/{order}/request-refund", Buyer).json(|_, _| json!({"reason": "Not what I expected"})),
         row(post.clone(), "/v1/orders/{order}/refund", Owned).json(|_, _| json!({})),

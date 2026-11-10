@@ -85,6 +85,16 @@ pub async fn make_course(app: &App, pool: &PgPool, creator: &Jar, title: &str) -
 
 pub async fn shop(pool: PgPool) -> Shop {
     let (app, provider) = app_with_provider(pool.clone());
+    shop_in(app, provider, pool).await
+}
+
+/// The same shop, with invoices switched on.
+pub async fn invoicing_shop(pool: PgPool) -> Shop {
+    let (app, provider) = app_with_invoices(pool.clone());
+    shop_in(app, provider, pool).await
+}
+
+async fn shop_in(app: App, provider: FakeProvider, pool: PgPool) -> Shop {
     let creator = signup_creator(&app, "teacher@hooks.in").await;
     let buyer = signup_verified_as(&app, "buyer@hooks.in", "student").await;
     let (course, video) = make_course(&app, &pool, &creator, "Paid course").await;

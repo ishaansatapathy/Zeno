@@ -494,6 +494,45 @@ db_test! {
     }
 }
 
+db_test! {
+    async fn the_per_person_limit_is_checked_again_at_the_moment_of_redeeming(pool: PgPool) {
+        // The earlier check is advice. Between it and the redemption another tab of the same
+        // buyer may have won, so the binding check, under the coupon's row lock, must refuse too.
+        let shop = shop(pool).await;
+        make(&shop, percent("ONCE", 10)).await;
+        let coupon = zeno_api::coupons::repo::by_code(&shop.pool, shop.creator_id, "ONCE")
+            .await.unwrap().unwrap();
+        // The buyer already holds their one use (on their open order)...
+        sqlx::query("insert into coupon_redemptions (coupon_id, user_id, order_id, discount_paise) values ($1, $2, $3, 4990)")
+            .bind(coupon.id).bind(shop.buyer_id).bind(shop.order)
+            .execute(&shop.pool).await.unwrap();
+        sqlx::query("update coupons set redeemed_count = 1").execute(&shop.pool).await.unwrap();
+        // ...and a second order of theirs (as a lost race would leave) tries to use it again.
+        let second_buyer = another_buyer(&shop, "second@coupons.in").await;
+        let second_order: Uuid = {
+            let res = checkout_with(&shop, &second_buyer, None).await;
+            Uuid::parse_str(res.body["order"]["id"].as_str().unwrap()).unwrap()
+        };
+
+        let mut tx = shop.pool.begin().await.unwrap();
+        let refused = zeno_api::coupons::service::redeem(
+            &mut tx,
+            shop.buyer_id,
+            &coupon,
+            zeno_api::coupons::service::Target::Order(second_order),
+            4_990,
+        )
+        .await;
+        assert!(
+            matches!(&refused, Err(zeno_api::error::ApiError::Http { code: "coupon_limit_reached", .. })),
+            "{refused:?}"
+        );
+        drop(tx); // rolled back: the refused attempt used nothing
+        assert_eq!(used(&shop, "ONCE").await, 1);
+        assert_eq!(n(&shop, "select count(*) from coupon_redemptions").await, 1);
+    }
+}
+
 // ---- giving it back --------------------------------------------------------------------------------------
 
 db_test! {
@@ -535,6 +574,11 @@ db_test! {
 
         assert_eq!(outcome(&res), "enrolled", "{:?}", res.body);
         assert_eq!(used(&shop, "SCARCE").await, 1, "the discount was used, so the coupon is spent");
+        // And the redemption itself is the buyer's again, not just the counter.
+        assert_eq!(
+            n(&shop, "select count(*) from coupon_redemptions where released_at is null").await,
+            1
+        );
         assert_eq!(n(&shop, "select count(*) from order_events where kind = 'coupon_reclaimed'").await, 1);
         assert_eq!(access(&shop).await, "allowed");
     }

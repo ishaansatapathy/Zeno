@@ -85,6 +85,28 @@ pub fn app_with_provider(pool: PgPool) -> (App, FakeProvider) {
     (app, provider)
 }
 
+/// Like [`app_with_provider`], with invoices switched on (they are off by default).
+pub fn app_with_invoices(pool: PgPool) -> (App, FakeProvider) {
+    let provider = FakeProvider::new();
+    let mailer = MemoryMailer::default();
+    let state = make_state_with(pool.clone(), false, 0, Arc::new(mailer.clone()), |config| {
+        config.invoices = zeno_api::invoices::InvoicesConfig {
+            enabled: true,
+            seller_name: "Zeno Learning Pvt Ltd".into(),
+            seller_address: Some("12 MG Road\nPune 411001".into()),
+            prefix: "ZNO".into(),
+        };
+    })
+    .with_payments(Arc::new(provider.clone()));
+    let app = App {
+        router: zeno_api::build_app(state.clone()),
+        mailer,
+        pool,
+        state,
+    };
+    (app, provider)
+}
+
 pub fn make_state(
     pool: PgPool,
     cookie_secure: bool,
@@ -123,6 +145,7 @@ pub fn make_state_with(
         payments: zeno_api::payments::PaymentsConfig::Fake,
         order_ttl_minutes: 30,
         reconcile_interval_secs: 300,
+        invoices: zeno_api::invoices::InvoicesConfig::disabled(),
     };
     tweak(&mut config);
     let store = S3Store::new(&config.storage).unwrap();
