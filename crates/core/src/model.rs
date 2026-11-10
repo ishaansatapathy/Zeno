@@ -143,6 +143,15 @@ pub enum RefundStatus {
     Failed,
 }
 
+/// How a coupon discounts: a whole percent off, or a fixed amount in paise off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "coupon_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum CouponKind {
+    Percent,
+    Flat,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaymentStatus {
