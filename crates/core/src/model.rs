@@ -128,6 +128,21 @@ impl OrderStatus {
     }
 }
 
+/// Where a refund is. `requested` and `processing` are the active states: an order has at most
+/// one refund in either.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "refund_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum RefundStatus {
+    /// A student has asked; a creator or admin has not answered.
+    Requested,
+    Declined,
+    /// Handed to the provider; final only when the provider says so.
+    Processing,
+    Succeeded,
+    Failed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PaymentStatus {
