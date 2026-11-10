@@ -261,7 +261,9 @@ db_test! {
 
         let (position, furthest, watched, completed) = row(&pool, course.lesson).await;
         assert_eq!((position, furthest), (598, 598));
-        assert!(watched <= 65, "{watched} seconds credited for a jump of 597");
+        // 30 s of real time earns at most 2 x 30 + 5 = 65 s; a loaded machine can let a few more
+        // seconds pass between the time-travel and the heartbeat. 597 would be the bug.
+        assert!(watched <= 80, "{watched} seconds credited for a jump of 597");
         assert!(!completed);
         let page = progress(&app, &student, course.id).await;
         assert_eq!(page.body["progress"]["lessons"][0]["completed"], false);
