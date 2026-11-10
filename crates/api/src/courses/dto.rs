@@ -51,6 +51,8 @@ pub struct UpdateCourseRequest {
     pub price_paise: Option<i64>,
     pub language: Option<Option<String>>,
     pub level: Option<String>,
+    /// Days after paying that a student may ask for a refund; 0 means none.
+    pub refund_window_days: Option<i32>,
 }
 
 #[derive(Debug, Default)]
@@ -61,7 +63,10 @@ pub struct CourseChanges {
     pub price_paise: Option<i64>,
     pub language: Option<Option<String>>,
     pub level: Option<String>,
+    pub refund_window_days: Option<i32>,
 }
+
+pub const MAX_REFUND_WINDOW_DAYS: i32 = 365;
 
 pub(crate) fn normalise(raw: &str) -> String {
     raw.trim().nfc().collect()
@@ -202,6 +207,14 @@ impl UpdateCourseRequest {
             .language
             .map(|value| value.map(|raw| language(&mut errors, raw)));
         let level_value = self.level.map(|value| level(&mut errors, value));
+        if let Some(days) = self.refund_window_days {
+            if !(0..=MAX_REFUND_WINDOW_DAYS).contains(&days) {
+                errors.push(FieldError::new(
+                    "refund_window_days",
+                    "Use 0 for no refunds, or up to 365 days.",
+                ));
+            }
+        }
         let changes = CourseChanges {
             title,
             description,
@@ -209,6 +222,7 @@ impl UpdateCourseRequest {
             price_paise: self.price_paise,
             language: language_value,
             level: level_value,
+            refund_window_days: self.refund_window_days,
         };
         if changes.title.is_none()
             && changes.description.is_none()
@@ -216,6 +230,7 @@ impl UpdateCourseRequest {
             && changes.price_paise.is_none()
             && changes.language.is_none()
             && changes.level.is_none()
+            && changes.refund_window_days.is_none()
         {
             errors.push(FieldError::new(
                 "body",
@@ -307,6 +322,7 @@ pub struct CourseResponse {
     pub status: CourseStatus,
     pub language: Option<String>,
     pub level: String,
+    pub refund_window_days: i32,
     pub thumbnail_url: Option<String>,
     pub version: i32,
     pub created_at: DateTime<Utc>,
@@ -339,6 +355,7 @@ impl From<&CourseRow> for CourseResponse {
             status: course.status,
             language: course.language.clone(),
             level: course.level.clone(),
+            refund_window_days: course.refund_window_days,
             thumbnail_url: None,
             version: course.version,
             created_at: course.created_at,

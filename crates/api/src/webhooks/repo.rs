@@ -100,7 +100,8 @@ pub async fn set_order_status(
     status: OrderStatus,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "update orders set status = $2, attempt_lease_until = null, updated_at = now() \
+        "update orders set status = $2, attempt_lease_until = null, updated_at = now(), \
+            paid_at = case when $2 = 'paid'::order_status then coalesce(paid_at, now()) else paid_at end \
          where id = $1",
     )
     .bind(id)

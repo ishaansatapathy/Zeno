@@ -19,7 +19,8 @@ use uuid::Uuid;
 use zeno_core::model::{EnrollmentSource, OrderStatus};
 
 use crate::enrollments::repo as enrollments;
-use crate::webhooks::event::{PaymentEntity, RefundEntity};
+use crate::refunds::repo as refunds;
+use crate::webhooks::event::{DisputeEntity, PaymentEntity, RefundEntity};
 use crate::webhooks::repo::{self, LockedOrder, NewPayment, PaymentRow};
 
 /// How an event ended. Stored with the event; the ones that need a person say so.
@@ -51,6 +52,8 @@ pub enum Outcome {
     RefundFailed,
     /// A refund for a payment we cannot place.
     RefundUnknownPayment,
+    /// A dispute with a customer's bank, noted against the order for a person to handle.
+    DisputeNoted,
     /// An event we do not act on, or one that says nothing to act on.
     Ignored,
     /// An event we could not read.
@@ -75,6 +78,7 @@ impl Outcome {
             Self::RefundBeforePayment => "refund_before_payment",
             Self::RefundFailed => "refund_failed",
             Self::RefundUnknownPayment => "refund_unknown_payment",
+            Self::DisputeNoted => "dispute_noted",
             Self::Ignored => "ignored",
             Self::Malformed => "malformed",
         }
@@ -93,6 +97,7 @@ impl Outcome {
                 | Self::RefundPartial
                 | Self::RefundFailed
                 | Self::RefundUnknownPayment
+                | Self::DisputeNoted
         )
     }
 }
@@ -106,18 +111,29 @@ pub struct Receipt {
     pub amount_paise: i64,
 }
 
+/// What to tell the buyer when their refund has gone through.
+#[derive(Debug, Clone)]
+pub struct RefundNotice {
+    pub user_id: Uuid,
+    pub order_id: Uuid,
+    pub course_title: String,
+    pub amount_paise: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Settled {
     pub outcome: Outcome,
     pub order_id: Option<Uuid>,
     pub receipt: Option<Receipt>,
+    pub refund_notice: Option<RefundNotice>,
 }
 
-fn settled(outcome: Outcome, order: Option<&LockedOrder>) -> Settled {
+pub(crate) fn settled(outcome: Outcome, order: Option<&LockedOrder>) -> Settled {
     Settled {
         outcome,
         order_id: order.map(|o| o.id),
         receipt: None,
+        refund_notice: None,
     }
 }
 
@@ -275,6 +291,7 @@ pub async fn apply_captured(
         outcome,
         order_id: Some(order.id),
         receipt,
+        refund_notice: None,
     })
 }
 
@@ -402,7 +419,7 @@ pub async fn apply_failed(
 }
 
 /// A refund the provider has completed (whether we asked for it or it was made in their
-/// dashboard). A full refund ends the access the payment bought.
+/// dashboard). Once the whole payment has been returned, the access it bought ends.
 pub async fn apply_refund_processed(
     conn: &mut PgConnection,
     provider: &str,
@@ -438,13 +455,29 @@ pub async fn apply_refund_processed(
             if row.status == "refunded" {
                 return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
             }
-            if refund.amount_paise != row.amount_paise {
+            // Record it. `None` means this very refund was recorded before.
+            let Some(returned) = refunds::record_success(
+                conn,
+                order.id,
+                row.id,
+                refund.amount_paise,
+                &refund.id,
+                refund
+                    .receipt
+                    .as_deref()
+                    .and_then(|id| Uuid::parse_str(id).ok()),
+            )
+            .await?
+            else {
+                return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
+            };
+            if returned < row.amount_paise {
                 repo::add_order_event(
                     conn,
                     order.id,
                     "refund_partial",
                     Some(row.id),
-                    json!({"refund": refund.id, "refund_paise": refund.amount_paise, "payment_paise": row.amount_paise}),
+                    json!({"refund": refund.id, "refund_paise": refund.amount_paise, "returned_paise": returned, "payment_paise": row.amount_paise}),
                 )
                 .await?;
                 return Ok(settled(Outcome::RefundPartial, Some(&order)));
@@ -456,9 +489,10 @@ pub async fn apply_refund_processed(
                 order.id,
                 "refunded",
                 Some(row.id),
-                json!({"refund": refund.id, "refund_paise": refund.amount_paise}),
+                json!({"refund": refund.id, "refund_paise": refund.amount_paise, "returned_paise": returned}),
             )
             .await?;
+            let mut result = settled(Outcome::RefundApplied, Some(&order));
             if settled_this_order {
                 repo::set_order_status(conn, order.id, OrderStatus::Refunded).await?;
                 let revoked = repo::revoke_for_payment(conn, row.id, "Refunded.").await?;
@@ -476,8 +510,17 @@ pub async fn apply_refund_processed(
                 if let Some(first) = revoked.first() {
                     enrollments::end_sessions_without_access(conn, first.user_id).await?;
                 }
+                result.refund_notice = Some(RefundNotice {
+                    user_id: order.user_id,
+                    order_id: order.id,
+                    course_title: order.price_snapshot["course_title"]
+                        .as_str()
+                        .unwrap_or("your course")
+                        .to_owned(),
+                    amount_paise: returned,
+                });
             }
-            Ok(settled(Outcome::RefundApplied, Some(&order)))
+            Ok(result)
         }
         None => {
             // The refund overtook the payment. Record the payment as refunded so that when its own
@@ -504,6 +547,18 @@ pub async fn apply_refund_processed(
                 },
             )
             .await?;
+            refunds::record_success(
+                conn,
+                order.id,
+                payment_row,
+                refund.amount_paise,
+                &refund.id,
+                refund
+                    .receipt
+                    .as_deref()
+                    .and_then(|id| Uuid::parse_str(id).ok()),
+            )
+            .await?;
             if !matches!(order.status, OrderStatus::Paid) {
                 repo::set_order_status(conn, order.id, OrderStatus::Refunded).await?;
             }
@@ -520,7 +575,8 @@ pub async fn apply_refund_processed(
     }
 }
 
-/// A refund the provider could not complete. Nothing changes; a person is told.
+/// A refund the provider could not complete. Our own refund (if it was ours) is marked failed
+/// with a note, the order stays paid, and a person is told.
 pub async fn note_refund_failed(
     conn: &mut PgConnection,
     refund: &RefundEntity,
@@ -528,6 +584,17 @@ pub async fn note_refund_failed(
     tracing::error!(alert = "refund_failed", refund = %refund.id, payment = %refund.payment_id, "provider could not complete a refund");
     let mut order_id = None;
     if let Some(row) = repo::payment_by_ref(conn, &refund.payment_id, false).await? {
+        refunds::fail_reported(
+            conn,
+            &refund.id,
+            row.id,
+            "The payment provider could not complete the refund.",
+            refund
+                .receipt
+                .as_deref()
+                .and_then(|id| Uuid::parse_str(id).ok()),
+        )
+        .await?;
         if let Some(id) = row.order_id {
             repo::add_order_event(
                 conn,
@@ -544,5 +611,42 @@ pub async fn note_refund_failed(
         outcome: Outcome::RefundFailed,
         order_id,
         receipt: None,
+        refund_notice: None,
+    })
+}
+
+/// A customer disputed a payment with their bank. Nothing is revoked or refunded automatically:
+/// a dispute is a negotiation, and which way it goes is a person's call. It is recorded against
+/// the order, and the event is flagged so it is not missed.
+pub async fn note_dispute(
+    conn: &mut PgConnection,
+    event_name: &str,
+    dispute: &DisputeEntity,
+) -> Result<Settled, sqlx::Error> {
+    tracing::error!(alert = "dispute", dispute = %dispute.id, payment = %dispute.payment_id, event = event_name, status = %dispute.status, "payment dispute");
+    let mut order_id = None;
+    if let Some(row) = repo::payment_by_ref(conn, &dispute.payment_id, false).await? {
+        if let Some(id) = row.order_id {
+            repo::add_order_event(
+                conn,
+                id,
+                "dispute",
+                Some(row.id),
+                json!({
+                    "event": event_name,
+                    "dispute": dispute.id,
+                    "status": dispute.status,
+                    "amount_paise": dispute.amount_paise,
+                }),
+            )
+            .await?;
+            order_id = Some(id);
+        }
+    }
+    Ok(Settled {
+        outcome: Outcome::DisputeNoted,
+        order_id,
+        receipt: None,
+        refund_notice: None,
     })
 }

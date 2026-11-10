@@ -234,6 +234,8 @@ pub struct CourseDetail {
     #[serde(flatten)]
     pub card: CourseCard,
     pub description: String,
+    /// Days after paying that a student may ask for a refund; 0 means none.
+    pub refund_window_days: i32,
     pub lessons: Vec<PublicLesson>,
 }
 

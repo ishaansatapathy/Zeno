@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod shop;
+
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -120,6 +122,7 @@ pub fn make_state_with(
         image_base_url: None,
         payments: zeno_api::payments::PaymentsConfig::Fake,
         order_ttl_minutes: 30,
+        reconcile_interval_secs: 300,
     };
     tweak(&mut config);
     let store = S3Store::new(&config.storage).unwrap();

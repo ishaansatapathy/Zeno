@@ -166,6 +166,9 @@ pub async fn update(
             .as_ref()
             .map_or(current.language.as_deref(), |value| value.as_deref()),
         level: changes.level.as_deref().unwrap_or(&current.level),
+        refund_window_days: changes
+            .refund_window_days
+            .unwrap_or(current.refund_window_days),
     };
     match repo::update(
         &state.db,

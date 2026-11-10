@@ -10,7 +10,7 @@ use zeno_core::model::{CourseStatus, OrderStatus};
 /// "pending".
 const ORDER_SELECT: &str = "id, user_id, course_id, amount_paise, currency, price_snapshot, \
     status, provider, provider_order_id, idempotency_key, provider_attempts, expires_at, \
-    created_at, (status in ('created','pending') and expires_at <= now()) as lapsed";
+    created_at, paid_at, (status in ('created','pending') and expires_at <= now()) as lapsed";
 
 /// The claim outlives the entire bounded provider recovery operation, including receipt lookup
 /// retries and a possible create call. A timed-out operation is cancelled before the claim lapses.
@@ -33,6 +33,7 @@ pub struct OrderRow {
     pub provider_attempts: i32,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub paid_at: Option<DateTime<Utc>>,
     pub lapsed: bool,
 }
 
@@ -56,6 +57,7 @@ pub struct CourseForCheckout {
     pub price_paise: i64,
     pub currency: String,
     pub status: CourseStatus,
+    pub refund_window_days: i32,
     pub deleted: bool,
 }
 
@@ -64,7 +66,7 @@ pub async fn course<'e>(
     course_id: Uuid,
 ) -> Result<Option<CourseForCheckout>, sqlx::Error> {
     sqlx::query_as(
-        "select id, creator_id, title, slug, price_paise, currency, status, \
+        "select id, creator_id, title, slug, price_paise, currency, status, refund_window_days, \
                 deleted_at is not null as deleted \
          from courses where id = $1",
     )

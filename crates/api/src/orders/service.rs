@@ -12,6 +12,7 @@ use crate::orders::dto::{
     CheckoutParams, OrderCourse, OrderEnvelope, OrderResponse, PriceSnapshot,
 };
 use crate::orders::repo::{self, CourseForCheckout, NewOrder, OrderRow};
+use crate::refunds::dto::RefundResponse;
 use crate::state::AppState;
 
 /// How long a request waits for another request that is already creating the same order at the
@@ -106,6 +107,7 @@ pub async fn checkout(
         discount_paise: 0,
         amount_paise: course.price_paise,
         currency: course.currency.clone(),
+        refund_window_days: course.refund_window_days,
     };
     let snapshot = serde_json::to_value(&snapshot).map_err(anyhow::Error::from)?;
     let new = NewOrder {
@@ -394,10 +396,20 @@ pub async fn show(state: &AppState, user: &AuthUser, order_id: Uuid) -> Result<O
 }
 
 /// The response for an order: its frozen terms, and the widget parameters while it can be paid.
-pub fn envelope(state: &AppState, order: &OrderRow) -> Result<OrderEnvelope, ApiError> {
+pub fn envelope(
+    state: &AppState,
+    order: &OrderRow,
+    refund: Option<RefundResponse>,
+) -> Result<OrderEnvelope, ApiError> {
     let snapshot: PriceSnapshot =
         serde_json::from_value(order.price_snapshot.clone()).map_err(anyhow::Error::from)?;
     let status = order.effective_status();
+    let refundable_until = match (status, order.paid_at) {
+        (OrderStatus::Paid, Some(paid_at)) if snapshot.refund_window_days > 0 => {
+            Some(paid_at + chrono::Duration::days(i64::from(snapshot.refund_window_days)))
+        }
+        _ => None,
+    };
     let checkout = match (&order.provider_order_id, status) {
         (Some(provider_order_id), OrderStatus::Pending) => Some(CheckoutParams {
             provider: order.provider.clone(),
@@ -421,7 +433,10 @@ pub fn envelope(state: &AppState, order: &OrderRow) -> Result<OrderEnvelope, Api
             currency: order.currency.clone(),
             expires_at: order.expires_at,
             created_at: order.created_at,
+            paid_at: order.paid_at,
+            refundable_until,
         },
         checkout,
+        refund,
     })
 }

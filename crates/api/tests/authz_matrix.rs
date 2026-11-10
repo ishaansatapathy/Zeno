@@ -520,6 +520,11 @@ fn rows() -> Vec<Row> {
         // not the person); an order is its buyer's alone.
         row(post.clone(), "/v1/checkout/{course}", Signed),
         row(get.clone(), "/v1/orders/{order}", Buyer),
+        // Refunds: a buyer asks; only the course's creator (or an admin) decides.
+        row(post.clone(), "/v1/orders/{order}/request-refund", Buyer).json(|_, _| json!({"reason": "Not what I expected"})),
+        row(post.clone(), "/v1/orders/{order}/refund", Owned).json(|_, _| json!({})),
+        row(post.clone(), "/v1/orders/{order}/refund/decline", Owned).json(|_, _| json!({"reason": "Outside the policy"})),
+        row(get.clone(), "/v1/courses/{course}/refunds", Owned),
         row(post.clone(), "/v1/courses/{course}/grants", Owned).json(|w, _| json!({"user": w.outsider_email})),
         row(delete.clone(), "/v1/courses/{course}/grants/{student}?reason=matrix", Owned),
         row(get.clone(), "/v1/courses/{course}/students", Owned),

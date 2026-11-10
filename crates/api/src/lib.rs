@@ -17,6 +17,8 @@ pub mod playback;
 pub mod profiles;
 pub mod progress;
 pub mod ratelimit;
+pub mod reconcile;
+pub mod refunds;
 pub mod secret;
 pub mod security;
 pub mod state;
@@ -93,6 +95,7 @@ pub fn build_app(state: AppState) -> Router {
         .nest("/v1/videos", videos::routes::router())
         .nest("/v1/play", playback::routes::router())
         .merge(orders::routes::router())
+        .merge(refunds::routes::router())
         .merge(webhooks::routes::router())
         .merge(stubs::router())
         .layer(from_fn_with_state(

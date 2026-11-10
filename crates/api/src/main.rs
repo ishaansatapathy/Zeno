@@ -69,6 +69,10 @@ async fn main() -> anyhow::Result<()> {
     zeno_api::auth::cleanup::spawn_periodic(state.clone());
 
     zeno_api::outbox::spawn_retry_loop(state.clone());
+    zeno_api::reconcile::spawn_periodic(
+        state.clone(),
+        std::time::Duration::from_secs(state.config.reconcile_interval_secs),
+    );
     let background = state.background.clone();
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     tracing::info!("api listening on {bind_addr}");

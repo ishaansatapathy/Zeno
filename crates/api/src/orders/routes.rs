@@ -9,6 +9,7 @@ use crate::error::ApiError;
 use crate::orders::dto::OrderEnvelope;
 use crate::orders::service;
 use crate::ratelimit::{enforce_user, policies};
+use crate::refunds::dto::RefundResponse;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -70,7 +71,10 @@ async fn checkout(
     } else {
         StatusCode::OK
     };
-    Ok((status, Json(service::envelope(&state, &outcome.order)?)))
+    Ok((
+        status,
+        Json(service::envelope(&state, &outcome.order, None)?),
+    ))
 }
 
 async fn show(
@@ -81,7 +85,12 @@ async fn show(
     enforce_user(&state, &policies::ORDER_READ, user.id).await?;
     let id = Uuid::parse_str(&id).map_err(|_| not_found("Order"))?;
     let order = service::show(&state, &user, id).await?;
-    Ok(Json(service::envelope(&state, &order)?))
+    let refund = crate::refunds::repo::latest_for_order(&state.db, order.id).await?;
+    Ok(Json(service::envelope(
+        &state,
+        &order,
+        refund.as_ref().map(RefundResponse::from),
+    )?))
 }
 
 #[cfg(test)]

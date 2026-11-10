@@ -173,7 +173,8 @@ db_test! {
         assert_eq!(
             sorted_keys(course),
             ["creator", "currency", "description", "language", "lesson_count", "lessons",
-             "level", "price_paise", "published_at", "short_description", "slug",
+             "level", "price_paise", "published_at", "refund_window_days", "short_description",
+             "slug",
              "thumbnail_url", "title", "total_duration_seconds"],
             "an exact whitelist: no ids, versions, status or storage keys"
         );

@@ -24,6 +24,8 @@ pub struct RefundEntity {
     pub payment_id: String,
     pub amount_paise: i64,
     pub status: String,
+    /// Our refund UUID, sent as Razorpay's receipt and as a note. Dashboard refunds have neither.
+    pub receipt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,8 +42,19 @@ pub enum Event {
         refund: RefundEntity,
         payment: Option<PaymentEntity>,
     },
-    /// Anything else (`payment.authorized`, disputes, settlements...): stored, not acted on.
+    /// A customer disputed a payment with their bank (`payment.dispute.*`). Stage 1 handles
+    /// these by hand: the event is recorded against the order and flagged.
+    Dispute(DisputeEntity),
+    /// Anything else (`payment.authorized`, settlements...): stored, not acted on.
     Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisputeEntity {
+    pub id: String,
+    pub payment_id: String,
+    pub status: String,
+    pub amount_paise: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +98,16 @@ fn refund(entity: &Value) -> Result<RefundEntity, &'static str> {
             .filter(|amount| *amount >= 0)
             .ok_or("refund amount")?,
         status: text(entity, "status").ok_or("refund status")?,
+        receipt: text(entity, "receipt").or_else(|| text(&entity["notes"], "zeno_refund_id")),
+    })
+}
+
+fn dispute(entity: &Value) -> Result<DisputeEntity, &'static str> {
+    Ok(DisputeEntity {
+        id: text(entity, "id").ok_or("dispute id")?,
+        payment_id: text(entity, "payment_id").ok_or("dispute payment id")?,
+        status: text(entity, "status").unwrap_or_else(|| "unknown".to_owned()),
+        amount_paise: entity["amount"].as_i64().filter(|amount| *amount >= 0),
     })
 }
 
@@ -128,6 +151,9 @@ pub fn parse(body: &[u8]) -> Parsed {
                 payment: optional_payment().transpose()?,
             })
         }),
+        other if other.starts_with("payment.dispute.") => {
+            dispute(&entity("dispute")).map(Event::Dispute)
+        }
         _ => Ok(Event::Other),
     };
     Parsed {
@@ -218,6 +244,28 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn disputes_are_read_with_their_payment() {
+        let parsed = parse(&body(
+            "payment.dispute.created",
+            json!({"dispute": {"entity": {"id": "disp_1", "payment_id": "pay_1", "amount": 49900, "status": "open"}}}),
+        ));
+        let Ok(Event::Dispute(dispute)) = parsed.event else {
+            panic!("{:?}", parsed.event);
+        };
+        assert_eq!(
+            (
+                dispute.id.as_str(),
+                dispute.payment_id.as_str(),
+                dispute.status.as_str()
+            ),
+            ("disp_1", "pay_1", "open")
+        );
+        assert_eq!(dispute.amount_paise, Some(49_900));
+        let nameless = parse(&body("payment.dispute.won", json!({})));
+        assert_eq!(nameless.event, Err("dispute id"));
     }
 
     #[test]

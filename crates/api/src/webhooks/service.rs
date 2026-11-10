@@ -8,7 +8,7 @@ use crate::outbox;
 use crate::state::AppState;
 use crate::webhooks::event::{self, Event};
 use crate::webhooks::repo;
-use crate::webhooks::settlement::{self, Outcome, Receipt, Settled};
+use crate::webhooks::settlement::{self, Outcome, Receipt, RefundNotice, Settled};
 
 /// A receipt is worth sending for a week; after that the account page is the record.
 const RECEIPT_TTL_DAYS: i64 = 7;
@@ -21,39 +21,47 @@ pub enum Received {
     Duplicate,
 }
 
-/// Handles one verified delivery. Recording the event and everything it causes share a single
-/// transaction, so the answer to "was this event handled?" is never "halfway":
-///
-/// * a crash or database error rolls it all back, including the record of receipt, and the
-///   provider's retry starts clean;
-/// * a second delivery of the same event, even at the same instant, waits for the first to
-///   finish and then finds it recorded.
-///
-/// An error here becomes a `5xx`, which is what makes the provider retry.
+/// Handles one verified delivery from the provider's webhook.
 pub async fn receive(state: &AppState, event_id: &str, body: &[u8]) -> Result<Received, ApiError> {
-    let provider = state.payments.name();
     let parsed = event::parse(body);
     // The payload is kept as received (it has been verified by signature), or a note that it was
     // not JSON so the record still says something arrived.
     let payload: Value = serde_json::from_slice(body)
         .unwrap_or_else(|_| json!({"unparseable_body_bytes": body.len()}));
+    handle(state, event_id, &parsed.name, parsed.event, payload).await
+}
+
+/// Applies one payment event, whether it came from the provider's webhook or was found by asking
+/// the provider (reconciliation, a refund that finished while we waited): the same code, the same
+/// record, the same guarantees. Recording the event and everything it causes share a single
+/// transaction, so the answer to "was this event handled?" is never "halfway":
+///
+/// * a crash or database error rolls it all back, including the record of receipt, and the
+///   retry starts clean;
+/// * a second delivery of the same event, even at the same instant, waits for the first to
+///   finish and then finds it recorded.
+///
+/// An error here becomes a `5xx` on the webhook, which is what makes the provider retry.
+pub async fn handle(
+    state: &AppState,
+    event_id: &str,
+    name: &str,
+    event: Result<Event, &'static str>,
+    payload: Value,
+) -> Result<Received, ApiError> {
+    let provider = state.payments.name();
 
     let mut tx = state.db.begin().await?;
-    let Some(record) =
-        repo::insert_event(&mut tx, provider, event_id, &parsed.name, &payload).await?
+    let Some(record) = repo::insert_event(&mut tx, provider, event_id, name, &payload).await?
     else {
         tx.rollback().await?;
         return Ok(Received::Duplicate);
     };
 
-    let result: Settled = match &parsed.event {
+    let result: Settled = match &event {
         Err(reason) => {
-            tracing::warn!(event = %parsed.name, reason, "unreadable webhook event");
-            Settled {
-                outcome: Outcome::Malformed,
-                order_id: None,
-                receipt: None,
-            }
+            tracing::warn!(event = %name, reason, "unreadable webhook event");
+            settlement::settled(Outcome::Malformed, None)
         }
         Ok(Event::PaymentCaptured(payment) | Event::OrderPaid(payment)) => {
             settlement::apply_captured(&mut tx, provider, payment, &payload).await?
@@ -74,17 +82,17 @@ pub async fn receive(state: &AppState, event_id: &str, body: &[u8]) -> Result<Re
         Ok(Event::RefundFailed { refund, .. }) => {
             settlement::note_refund_failed(&mut tx, refund).await?
         }
-        Ok(Event::Other) => Settled {
-            outcome: Outcome::Ignored,
-            order_id: None,
-            receipt: None,
-        },
+        Ok(Event::Dispute(dispute)) => settlement::note_dispute(&mut tx, name, dispute).await?,
+        Ok(Event::Other) => settlement::settled(Outcome::Ignored, None),
     };
 
-    let receipt_queued = match result.receipt {
-        Some(receipt) => queue_receipt(&mut tx, state, receipt).await?,
-        None => false,
-    };
+    let mut queued = false;
+    if let Some(receipt) = result.receipt {
+        queued |= queue_receipt(&mut tx, state, receipt).await?;
+    }
+    if let Some(notice) = result.refund_notice {
+        queued |= queue_refund_notice(&mut tx, state, notice).await?;
+    }
 
     repo::finish_event(
         &mut tx,
@@ -97,12 +105,12 @@ pub async fn receive(state: &AppState, event_id: &str, body: &[u8]) -> Result<Re
     tx.commit().await?;
 
     tracing::info!(
-        event = %parsed.name,
+        event = %name,
         outcome = result.outcome.as_str(),
         needs_review = result.outcome.needs_review(),
         "webhook handled"
     );
-    if receipt_queued {
+    if queued {
         outbox::kick(state);
     }
     Ok(Received::Handled(result.outcome))
@@ -140,6 +148,28 @@ async fn queue_receipt(
     };
     outbox::enqueue_in(conn, message, Duration::days(RECEIPT_TTL_DAYS)).await?;
     Ok(true)
+}
+
+/// Tells the buyer their money is on its way back, in the same transaction that ended their
+/// access, so the notice is never lost to a crash between the two.
+async fn queue_refund_notice(
+    conn: &mut PgConnection,
+    state: &AppState,
+    notice: RefundNotice,
+) -> Result<bool, sqlx::Error> {
+    crate::refunds::service::queue_mail(
+        conn,
+        notice.user_id,
+        format!("Your refund for {} is complete", notice.course_title),
+        format!(
+            "We have refunded {} for \"{}\". It reaches your account when your bank completes it, usually within a few days.\n\nOrder: {}\n{}/my-courses",
+            rupees(notice.amount_paise),
+            notice.course_title,
+            notice.order_id,
+            state.config.client_origin
+        ),
+    )
+    .await
 }
 
 #[cfg(test)]

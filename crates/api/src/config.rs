@@ -32,6 +32,8 @@ pub struct ApiConfig {
     pub payments: PaymentsConfig,
     /// Minutes a checkout stays payable before its order expires.
     pub order_ttl_minutes: u32,
+    /// Seconds between passes of the payment reconciliation job.
+    pub reconcile_interval_secs: u64,
 }
 
 impl ApiConfig {
@@ -57,6 +59,13 @@ impl ApiConfig {
             return Err(ConfigError::Invalid {
                 name: "ORDER_TTL_MINUTES",
                 reason: "must be between 5 and 1440".into(),
+            });
+        }
+        let reconcile_interval_secs = parse_or("RECONCILE_INTERVAL_SECS", 300u64)?;
+        if !(30..=3600).contains(&reconcile_interval_secs) {
+            return Err(ConfigError::Invalid {
+                name: "RECONCILE_INTERVAL_SECS",
+                reason: "must be between 30 and 3600".into(),
             });
         }
         if max_concurrent_streams == 0 {
@@ -117,6 +126,7 @@ impl ApiConfig {
             image_base_url,
             payments,
             order_ttl_minutes,
+            reconcile_interval_secs,
         })
     }
 }

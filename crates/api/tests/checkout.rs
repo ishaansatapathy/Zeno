@@ -701,6 +701,12 @@ impl PaymentProvider for Tampering {
     async fn fetch_payment(&self, id: &str) -> Result<ProviderPayment, ProviderError> {
         self.inner.fetch_payment(id).await
     }
+    async fn fetch_order_payments(&self, id: &str) -> Result<Vec<ProviderPayment>, ProviderError> {
+        self.inner.fetch_order_payments(id).await
+    }
+    async fn fetch_refund(&self, id: &str) -> Result<ProviderRefund, ProviderError> {
+        self.inner.fetch_refund(id).await
+    }
     async fn refund(&self, request: &RefundRequest) -> Result<ProviderRefund, ProviderError> {
         self.inner.refund(request).await
     }

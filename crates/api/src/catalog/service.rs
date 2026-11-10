@@ -35,6 +35,7 @@ pub async fn course(state: &AppState, slug: &str) -> Result<CourseDetail, ApiErr
     Ok(CourseDetail {
         card: CourseCard::build(state, &detail.card),
         description: detail.description,
+        refund_window_days: detail.refund_window_days,
         lessons: lessons.iter().map(PublicLesson::from).collect(),
     })
 }

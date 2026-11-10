@@ -30,6 +30,7 @@ pub struct DetailRow {
     #[sqlx(flatten)]
     pub card: CardRow,
     pub description: String,
+    pub refund_window_days: i32,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -65,7 +66,7 @@ pub async fn find_by_slug<'e>(
     slug: &str,
 ) -> Result<Option<DetailRow>, sqlx::Error> {
     sqlx::query_as(&format!(
-        "select {CARD_COLUMNS}, c.description {CARD_FROM} and c.slug = $1"
+        "select {CARD_COLUMNS}, c.description, c.refund_window_days {CARD_FROM} and c.slug = $1"
     ))
     .bind(slug)
     .fetch_optional(db)

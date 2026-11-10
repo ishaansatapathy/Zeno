@@ -19,6 +19,7 @@ pub struct CourseRow {
     pub thumbnail_key: Option<String>,
     pub language: Option<String>,
     pub level: String,
+    pub refund_window_days: i32,
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -27,8 +28,8 @@ pub struct CourseRow {
 }
 
 const COLUMNS: &str = "id, creator_id, slug, title, description, short_description, \
-    price_paise, currency, status, thumbnail_key, language, level, version, created_at, \
-    updated_at, published_at, deleted_at";
+    price_paise, currency, status, thumbnail_key, language, level, \
+    refund_window_days, version, created_at, updated_at, published_at, deleted_at";
 
 pub struct NewCourseRow<'a> {
     pub id: Uuid,
@@ -130,6 +131,7 @@ pub struct CourseValues<'a> {
     pub price_paise: i64,
     pub language: Option<&'a str>,
     pub level: &'a str,
+    pub refund_window_days: i32,
 }
 
 pub async fn update(
@@ -142,7 +144,7 @@ pub async fn update(
 ) -> Result<Option<CourseRow>, sqlx::Error> {
     sqlx::query_as(&format!(
         "update courses set title=$5, description=$6, short_description=$7, price_paise=$8, \
-            language=$9, level=$10, version=version+1, updated_at=now() \
+            language=$9, level=$10, refund_window_days=$11, version=version+1, updated_at=now() \
          where id=$1 and deleted_at is null and version=$2 and ($3 or creator_id=$4) \
          returning {COLUMNS}"
     ))
@@ -156,6 +158,7 @@ pub async fn update(
     .bind(values.price_paise)
     .bind(values.language)
     .bind(values.level)
+    .bind(values.refund_window_days)
     .fetch_optional(db)
     .await
 }
