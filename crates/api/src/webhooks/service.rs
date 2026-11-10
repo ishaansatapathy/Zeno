@@ -58,7 +58,7 @@ pub async fn handle(
         return Ok(Received::Duplicate);
     };
 
-    let result: Settled = match &event {
+    let mut result: Settled = match &event {
         Err(reason) => {
             tracing::warn!(event = %name, reason, "unreadable webhook event");
             settlement::settled(Outcome::Malformed, None)
@@ -85,6 +85,21 @@ pub async fn handle(
         Ok(Event::Dispute(dispute)) => settlement::note_dispute(&mut tx, name, dispute).await?,
         Ok(Event::Other) => settlement::settled(Outcome::Ignored, None),
     };
+
+    // A paid order gets its invoice in the same transaction, so the payment, the enrollment, the
+    // invoice number and the receipt that quotes it all exist together or not at all. Off by
+    // default; see `crate::invoices`.
+    if matches!(event, Ok(Event::PaymentCaptured(_) | Event::OrderPaid(_))) {
+        if let Some(order_id) = result.order_id {
+            if let Some(invoice) =
+                crate::invoices::service::issue(&mut tx, &state.config.invoices, order_id).await?
+            {
+                if let Some(receipt) = result.receipt.as_mut() {
+                    receipt.invoice_number = Some(invoice.number);
+                }
+            }
+        }
+    }
 
     let mut queued = false;
     if let Some(receipt) = result.receipt {
@@ -135,11 +150,16 @@ async fn queue_receipt(
     let Some(to) = to else {
         return Ok(false);
     };
+    let invoice = receipt
+        .invoice_number
+        .as_ref()
+        .map(|number| format!("\nInvoice: {number}"))
+        .unwrap_or_default();
     let message = OutgoingEmail {
         to,
         subject: format!("Payment received for {}", receipt.course_title),
         text: format!(
-            "Thank you. We received {} for \"{}\" and your access is ready:\n{}/my-courses\n\nOrder: {}",
+            "Thank you. We received {} for \"{}\" and your access is ready:\n{}/my-courses\n\nOrder: {}{invoice}",
             rupees(receipt.amount_paise),
             receipt.course_title,
             state.config.client_origin,

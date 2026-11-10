@@ -109,6 +109,8 @@ pub struct Receipt {
     pub order_id: Uuid,
     pub course_title: String,
     pub amount_paise: i64,
+    /// Filled in by the webhook service when it issues an invoice in the same transaction.
+    pub invoice_number: Option<String>,
 }
 
 /// What to tell the buyer when their refund has gone through.
@@ -296,6 +298,7 @@ pub async fn apply_captured(
             .unwrap_or("your course")
             .to_owned(),
         amount_paise: order.amount_paise,
+        invoice_number: None,
     });
     Ok(Settled {
         outcome,

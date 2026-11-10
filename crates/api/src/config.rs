@@ -1,5 +1,6 @@
 use url::Url;
 
+use crate::invoices::InvoicesConfig;
 use crate::payments::PaymentsConfig;
 use zeno_core::config::{parse_or, required, Config, ConfigError};
 use zeno_core::playback::PlaybackSigner;
@@ -34,6 +35,8 @@ pub struct ApiConfig {
     pub order_ttl_minutes: u32,
     /// Seconds between passes of the payment reconciliation job.
     pub reconcile_interval_secs: u64,
+    /// Invoices: off until the tax side has been advised on.
+    pub invoices: InvoicesConfig,
 }
 
 impl ApiConfig {
@@ -61,6 +64,7 @@ impl ApiConfig {
                 reason: "must be between 5 and 1440".into(),
             });
         }
+        let invoices = InvoicesConfig::from_env()?;
         let reconcile_interval_secs = parse_or("RECONCILE_INTERVAL_SECS", 300u64)?;
         if !(30..=3600).contains(&reconcile_interval_secs) {
             return Err(ConfigError::Invalid {
@@ -127,6 +131,7 @@ impl ApiConfig {
             payments,
             order_ttl_minutes,
             reconcile_interval_secs,
+            invoices,
         })
     }
 }
