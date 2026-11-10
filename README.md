@@ -165,6 +165,8 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `checkout` | account | 10 / minute | refuses (`503`) |
 | `order_read` | account | 120 / minute | lets requests through |
 | `webhook_rejected` | client address, forged webhooks only | 30 / minute | lets requests through |
+| `refund_request` | account | 5 / minute | refuses (`503`) |
+| `refund_action` | account | 20 / minute | refuses (`503`) |
 
 A refused request gets `429` with a `Retry-After` computed from the window (not a guess). The address is the real client: `X-Forwarded-For` is believed only as far as `TRUSTED_PROXY_HOPS` says, so a forged header buys nothing. Behind a proxy that variable must be set, or everyone shares the proxy's address and one bucket.
 
@@ -206,6 +208,36 @@ Who gets paid is settled in the plan (decision D1): Zeno's own provider account 
 
 The state changes live in `webhooks/settlement.rs` as plain functions over a connection, so reconciliation can call the same code instead of growing a second state machine.
 
+### Refunds
+
+| Endpoint | Who | Purpose |
+| --- | --- | --- |
+| `POST /v1/orders/:id/request-refund` | the buyer | Ask for the money back, with an optional `reason`. `201`; asking again returns the same request (`200`) |
+| `POST /v1/orders/:id/refund` | the course's creator, or an admin | Refund the order (approving the student's request if there is one). `202`: it is with the provider |
+| `POST /v1/orders/:id/refund/decline` | the course's creator, or an admin | Decline a waiting request; a `reason` is required and is emailed to the buyer |
+| `GET /v1/courses/:id/refunds` | the course's creator, or an admin | The course's refunds, newest first, optionally `?status=requested` |
+
+**The window is the one promised at purchase.** A course has `refund_window_days` (7 by default, `0` for no refunds, up to 365; set it with `PATCH /v1/courses/:id` and shown on the public course page). The value in force when the order is made is copied into the order, so changing it later changes nothing for existing buyers, and the window is counted from the moment of payment by the database's clock. A creator or admin is not bound by the window: it limits what a *student* may ask for.
+
+**Refunds are final only when the provider says so.** Approving hands the refund to the provider with our own refund id as its idempotency key, so asking again (a retry after a timeout, the reconciliation job, two creators clicking at once) can never refund twice: one refund in flight per order is enforced by a unique index. The order stays `paid` and the buyer keeps access until the provider's confirmation arrives (as a `refund.processed` webhook, or found by reconciliation), and in that one transaction the payment and order become `refunded`, the access the payment bought ends, playback in progress is stopped, and the buyer is emailed. A refund the provider refuses is recorded as `failed` with a note, the order stays paid, and the creator may try again. Partial refunds (made, for example, in the provider's dashboard) are added up per payment and access ends when the whole amount has been returned.
+
+Refunds made in the provider's dashboard are recorded too (origin `provider`). The amount in the ledger is what the provider actually returned, even if it differs from what we requested; a short refund leaves access active until the full payment has been returned. A webhook binds to our pending refund only by provider refund id or our receipt id, so another dashboard refund on the same payment cannot consume it. A student who has been refunded may buy again and gets their old enrollment back.
+
+### Reconciliation
+
+Webhooks can be lost. A job in the API process (`RECONCILE_INTERVAL_SECS`, every 5 minutes by default; safe on any number of instances at once) asks the provider about whatever has waited too long and applies the answer through the same code the webhook uses, with the event recorded as `reconcile:payment:<id>`:
+
+- a `pending` order older than 15 minutes is checked; if it was paid, the buyer is enrolled and sent their receipt, exactly as the webhook would have done;
+- an unpaid order past its time becomes `expired` (an order with a payment attempt in flight gets another hour), and an order that never reached the provider expires without asking it;
+- an expired order is looked at again for 24 hours, in case a late payment's webhook never came;
+- a refund the provider never answered is asked again (same idempotency key), and a pending one is checked until it finishes or fails.
+
+Provider errors back off (a minute, doubling to an hour, with jitter); each pass claims its rows first, so two instances never work on the same order.
+
+### Disputes
+
+`payment.dispute.*` events are recorded against the order and flagged for review (`webhook_events.needs_review`). Nothing is revoked or refunded automatically: a dispute is a negotiation with the customer's bank, and which way it goes is a person's call. Run `select * from webhook_events where needs_review and reviewed_at is null order by received_at` to see everything waiting.
+
 ## Authorization matrix
 
 `crates/api/tests/authz_matrix.rs` calls every route as an anonymous visitor, an enrolled student, a student who is not enrolled, the owning creator, another creator and an admin, each time against freshly created resources, and compares the status with a declared policy. A second test reads the router source and fails if any `.route(...)` is missing from the table, or the table lists a route that no longer exists. A new endpoint therefore cannot ship without someone deciding who may call it.
@@ -235,4 +267,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout, the payment provider boundary and the webhooks that grant enrollment are done too. Next in the plan: reconciliation and refunds.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout, the payment provider boundary and the webhooks that grant enrollment are done too. Reconciliation, refunds and dispute handling are done as well. Next in the plan: coupons and invoices.
