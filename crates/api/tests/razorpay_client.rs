@@ -516,3 +516,56 @@ async fn webhook_verification_uses_the_configured_secrets() {
     assert!(provider.verify_webhook(body, &good));
     assert!(!provider.verify_webhook(body, &zeno_core::payments::webhook::sign("another", body)));
 }
+
+#[tokio::test]
+async fn an_orders_payments_and_a_refund_can_be_listed_and_fetched() {
+    let (base, mock) = serve().await;
+    let provider = provider(&base);
+
+    mock.push(reply(
+        200,
+        json!({"entity": "collection", "count": 2, "items": [
+            {"id": "pay_1", "order_id": "order_1", "amount": 49900, "currency": "INR",
+             "status": "failed", "amount_refunded": 0},
+            {"id": "pay_2", "order_id": "order_1", "amount": 49900, "currency": "INR",
+             "status": "captured", "amount_refunded": 0},
+        ]}),
+    ));
+    let payments = provider.fetch_order_payments("order_1").await.unwrap();
+    assert_eq!(payments.len(), 2);
+    assert_eq!(payments[0].status, ProviderPaymentStatus::Failed);
+    assert_eq!(payments[1].status, ProviderPaymentStatus::Captured);
+    assert_eq!(mock.seen()[0].target, "/v1/orders/order_1/payments");
+
+    mock.push(reply(
+        200,
+        json!({"id": "rfnd_1", "entity": "refund", "amount": 49900, "payment_id": "pay_2",
+               "status": "pending", "currency": "INR"}),
+    ));
+    let refund = provider.fetch_refund("rfnd_1").await.unwrap();
+    assert_eq!(refund.status, ProviderRefundStatus::Pending);
+    assert_eq!(refund.payment_id, "pay_2");
+    assert_eq!(mock.seen()[1].target, "/v1/refunds/rfnd_1");
+
+    // These are reads too: a hiccup is retried, a bad id never leaves the process.
+    mock.push(reply(503, json!({})));
+    mock.push(reply(
+        200,
+        json!({"entity": "collection", "count": 0, "items": []}),
+    ));
+    assert!(provider
+        .fetch_order_payments("order_1")
+        .await
+        .unwrap()
+        .is_empty());
+    let before = mock.seen().len();
+    assert!(matches!(
+        provider.fetch_order_payments("order_1/../x").await,
+        Err(ProviderError::Rejected { .. })
+    ));
+    assert!(matches!(
+        provider.fetch_refund("../x").await,
+        Err(ProviderError::Rejected { .. })
+    ));
+    assert_eq!(mock.seen().len(), before);
+}

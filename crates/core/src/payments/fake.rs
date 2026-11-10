@@ -32,6 +32,8 @@ pub enum Op {
     FindOrder,
     FetchOrder,
     FetchPayment,
+    FetchOrderPayments,
+    FetchRefund,
     Refund,
 }
 
@@ -52,6 +54,9 @@ struct State {
     payments: BTreeMap<String, ProviderPayment>,
     refunds: BTreeMap<String, ProviderRefund>,
     refund_keys: HashMap<String, String>,
+    /// When set, new refunds stay pending until [`FakeProvider::settle_refund`], like a bank
+    /// transfer that takes a while.
+    refunds_pend: bool,
     faults: HashMap<Op, VecDeque<Fault>>,
     calls: HashMap<Op, usize>,
 }
@@ -177,6 +182,40 @@ impl FakeProvider {
         Ok(payment)
     }
 
+    /// From now on refunds start `pending` and finish only when [`Self::settle_refund`] is called.
+    pub fn hold_refunds(&self, hold: bool) {
+        self.lock().refunds_pend = hold;
+    }
+
+    /// The bank finishes a pending refund.
+    pub fn settle_refund(&self, provider_refund_id: &str) -> Result<ProviderRefund, ProviderError> {
+        let mut state = self.lock();
+        let refund = state
+            .refunds
+            .get_mut(provider_refund_id)
+            .ok_or(ProviderError::NotFound)?;
+        refund.status = ProviderRefundStatus::Processed;
+        Ok(refund.clone())
+    }
+
+    /// The provider gives up on a pending refund; the money stays with the customer's payment.
+    pub fn fail_refund(&self, provider_refund_id: &str) -> Result<ProviderRefund, ProviderError> {
+        let mut state = self.lock();
+        let (payment_id, amount) = {
+            let refund = state
+                .refunds
+                .get_mut(provider_refund_id)
+                .ok_or(ProviderError::NotFound)?;
+            refund.status = ProviderRefundStatus::Failed;
+            (refund.payment_id.clone(), refund.amount_paise)
+        };
+        if let Some(payment) = state.payments.get_mut(&payment_id) {
+            payment.amount_refunded_paise -= amount;
+            payment.status = ProviderPaymentStatus::Captured;
+        }
+        Ok(state.refunds[provider_refund_id].clone())
+    }
+
     /// The signature the provider would put on a webhook with this body.
     pub fn sign_webhook(&self, body: &[u8]) -> String {
         webhook::sign(self.webhook_secret.expose(), body)
@@ -272,6 +311,42 @@ impl PaymentProvider for FakeProvider {
         .await
     }
 
+    async fn fetch_order_payments(
+        &self,
+        provider_order_id: &str,
+    ) -> Result<Vec<ProviderPayment>, ProviderError> {
+        self.run(Op::FetchOrderPayments, |state| {
+            if !state
+                .orders
+                .iter()
+                .any(|order| order.id == provider_order_id)
+            {
+                return Err(ProviderError::NotFound);
+            }
+            Ok(state
+                .payments
+                .values()
+                .filter(|payment| payment.order_id.as_deref() == Some(provider_order_id))
+                .cloned()
+                .collect())
+        })
+        .await
+    }
+
+    async fn fetch_refund(
+        &self,
+        provider_refund_id: &str,
+    ) -> Result<ProviderRefund, ProviderError> {
+        self.run(Op::FetchRefund, |state| {
+            state
+                .refunds
+                .get(provider_refund_id)
+                .cloned()
+                .ok_or(ProviderError::NotFound)
+        })
+        .await
+    }
+
     async fn refund(&self, request: &RefundRequest) -> Result<ProviderRefund, ProviderError> {
         let request = request.clone();
         self.run(Op::Refund, move |state| {
@@ -283,6 +358,7 @@ impl PaymentProvider for FakeProvider {
                 return Ok(existing.clone());
             }
             let id = state.id("rfnd");
+            let pend = state.refunds_pend;
             let payment = state
                 .payments
                 .get_mut(&request.payment_id)
@@ -306,7 +382,11 @@ impl PaymentProvider for FakeProvider {
                 id: id.clone(),
                 payment_id: request.payment_id,
                 amount_paise: request.amount_paise,
-                status: ProviderRefundStatus::Processed,
+                status: if pend {
+                    ProviderRefundStatus::Pending
+                } else {
+                    ProviderRefundStatus::Processed
+                },
             };
             state
                 .refund_keys
@@ -417,6 +497,77 @@ mod tests {
         let settled = provider.fetch_payment(&payment.id).await.unwrap();
         assert_eq!(settled.status, ProviderPaymentStatus::Refunded);
         assert!(provider.refund(&request("k4", 1)).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn held_refunds_stay_pending_until_the_bank_finishes_or_gives_up() {
+        let provider = FakeProvider::new();
+        provider.hold_refunds(true);
+        let created = provider.create_order(&order("r1", 500)).await.unwrap();
+        let payment = provider.capture(&created.id).unwrap();
+        let request = |key: &str| RefundRequest {
+            payment_id: payment.id.clone(),
+            amount_paise: 500,
+            idempotency_key: key.into(),
+            notes: BTreeMap::new(),
+        };
+
+        let pending = provider.refund(&request("k1")).await.unwrap();
+        assert_eq!(pending.status, ProviderRefundStatus::Pending);
+        assert_eq!(
+            provider.fetch_refund(&pending.id).await.unwrap().status,
+            ProviderRefundStatus::Pending
+        );
+        let done = provider.settle_refund(&pending.id).unwrap();
+        assert_eq!(done.status, ProviderRefundStatus::Processed);
+        assert_eq!(
+            provider.fetch_refund(&pending.id).await.unwrap().status,
+            ProviderRefundStatus::Processed
+        );
+
+        // A second payment's refund that fails gives the money back to the payment.
+        let second_order = provider.create_order(&order("r2", 700)).await.unwrap();
+        let second = provider.capture(&second_order.id).unwrap();
+        let failing = provider
+            .refund(&RefundRequest {
+                payment_id: second.id.clone(),
+                amount_paise: 700,
+                idempotency_key: "k2".into(),
+                notes: BTreeMap::new(),
+            })
+            .await
+            .unwrap();
+        provider.fail_refund(&failing.id).unwrap();
+        assert_eq!(
+            provider.fetch_refund(&failing.id).await.unwrap().status,
+            ProviderRefundStatus::Failed
+        );
+        let payment_now = provider.fetch_payment(&second.id).await.unwrap();
+        assert_eq!(payment_now.status, ProviderPaymentStatus::Captured);
+        assert_eq!(payment_now.amount_refunded_paise, 0);
+        assert_eq!(
+            provider.fetch_refund("rfnd_nope").await,
+            Err(ProviderError::NotFound)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_orders_payments_include_failed_attempts_and_only_that_orders() {
+        let provider = FakeProvider::new();
+        let a = provider.create_order(&order("ra", 500)).await.unwrap();
+        let b = provider.create_order(&order("rb", 600)).await.unwrap();
+        provider.fail_payment(&a.id).unwrap();
+        provider.capture(&a.id).unwrap();
+        provider.capture(&b.id).unwrap();
+        let payments = provider.fetch_order_payments(&a.id).await.unwrap();
+        assert_eq!(payments.len(), 2);
+        assert!(payments
+            .iter()
+            .all(|p| p.order_id.as_deref() == Some(a.id.as_str())));
+        assert_eq!(
+            provider.fetch_order_payments("order_missing").await,
+            Err(ProviderError::NotFound)
+        );
     }
 
     #[tokio::test]

@@ -163,6 +163,16 @@ pub trait PaymentProvider: Send + Sync {
         provider_payment_id: &str,
     ) -> Result<ProviderPayment, ProviderError>;
 
+    /// Every payment attempt made against an order, failed ones included. Reconciliation uses it
+    /// to find the payment behind an order the provider reports as paid.
+    async fn fetch_order_payments(
+        &self,
+        provider_order_id: &str,
+    ) -> Result<Vec<ProviderPayment>, ProviderError>;
+
+    async fn fetch_refund(&self, provider_refund_id: &str)
+        -> Result<ProviderRefund, ProviderError>;
+
     async fn refund(&self, request: &RefundRequest) -> Result<ProviderRefund, ProviderError>;
 
     /// Whether `signature` is the provider's signature of exactly these bytes.

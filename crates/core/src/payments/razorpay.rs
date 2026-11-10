@@ -350,6 +350,28 @@ impl PaymentProvider for RazorpayProvider {
         parse_payment(&self.get(&format!("/v1/payments/{id}")).await?)
     }
 
+    async fn fetch_order_payments(
+        &self,
+        provider_order_id: &str,
+    ) -> Result<Vec<ProviderPayment>, ProviderError> {
+        let id = safe_id(provider_order_id)?;
+        let response = self.get(&format!("/v1/orders/{id}/payments")).await?;
+        response["items"]
+            .as_array()
+            .ok_or_else(|| malformed("payment list"))?
+            .iter()
+            .map(parse_payment)
+            .collect()
+    }
+
+    async fn fetch_refund(
+        &self,
+        provider_refund_id: &str,
+    ) -> Result<ProviderRefund, ProviderError> {
+        let id = safe_id(provider_refund_id)?;
+        parse_refund(&self.get(&format!("/v1/refunds/{id}")).await?)
+    }
+
     async fn refund(&self, request: &RefundRequest) -> Result<ProviderRefund, ProviderError> {
         let id = safe_id(&request.payment_id)?;
         let mut body = json!({
