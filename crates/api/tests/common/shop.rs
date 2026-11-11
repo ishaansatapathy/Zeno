@@ -103,7 +103,8 @@ pub async fn invoicing_shop(pool: PgPool) -> Shop {
     shop_in(app, provider, pool).await
 }
 
-async fn shop_in(app: App, provider: FakeProvider, pool: PgPool) -> Shop {
+/// A shop on an app and pool of the caller's choosing.
+pub async fn shop_in(app: App, provider: FakeProvider, pool: PgPool) -> Shop {
     let creator = signup_creator(&app, "teacher@hooks.in").await;
     let buyer = signup_verified_as(&app, "buyer@hooks.in", "student").await;
     let (course, video) = make_course(&app, &pool, &creator, "Paid course").await;
