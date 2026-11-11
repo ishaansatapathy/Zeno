@@ -21,7 +21,7 @@ use zeno_core::model::{EnrollmentSource, OrderStatus};
 use crate::enrollments::repo as enrollments;
 use crate::ledger::fee;
 use crate::ledger::post as ledger;
-use crate::refunds::repo as refunds;
+use crate::refunds::repo::{self as refunds, Recording};
 use crate::webhooks::event::{DisputeEntity, PaymentEntity, RefundEntity};
 use crate::webhooks::repo::{self, LockedOrder, NewPayment, PaymentRow};
 
@@ -54,6 +54,8 @@ pub enum Outcome {
     RefundFailed,
     /// A refund for a payment we cannot place.
     RefundUnknownPayment,
+    /// A refund that would return more than the payment was. Nothing is recorded or posted.
+    RefundExceedsPayment,
     /// A dispute with a customer's bank, noted against the order for a person to handle.
     DisputeNoted,
     /// An event we do not act on, or one that says nothing to act on.
@@ -80,6 +82,7 @@ impl Outcome {
             Self::RefundBeforePayment => "refund_before_payment",
             Self::RefundFailed => "refund_failed",
             Self::RefundUnknownPayment => "refund_unknown_payment",
+            Self::RefundExceedsPayment => "refund_exceeds_payment",
             Self::DisputeNoted => "dispute_noted",
             Self::Ignored => "ignored",
             Self::Malformed => "malformed",
@@ -99,6 +102,7 @@ impl Outcome {
                 | Self::RefundPartial
                 | Self::RefundFailed
                 | Self::RefundUnknownPayment
+                | Self::RefundExceedsPayment
                 | Self::DisputeNoted
         )
     }
@@ -509,8 +513,9 @@ pub async fn apply_refund_processed(
             if row.status == "refunded" {
                 return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
             }
-            // Record it. `None` means this very refund was recorded before.
-            let Some(recorded) = refunds::record_success(
+            // Record it, unless this very refund was recorded before, or it would return more
+            // than the payment was (nothing the provider does can make that true; a person looks).
+            let recorded = match refunds::record_success(
                 conn,
                 order.id,
                 row.id,
@@ -522,8 +527,29 @@ pub async fn apply_refund_processed(
                     .and_then(|id| Uuid::parse_str(id).ok()),
             )
             .await?
-            else {
-                return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
+            {
+                Recording::New(recorded) => recorded,
+                Recording::AlreadyRecorded => {
+                    return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
+                }
+                Recording::ExceedsPayment => {
+                    tracing::error!(
+                        alert = "refund_exceeds_payment",
+                        refund = %refund.id,
+                        refund_paise = refund.amount_paise,
+                        payment_paise = row.amount_paise,
+                        "a refund that would return more than the payment was; nothing recorded"
+                    );
+                    repo::add_order_event(
+                        conn,
+                        order.id,
+                        "refund_over_limit",
+                        Some(row.id),
+                        json!({"refund": refund.id, "refund_paise": refund.amount_paise, "payment_paise": row.amount_paise}),
+                    )
+                    .await?;
+                    return Ok(settled(Outcome::RefundExceedsPayment, Some(&order)));
+                }
             };
             let returned = recorded.total_paise;
             // The creator gives back what was returned (if this payment was ever credited to one).
@@ -605,7 +631,8 @@ pub async fn apply_refund_processed(
                 },
             )
             .await?;
-            refunds::record_success(
+            // The payment was just made from this very event, with this refund's amount: it fits.
+            let _ = refunds::record_success(
                 conn,
                 order.id,
                 payment_row,

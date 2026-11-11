@@ -708,6 +708,8 @@ db_test! {
             // never posted; a journal that does not balance; a refund journal for nothing.
             &format!("insert into refunds (order_id, payment_id, amount_paise, status, origin, completed_at) \
                       select '{}', id, 100, 'succeeded', 'provider', now() from payments where provider_ref = '{payment}'", shop.order),
+            // ... and refunds that, together, return more than the payment was.
+            &format!("insert into refunds (order_id, payment_id, amount_paise, status, origin, completed_at)                       select '{}', id, {PRICE}, 'succeeded', 'provider', now() from payments where provider_ref = '{payment}'", shop.order),
             &format!("insert into ledger_adjustments (creator_id, amount_paise, reason) values ('{}', 5, 'never posted')", shop.creator_id),
             "insert into ledger_journals (kind, source_id) values ('refund', gen_random_uuid())",
             "insert into ledger_entries (journal_id, account, amount_paise) select id, 'customers', 7 from ledger_journals where kind = 'refund' and not exists (select 1 from refunds r where r.id = source_id)",
@@ -721,6 +723,7 @@ db_test! {
             "missing_sale",
             "order_net_mismatch",
             "payout_not_reversed",
+            "refund_exceeds_payment",
             "refund_not_posted",
             "refund_without_refund",
             "sale_amount_mismatch",

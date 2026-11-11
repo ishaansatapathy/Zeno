@@ -286,8 +286,12 @@ pub struct Recorded {
 /// Records that the provider has returned `amount_paise` of this payment. Closes our own refund
 /// for it if there is one; otherwise it was made outside Zeno (the provider's dashboard) and is
 /// recorded as such. The provider's observed amount replaces our requested amount when they
-/// differ. Returns the total returned on the payment so far, or `None` if this exact refund had
-/// already been recorded.
+/// differ.
+///
+/// A refund that would take the payment's returns past the payment itself is not recorded at all
+/// (the caller flags it for a person); the database refuses it too, but by then a retry loop would
+/// be the answer to a question no retry can fix. The caller holds the order's lock, so two refunds
+/// of one payment are counted one after the other.
 pub async fn record_success(
     conn: &mut PgConnection,
     order_id: Uuid,
@@ -295,7 +299,7 @@ pub async fn record_success(
     amount_paise: i64,
     provider_refund_id: &str,
     local_refund_id: Option<Uuid>,
-) -> Result<Option<Recorded>, sqlx::Error> {
+) -> Result<Recording, sqlx::Error> {
     let known: Option<Uuid> = sqlx::query_scalar(
         "select id from refunds where provider_refund_id = $1 and status = 'succeeded'",
     )
@@ -303,7 +307,20 @@ pub async fn record_success(
     .fetch_optional(&mut *conn)
     .await?;
     if known.is_some() {
-        return Ok(None);
+        return Ok(Recording::AlreadyRecorded);
+    }
+    let fits: bool = sqlx::query_scalar(
+        "select $2 + coalesce((select sum(r.amount_paise) from refunds r \
+                               where r.payment_id = p.id and r.status = 'succeeded'), 0) \
+                <= p.amount_paise \
+         from payments p where p.id = $1",
+    )
+    .bind(payment_id)
+    .bind(amount_paise)
+    .fetch_one(&mut *conn)
+    .await?;
+    if !fits {
+        return Ok(Recording::ExceedsPayment);
     }
     let closed: Option<Uuid> = sqlx::query_scalar(
         "update refunds set status = 'succeeded', provider_refund_id = $2, \
@@ -346,10 +363,21 @@ pub async fn record_success(
     .bind(payment_id)
     .fetch_one(conn)
     .await?;
-    Ok(Some(Recorded {
+    Ok(Recording::New(Recorded {
         refund_id,
         total_paise: total,
     }))
+}
+
+/// What `record_success` did.
+#[derive(Debug, Clone, Copy)]
+pub enum Recording {
+    /// Recorded now.
+    New(Recorded),
+    /// This exact refund was recorded before (a redelivery).
+    AlreadyRecorded,
+    /// It would return more than the payment was: nothing was recorded.
+    ExceedsPayment,
 }
 
 // ---- what a creator sees -------------------------------------------------------------------------

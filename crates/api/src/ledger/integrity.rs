@@ -2,7 +2,8 @@
 //!
 //! The ledger is written in the same transactions as the things it records, so these checks should
 //! always come back empty. They exist for the day they do not (a bug, a hand-run SQL statement, a
-//! restored backup) so that it is found by a query and not by an angry creator. Every problem is a
+//! restored backup, a refund the provider should never have made) so that it is found by a query
+//! and not by an angry creator. Every problem is a
 //! row naming what is wrong and which record to look at; nothing here changes anything.
 
 use std::time::Duration;
@@ -155,6 +156,22 @@ pub async fn check(db: &PgPool) -> Result<Vec<Problem>, sqlx::Error> {
              where r.status = 'succeeded' \
                and not exists (select 1 from ledger_journals j where j.kind = 'refund' and j.source_id = r.id) \
              limit $1",
+        )
+        .bind(LIMIT)
+        .fetch_all(db)
+        .await?,
+    ));
+
+    // 6b. A payment returned for more than it was. The database refuses to record it, so this
+    //     is the check for the day that rule was bypassed or has not been applied to old rows.
+    found.extend(problems(
+        "refund_exceeds_payment",
+        sqlx::query_as(
+            "select p.id::text, 'the payment is ' || p.amount_paise || ' paise, succeeded refunds total ' || r.returned \
+             from payments p \
+             join (select payment_id, sum(amount_paise) as returned from refunds \
+                   where status = 'succeeded' group by payment_id) r on r.payment_id = p.id \
+             where r.returned > p.amount_paise limit $1",
         )
         .bind(LIMIT)
         .fetch_all(db)
