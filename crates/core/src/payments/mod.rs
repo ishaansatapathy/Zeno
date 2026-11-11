@@ -112,6 +112,9 @@ pub struct ProviderPayment {
     pub amount_refunded_paise: i64,
     pub currency: String,
     pub status: ProviderPaymentStatus,
+    /// What the provider kept as its fee (tax on the fee included), when it says. Only captured
+    /// payments have one.
+    pub fee_paise: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

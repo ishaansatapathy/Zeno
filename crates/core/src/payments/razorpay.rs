@@ -256,6 +256,7 @@ fn parse_payment(value: &Value) -> Result<ProviderPayment, ProviderError> {
         amount_refunded_paise: value["amount_refunded"].as_i64().unwrap_or(0),
         currency: text(value, "currency")?,
         status,
+        fee_paise: value["fee"].as_i64().filter(|fee| *fee >= 0),
     })
 }
 

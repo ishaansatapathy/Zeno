@@ -57,6 +57,9 @@ struct State {
     /// When set, new refunds stay pending until [`FakeProvider::settle_refund`], like a bank
     /// transfer that takes a while.
     refunds_pend: bool,
+    /// The fee the fake provider charges on a captured payment, in basis points of the amount
+    /// (`None`: it reports no fee, so callers must estimate).
+    fee_bps: Option<u32>,
     faults: HashMap<Op, VecDeque<Fault>>,
     calls: HashMap<Op, usize>,
 }
@@ -93,9 +96,18 @@ impl FakeProvider {
 
     pub fn with_webhook_secret(secret: &str) -> Self {
         Self {
-            state: Arc::default(),
+            state: Arc::new(Mutex::new(State {
+                // About what Razorpay charges (2% plus GST on the fee).
+                fee_bps: Some(236),
+                ..State::default()
+            })),
             webhook_secret: Secret::new(secret),
         }
+    }
+
+    /// Sets the fee charged on payments captured from now on (`None`: report no fee).
+    pub fn set_fee_bps(&self, fee_bps: Option<u32>) {
+        self.lock().fee_bps = fee_bps;
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -144,6 +156,10 @@ impl FakeProvider {
         }) {
             return Ok(existing.clone());
         }
+        let fee_paise = state.fee_bps.map(|bps| {
+            i64::try_from((i128::from(order.amount_paise) * i128::from(bps) + 5_000) / 10_000)
+                .unwrap_or(i64::MAX)
+        });
         let payment = ProviderPayment {
             id: state.id("pay"),
             order_id: Some(order.id.clone()),
@@ -151,6 +167,7 @@ impl FakeProvider {
             amount_refunded_paise: 0,
             currency: order.currency.clone(),
             status: ProviderPaymentStatus::Captured,
+            fee_paise,
         };
         state.orders[position].amount_paid_paise = order.amount_paise;
         state.orders[position].status = ProviderOrderStatus::Paid;
@@ -174,6 +191,7 @@ impl FakeProvider {
             amount_refunded_paise: 0,
             currency: order.currency,
             status: ProviderPaymentStatus::Failed,
+            fee_paise: None,
         };
         if state.orders[position].status == ProviderOrderStatus::Created {
             state.orders[position].status = ProviderOrderStatus::Attempted;
