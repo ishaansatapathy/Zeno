@@ -85,6 +85,21 @@ pub fn app_with_provider(pool: PgPool) -> (App, FakeProvider) {
     (app, provider)
 }
 
+/// Like [`app_with_provider`], with the configuration changed first.
+pub fn app_with_config(pool: PgPool, tweak: impl FnOnce(&mut ApiConfig)) -> (App, FakeProvider) {
+    let provider = FakeProvider::new();
+    let mailer = MemoryMailer::default();
+    let state = make_state_with(pool.clone(), false, 0, Arc::new(mailer.clone()), tweak)
+        .with_payments(Arc::new(provider.clone()));
+    let app = App {
+        router: zeno_api::build_app(state.clone()),
+        mailer,
+        pool,
+        state,
+    };
+    (app, provider)
+}
+
 /// Like [`app_with_provider`], with invoices switched on (they are off by default).
 pub fn app_with_invoices(pool: PgPool) -> (App, FakeProvider) {
     let provider = FakeProvider::new();
@@ -146,6 +161,7 @@ pub fn make_state_with(
         order_ttl_minutes: 30,
         reconcile_interval_secs: 300,
         invoices: zeno_api::invoices::InvoicesConfig::disabled(),
+        ledger: zeno_api::ledger::LedgerConfig::defaults(),
     };
     tweak(&mut config);
     let store = S3Store::new(&config.storage).unwrap();

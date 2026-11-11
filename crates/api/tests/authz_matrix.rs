@@ -127,6 +127,8 @@ enum Class {
     /// The person who placed the order (in these probes, the student who is not enrolled);
     /// everyone else, the course's creator and admins included, sees nothing.
     Buyer,
+    /// Admins only: everyone else, creators included, is refused.
+    AdminOnly,
     /// A server-to-server call authorised by a signature, not by who is signed in: every caller
     /// here, whatever they hold, is refused without one.
     Webhook,
@@ -174,6 +176,9 @@ fn expect(class: Class, actor: Actor) -> Out {
         (Class::Buyer, Anonymous) => Out::Unauthorized,
         (Class::Buyer, Outsider) => Out::Allowed,
         (Class::Buyer, _) => Out::Hidden,
+        (Class::AdminOnly, Anonymous) => Out::Unauthorized,
+        (Class::AdminOnly, Admin) => Out::Allowed,
+        (Class::AdminOnly, _) => Out::Forbidden,
         (Class::Webhook, _) => Out::Unauthorized,
         (Class::NotBuilt, _) => Out::NotBuilt,
         (Class::TokenValid, _) => Out::TokenAccepted,
@@ -270,6 +275,9 @@ struct World {
     order: Uuid,
     /// A coupon made by the owner.
     coupon: Uuid,
+    /// A payout the owner has asked for.
+    payout: Uuid,
+    owner: Uuid,
     slug: String,
     handle: &'static str,
     outsider_email: String,
@@ -410,6 +418,19 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
     .execute(pool)
     .await
     .unwrap();
+    // A creator has one open payout at a time, so the previous probe's is cleared away first.
+    let payout = Uuid::new_v4();
+    sqlx::query("delete from payouts where creator_id = $1 and status = 'requested'")
+        .bind(actors.owner_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("insert into payouts (id, creator_id, amount_paise) values ($1, $2, 60000)")
+        .bind(payout)
+        .bind(actors.owner_id)
+        .execute(pool)
+        .await
+        .unwrap();
     let order = Uuid::new_v4();
     sqlx::query(
         "insert into orders (id, user_id, course_id, amount_paise, price_snapshot, status,             provider, provider_order_id, expires_at)          values ($1, $2, $3, 49900,             jsonb_build_object('v', 1, 'course_id', $3::text, 'course_title', 'Matrix course',                 'course_slug', $4::text, 'creator_id', $5::text, 'list_price_paise', 49900,                 'discount_paise', 0, 'amount_paise', 49900, 'currency', 'INR'),             'pending', 'fake', $6, now() + interval '30 minutes')",
@@ -461,6 +482,8 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
         student: actors.student_id,
         order,
         coupon,
+        payout,
+        owner: actors.owner_id,
         slug,
         handle: "matrix-owner",
         outsider_email: "outsider@matrix.in".into(),
@@ -476,6 +499,7 @@ fn fill(path: &str, world: &World) -> String {
         .replace("{student}", &world.student.to_string())
         .replace("{order}", &world.order.to_string())
         .replace("{coupon}", &world.coupon.to_string())
+        .replace("{payout}", &world.payout.to_string())
         .replace("{slug}", &world.slug)
         .replace("{handle}", world.handle)
         .replace("{file}", "144p.m3u8")
@@ -539,6 +563,19 @@ fn rows() -> Vec<Row> {
         row(get.clone(), "/v1/coupons", Creator),
         row(patch.clone(), "/v1/coupons/{coupon}", Owned).json(|_, _| json!({"active": true})),
         row(get.clone(), "/v1/orders/{order}", Buyer),
+        // Earnings and payouts: a creator's own money. Admins run the payouts and the book.
+        row(get.clone(), "/v1/me/earnings", Creator),
+        row(get.clone(), "/v1/me/earnings/entries", Creator),
+        row(get.clone(), "/v1/me/earnings/export.csv", Creator),
+        row(get.clone(), "/v1/me/payouts", Creator),
+        row(post.clone(), "/v1/me/payouts", Creator).json(|_, _| json!({"amount_paise": 999_999_999})),
+        row(post.clone(), "/v1/me/payouts/{payout}/cancel", OwnerOnly).json(|_, _| json!({})),
+        row(get.clone(), "/v1/admin/payouts", AdminOnly),
+        row(post.clone(), "/v1/admin/payouts/{payout}/pay", AdminOnly).json(|_, _| json!({"method": "upi", "reference": "UTR123456"})),
+        row(post.clone(), "/v1/admin/payouts/{payout}/cancel", AdminOnly).json(|_, _| json!({"reason": "matrix probe"})),
+        row(get.clone(), "/v1/admin/ledger/integrity", AdminOnly),
+        row(post.clone(), "/v1/admin/ledger/backfill", AdminOnly).json(|_, _| json!({})),
+        row(post.clone(), "/v1/admin/ledger/adjustments", AdminOnly).json(|w, _| json!({"creator_id": w.owner, "amount_paise": 100, "reason": "matrix probe"})),
         row(get.clone(), "/v1/orders/{order}/invoice", Buyer),
         row(get.clone(), "/v1/orders/{order}/invoice.pdf", Buyer),
         // Refunds: a buyer asks; only the course's creator (or an admin) decides.

@@ -88,6 +88,15 @@ pub async fn shop(pool: PgPool) -> Shop {
     shop_in(app, provider, pool).await
 }
 
+/// The same shop, with the configuration changed first.
+pub async fn shop_with_config(
+    pool: PgPool,
+    tweak: impl FnOnce(&mut zeno_api::config::ApiConfig),
+) -> Shop {
+    let (app, provider) = app_with_config(pool.clone(), tweak);
+    shop_in(app, provider, pool).await
+}
+
 /// The same shop, with invoices switched on.
 pub async fn invoicing_shop(pool: PgPool) -> Shop {
     let (app, provider) = app_with_invoices(pool.clone());
@@ -134,6 +143,16 @@ pub fn payment(id: &str, order: &str, amount: i64, status: &str) -> Value {
 
 pub fn event(name: &str, payload: Value) -> Vec<u8> {
     serde_json::to_vec(&json!({"entity": "event", "event": name, "payload": payload})).unwrap()
+}
+
+/// `payment.captured` for a payment the provider charged `fee` on (`None`: it says nothing).
+pub fn captured_with_fee(pay: &str, order: &str, amount: i64, fee: Option<i64>) -> Vec<u8> {
+    let mut entity = payment(pay, order, amount, "captured");
+    if let Some(fee) = fee {
+        entity["fee"] = json!(fee);
+        entity["tax"] = json!(fee / 7);
+    }
+    event("payment.captured", json!({"payment": {"entity": entity}}))
 }
 
 pub fn captured(pay: &str, order: &str, amount: i64) -> Vec<u8> {
@@ -234,4 +253,16 @@ pub async fn access(shop: &Shop) -> String {
         ),
     )
     .await
+}
+
+/// A signed-in admin (admins cannot register themselves: promote an account, then sign in again so
+/// the new role is in the session).
+pub async fn admin_jar(shop: &Shop) -> Jar {
+    shop.app.settle().await;
+    signup_creator(&shop.app, "admin@ledger.in").await;
+    sqlx::query("update users set role = 'admin' where email = 'admin@ledger.in'")
+        .execute(&shop.pool)
+        .await
+        .unwrap();
+    Jar::of(&login(&shop.app, "admin@ledger.in", PASSWORD).await)
 }
