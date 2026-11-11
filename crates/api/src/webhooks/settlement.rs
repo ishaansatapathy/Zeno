@@ -19,6 +19,8 @@ use uuid::Uuid;
 use zeno_core::model::{EnrollmentSource, OrderStatus};
 
 use crate::enrollments::repo as enrollments;
+use crate::ledger::fee;
+use crate::ledger::post as ledger;
 use crate::refunds::repo as refunds;
 use crate::webhooks::event::{DisputeEntity, PaymentEntity, RefundEntity};
 use crate::webhooks::repo::{self, LockedOrder, NewPayment, PaymentRow};
@@ -154,6 +156,7 @@ pub async fn apply_captured(
     provider: &str,
     payment: &PaymentEntity,
     raw: &Value,
+    fallback_fee_bps: u32,
 ) -> Result<Settled, sqlx::Error> {
     if payment.status != "captured" {
         return Ok(settled(Outcome::Ignored, None));
@@ -202,13 +205,31 @@ pub async fn apply_captured(
         return Ok(settled(Outcome::CurrencyMismatch, Some(&order)));
     }
 
+    let fee = fee::resolve(payment.amount_paise, payment.fee_paise, fallback_fee_bps);
+    let reported_fee = (fee.source == fee::FeeSource::Reported).then_some(fee.paise);
+    if payment.fee_paise.is_some() && reported_fee.is_none() {
+        tracing::warn!(payment = %payment.id, reported = ?payment.fee_paise, "the provider's fee made no sense; estimated it");
+    }
+
     let existing = repo::payment_by_ref(conn, &payment.id, true).await?;
-    match existing.as_ref().map(|row| row.status.as_str()) {
-        Some("confirmed" | "duplicate") => {
-            return Ok(settled(Outcome::AlreadyApplied, Some(&order)));
+    if let Some(row) = existing
+        .as_ref()
+        .filter(|row| matches!(row.status.as_str(), "confirmed" | "duplicate" | "refunded"))
+    {
+        if let Some(reported) = reported_fee {
+            if row.fee_paise.is_none() {
+                ledger::correct_fee(conn, row.id, reported).await?;
+                repo::set_payment_fee(conn, row.id, Some(reported)).await?;
+            } else if row.fee_paise != Some(reported) {
+                tracing::warn!(payment = %payment.id, stored = ?row.fee_paise, reported, "conflicting provider fee for an applied payment");
+            }
         }
-        Some("refunded") => return Ok(settled(Outcome::AlreadyRefunded, Some(&order))),
-        _ => {}
+        let outcome = if row.status == "refunded" {
+            Outcome::AlreadyRefunded
+        } else {
+            Outcome::AlreadyApplied
+        };
+        return Ok(settled(outcome, Some(&order)));
     }
 
     // Another payment already settled this order: this one is money we should not have taken.
@@ -222,6 +243,7 @@ pub async fn apply_captured(
         Some(row) => {
             // A failed attempt that turned out to have gone through.
             repo::set_payment_status(conn, row.id, status, Some(raw)).await?;
+            repo::set_payment_fee(conn, row.id, reported_fee).await?;
             row.id
         }
         None => {
@@ -235,6 +257,7 @@ pub async fn apply_captured(
                     currency: &payment.currency,
                     status,
                     raw_event: raw,
+                    fee_paise: reported_fee,
                 },
             )
             .await?
@@ -261,6 +284,23 @@ pub async fn apply_captured(
         "paid",
         Some(payment_row),
         payment_facts(payment),
+    )
+    .await?;
+    // The creator is credited in this same transaction, so a paid order without its ledger entry
+    // cannot exist: both commit, or neither does.
+    let creator_id = order.price_snapshot["creator_id"]
+        .as_str()
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .ok_or_else(|| sqlx::Error::Protocol("the order's snapshot names no creator".into()))?;
+    ledger::sale(
+        conn,
+        &ledger::Sale {
+            payment_id: payment_row,
+            order_id: order.id,
+            creator_id,
+            gross_paise: payment.amount_paise,
+            fee,
+        },
     )
     .await?;
     if order.status == OrderStatus::Expired && repo::reclaim_coupon(conn, order.id).await? {
@@ -415,6 +455,7 @@ pub async fn apply_failed(
                     currency: &payment.currency,
                     status: "failed",
                     raw_event: raw,
+                    fee_paise: None,
                 },
             )
             .await?
@@ -469,7 +510,7 @@ pub async fn apply_refund_processed(
                 return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
             }
             // Record it. `None` means this very refund was recorded before.
-            let Some(returned) = refunds::record_success(
+            let Some(recorded) = refunds::record_success(
                 conn,
                 order.id,
                 row.id,
@@ -484,6 +525,9 @@ pub async fn apply_refund_processed(
             else {
                 return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
             };
+            let returned = recorded.total_paise;
+            // The creator gives back what was returned (if this payment was ever credited to one).
+            ledger::refund(conn, row.id, recorded.refund_id, refund.amount_paise).await?;
             if returned < row.amount_paise {
                 repo::add_order_event(
                     conn,
@@ -557,6 +601,7 @@ pub async fn apply_refund_processed(
                     currency: &entity.currency,
                     status: "refunded",
                     raw_event: raw,
+                    fee_paise: None,
                 },
             )
             .await?;

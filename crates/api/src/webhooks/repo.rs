@@ -138,6 +138,7 @@ pub struct PaymentRow {
     pub order_id: Option<Uuid>,
     pub amount_paise: i64,
     pub status: String,
+    pub fee_paise: Option<i64>,
 }
 
 pub async fn payment_by_ref(
@@ -147,7 +148,7 @@ pub async fn payment_by_ref(
 ) -> Result<Option<PaymentRow>, sqlx::Error> {
     let suffix = if lock { " for update" } else { "" };
     sqlx::query_as(&format!(
-        "select id, order_id, amount_paise, status::text as status from payments \
+        "select id, order_id, amount_paise, status::text as status, fee_paise from payments \
          where provider_ref = $1{suffix}"
     ))
     .bind(provider_ref)
@@ -165,6 +166,8 @@ pub struct NewPayment<'a> {
     /// One of the `payment_status` values.
     pub status: &'a str,
     pub raw_event: &'a Value,
+    /// The provider's fee for this payment, when it reported one.
+    pub fee_paise: Option<i64>,
 }
 
 pub async fn insert_payment(
@@ -172,7 +175,7 @@ pub async fn insert_payment(
     payment: &NewPayment<'_>,
 ) -> Result<Uuid, sqlx::Error> {
     sqlx::query_scalar(
-        "insert into payments             (provider, provider_ref, order_id, amount_paise, currency, status, raw_event)          values ($1, $2, $3, $4, $5, $6::payment_status, $7) returning id",
+        "insert into payments             (provider, provider_ref, order_id, amount_paise, currency, status, raw_event, fee_paise)          values ($1, $2, $3, $4, $5, $6::payment_status, $7, $8) returning id",
     )
     .bind(payment.provider)
     .bind(payment.provider_ref)
@@ -181,8 +184,23 @@ pub async fn insert_payment(
     .bind(payment.currency)
     .bind(payment.status)
     .bind(payment.raw_event)
+    .bind(payment.fee_paise)
     .fetch_one(conn)
     .await
+}
+
+/// Remembers the fee the provider reported for a payment we first saw as something else.
+pub async fn set_payment_fee(
+    conn: &mut PgConnection,
+    id: Uuid,
+    fee_paise: Option<i64>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("update payments set fee_paise = coalesce($2, fee_paise) where id = $1")
+        .bind(id)
+        .bind(fee_paise)
+        .execute(conn)
+        .await?;
+    Ok(())
 }
 
 pub async fn set_payment_status(

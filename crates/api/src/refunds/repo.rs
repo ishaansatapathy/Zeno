@@ -274,6 +274,15 @@ pub async fn fail_reported(
     .await
 }
 
+/// A refund the provider has completed, now on record.
+#[derive(Debug, Clone, Copy)]
+pub struct Recorded {
+    /// Our row for it (made by us, or created now for a refund made in the provider's dashboard).
+    pub refund_id: Uuid,
+    /// Everything returned on the payment so far, this refund included.
+    pub total_paise: i64,
+}
+
 /// Records that the provider has returned `amount_paise` of this payment. Closes our own refund
 /// for it if there is one; otherwise it was made outside Zeno (the provider's dashboard) and is
 /// recorded as such. The provider's observed amount replaces our requested amount when they
@@ -286,7 +295,7 @@ pub async fn record_success(
     amount_paise: i64,
     provider_refund_id: &str,
     local_refund_id: Option<Uuid>,
-) -> Result<Option<i64>, sqlx::Error> {
+) -> Result<Option<Recorded>, sqlx::Error> {
     let known: Option<Uuid> = sqlx::query_scalar(
         "select id from refunds where provider_refund_id = $1 and status = 'succeeded'",
     )
@@ -313,20 +322,23 @@ pub async fn record_success(
     .bind(local_refund_id)
     .fetch_optional(&mut *conn)
     .await?;
-    if closed.is_none() {
-        sqlx::query(
-            "insert into refunds \
-                (order_id, payment_id, amount_paise, status, origin, provider_refund_id, \
-                 decided_at, completed_at) \
-             values ($1, $2, $3, 'succeeded', 'provider', $4, now(), now())",
-        )
-        .bind(order_id)
-        .bind(payment_id)
-        .bind(amount_paise)
-        .bind(provider_refund_id)
-        .execute(&mut *conn)
-        .await?;
-    }
+    let refund_id = match closed {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar(
+                "insert into refunds \
+                    (order_id, payment_id, amount_paise, status, origin, provider_refund_id, \
+                     decided_at, completed_at) \
+                 values ($1, $2, $3, 'succeeded', 'provider', $4, now(), now()) returning id",
+            )
+            .bind(order_id)
+            .bind(payment_id)
+            .bind(amount_paise)
+            .bind(provider_refund_id)
+            .fetch_one(&mut *conn)
+            .await?
+        }
+    };
     let total: i64 = sqlx::query_scalar(
         "select coalesce(sum(amount_paise), 0)::bigint from refunds \
          where payment_id = $1 and status = 'succeeded'",
@@ -334,7 +346,10 @@ pub async fn record_success(
     .bind(payment_id)
     .fetch_one(conn)
     .await?;
-    Ok(Some(total))
+    Ok(Some(Recorded {
+        refund_id,
+        total_paise: total,
+    }))
 }
 
 // ---- what a creator sees -------------------------------------------------------------------------

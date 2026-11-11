@@ -64,7 +64,14 @@ pub async fn handle(
             settlement::settled(Outcome::Malformed, None)
         }
         Ok(Event::PaymentCaptured(payment) | Event::OrderPaid(payment)) => {
-            settlement::apply_captured(&mut tx, provider, payment, &payload).await?
+            settlement::apply_captured(
+                &mut tx,
+                provider,
+                payment,
+                &payload,
+                state.config.ledger.fallback_fee_bps,
+            )
+            .await?
         }
         Ok(Event::PaymentFailed(payment)) => {
             settlement::apply_failed(&mut tx, provider, payment, &payload).await?

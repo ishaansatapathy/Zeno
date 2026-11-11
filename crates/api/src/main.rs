@@ -69,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
     zeno_api::auth::cleanup::spawn_periodic(state.clone());
 
     zeno_api::outbox::spawn_retry_loop(state.clone());
+    zeno_api::ledger::integrity::spawn_daily(state.clone());
     zeno_api::reconcile::spawn_periodic(
         state.clone(),
         std::time::Duration::from_secs(state.config.reconcile_interval_secs),

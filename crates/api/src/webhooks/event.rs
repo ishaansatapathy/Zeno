@@ -16,6 +16,8 @@ pub struct PaymentEntity {
     pub status: String,
     pub error_code: Option<String>,
     pub error_description: Option<String>,
+    /// The provider's fee for this payment, in paise, when the event says (captured payments do).
+    pub fee_paise: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +88,7 @@ fn payment(entity: &Value) -> Result<PaymentEntity, &'static str> {
         error_description: entity["error_description"]
             .as_str()
             .map(|s| s.chars().take(300).collect()),
+        fee_paise: entity["fee"].as_i64().filter(|fee| *fee >= 0),
     })
 }
 

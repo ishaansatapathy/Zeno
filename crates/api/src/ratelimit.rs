@@ -111,6 +111,30 @@ pub mod policies {
         rule: Rule::per_minute(20),
         fail: Fail::Closed,
     };
+    /// Looking at one's own earnings, entries and payouts, per account.
+    pub const EARNINGS_READ: Policy = Policy {
+        name: "earnings_read",
+        rule: Rule::per_minute(120),
+        fail: Fail::Open,
+    };
+    /// Downloading an earnings export, per account. Each is a large query.
+    pub const EARNINGS_EXPORT: Policy = Policy {
+        name: "earnings_export",
+        rule: Rule::per_minute(6),
+        fail: Fail::Closed,
+    };
+    /// Asking for or cancelling a payout, per account.
+    pub const PAYOUT_ACTION: Policy = Policy {
+        name: "payout_action",
+        rule: Rule::per_minute(10),
+        fail: Fail::Closed,
+    };
+    /// An admin acting on money (paying out, adjusting, checking the book), per account.
+    pub const ADMIN_ACTION: Policy = Policy {
+        name: "admin_action",
+        rule: Rule::per_minute(60),
+        fail: Fail::Closed,
+    };
     /// Reading one's own orders (a page polls while a payment settles), per account.
     pub const ORDER_READ: Policy = Policy {
         name: "order_read",

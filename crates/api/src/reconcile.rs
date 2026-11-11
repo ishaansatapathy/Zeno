@@ -248,6 +248,7 @@ fn entity(payment: &ProviderPayment, status: &str) -> PaymentEntity {
         status: status.to_owned(),
         error_code: None,
         error_description: None,
+        fee_paise: payment.fee_paise,
     }
 }
 

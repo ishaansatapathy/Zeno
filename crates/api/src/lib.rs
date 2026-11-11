@@ -10,11 +10,13 @@ pub mod error;
 pub mod health;
 pub mod images;
 pub mod invoices;
+pub mod ledger;
 pub mod mail;
 pub mod net;
 pub mod orders;
 pub mod outbox;
 pub mod payments;
+pub mod payouts;
 pub mod playback;
 pub mod profiles;
 pub mod progress;
@@ -98,6 +100,8 @@ pub fn build_app(state: AppState) -> Router {
         .nest("/v1/play", playback::routes::router())
         .merge(coupons::routes::router())
         .merge(invoices::routes::router())
+        .merge(ledger::routes::router())
+        .merge(payouts::routes::router())
         .merge(orders::routes::router())
         .merge(refunds::routes::router())
         .merge(webhooks::routes::router())
