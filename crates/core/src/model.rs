@@ -143,6 +143,17 @@ pub enum RefundStatus {
     Failed,
 }
 
+/// Where a payout is. A creator has at most one `requested` payout at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "payout_status", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum PayoutStatus {
+    /// Asked for and reserved in the ledger; waiting for an admin to send the money.
+    Requested,
+    Paid,
+    Cancelled,
+}
+
 /// How a coupon discounts: a whole percent off, or a fixed amount in paise off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "coupon_kind", rename_all = "snake_case")]
