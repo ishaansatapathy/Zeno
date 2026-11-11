@@ -166,6 +166,10 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `order_read` | account | 120 / minute | lets requests through |
 | `coupon_write` | account | 30 / minute | refuses (`503`) |
 | `coupon_try` | account | 20 / minute | refuses (`503`) |
+| `earnings_read` | account | 120 / minute | lets requests through |
+| `earnings_export` | account | 6 / minute | refuses (`503`) |
+| `payout_action` | account | 10 / minute | refuses (`503`) |
+| `admin_action` | account | 60 / minute | refuses (`503`) |
 | `webhook_rejected` | client address, forged webhooks only | 30 / minute | lets requests through |
 | `refund_request` | account | 5 / minute | refuses (`503`) |
 | `refund_action` | account | 20 / minute | refuses (`503`) |
@@ -273,6 +277,42 @@ Off by default (`INVOICES_ENABLED`), because how Zeno must invoice (GST) is a qu
 - **No tax.** There is no GSTIN, no tax split and no credit note; the data has an empty `tax` slot for later.
 - **The PDF** is written by a small built-in writer (`invoices/pdf.rs`) using the standard Helvetica fonts, with correct cross-reference offsets and every string escaped. Long text wraps onto additional pages instead of being cut. The standard fonts cover Latin-1 only; if the invoice contains text that they cannot display, the PDF endpoint returns `409 invoice_pdf_unsupported_text` instead of changing the buyer's name. The JSON form always has the exact text. Embedded fonts and text shaping are still needed for Unicode PDFs.
 
+### Earnings ledger and payouts
+
+Zeno collects every payment itself (decision D1) and takes no share, so the ledger answers one question to the paisa: *how much of the money in the provider's account belongs to whom?* It is a **double-entry book** (`crates/api/src/ledger`): every event that moves money is a *journal* whose *entries* add up to exactly zero, and the database checks that at commit, so a bug can move money between accounts but never create or lose any.
+
+| Event | Journal | Entries |
+| --- | --- | --- |
+| a sale of `G` with provider fee `F` | `sale`, `gateway_fee` | customers `-G`, creator `+G`; creator `-F`, gateway_fees `+F` |
+| the provider reports a fee after an estimate was posted | `gateway_fee_correction` | creator and gateway_fees exchange only the difference; the first journal remains unchanged |
+| a refund of `R` | `refund` | customers `+R`, creator `-R` |
+| a payout of `P` requested | `payout` | creator `-P`, payouts `+P` |
+| a payout cancelled | `payout_reversal` | the reverse |
+| an admin correction | `adjustment` | creator `±A`, adjustments `∓A` |
+
+- **Written with the sale.** The sale is posted inside the webhook transaction that records the payment, grants the enrollment and issues the invoice, so a paid order without its ledger entry cannot exist: all of it commits, or none of it does (a test breaks the ledger on purpose and watches the payment roll back with it). Reconciliation posts through the same code.
+- **Once per event.** A journal is unique per `(kind, source)`: the payment, the refund, the payout. A retried webhook, a reconciliation pass and a repeated request post the same thing once. A payment that is a duplicate of one already paid is never credited to the creator, and neither is a refund of one.
+- **Append-only.** Database triggers refuse any `UPDATE`, `DELETE` or `TRUNCATE` on journals, entries and adjustments, refuse a journal that does not add up, and refuse entries added to a journal after the transaction that made it. A mistake is corrected by a new journal.
+- **The fee** is what the provider reports for the payment (`fee`, tax on the fee included). When it does not say, or says something impossible (negative, or more than the payment), it is estimated at `GATEWAY_FEE_BPS` (default 236, about 2% plus GST on the fee) in integer paise, rounded half up. If a later verified payment event supplies the fee, one balanced correction journal replaces the estimate's effect. The creator bears the fee, including on a refunded sale: the provider does not return it.
+- **Pending and available.** Money from a sale still inside the refund window promised to the buyer (frozen in the order, counted from the moment of payment by the database clock) is *pending*: a refund could still take it back, so it cannot be paid out. `available = max(0, balance - pending)`. A refund that arrives after a payout leaves the balance negative; later sales pay that debt off before anything becomes available.
+
+| Endpoint | Who | Purpose |
+| --- | --- | --- |
+| `GET /v1/me/earnings` | a creator | Balance, pending, available, the smallest payout, lifetime sales, fees, refunds, adjustments and payouts (`balance = sales - fees - refunds + adjustments - paid_out`, always), and any payout waiting |
+| `GET /v1/me/earnings/entries` | a creator | Their entries, newest first, paged by `cursor` |
+| `GET /v1/me/earnings/export.csv` | a creator | A spreadsheet for `?from=&to=` (Indian calendar days; at most 366; default the last 90; at most 50,000 rows). Text cells that begin with `=`, `+`, `-` or `@` are defused, because a course title is chosen by a creator and an accountant opens the file |
+| `GET /v1/me/payouts`, `POST /v1/me/payouts` | a creator | Their payouts; ask for one (`{"amount_paise": n}`, at least `PAYOUT_MINIMUM_PAISE`, default Rs 500, at most what is available) |
+| `POST /v1/me/payouts/:id/cancel` | its creator | Withdraw an unpaid request; the money returns |
+| `GET /v1/admin/payouts` | an admin | The queue, oldest request first (`?status=`) |
+| `POST /v1/admin/payouts/:id/pay` | an admin | Record that the transfer was made: `{"method": "bank_transfer"|"upi"|"other", "reference": "UTR..."}`. The creator is emailed |
+| `POST /v1/admin/payouts/:id/cancel` | an admin | Decline, with a required reason; the money returns and the creator is told why |
+| `POST /v1/admin/ledger/adjustments` | an admin | `{creator_id, amount_paise (signed), reason}` for what the automatic postings cannot cover (a chargeback lost, a goodwill credit) |
+| `GET /v1/admin/ledger/integrity`, `POST /v1/admin/ledger/backfill` | an admin | Run the check now; post the sales and refunds that predate the ledger (safe to repeat) |
+
+**Payouts are reserved first.** A request moves the money out of the creator's balance in the same transaction that records it, under a lock on the creator, so however many requests race, no more is reserved than there was (twenty at once: one wins). A creator has one open request at a time. An admin then makes the bank transfer by hand and records how and the bank's reference; paying and cancelling at the same instant have exactly one winner.
+
+**The nightly check** (`ledger/integrity.rs`, also on demand) compares the book with everything else and should always come back empty: every journal balances, every payment that paid an order has its sale, the amount and the reported fee agree with the payment, what each creator is owed for an order equals payment minus fee minus succeeded refunds *as read from the payments and refunds tables*, every refund, payout and adjustment is in the book and the book has nothing they do not explain. Any finding is logged as an `ledger_integrity` alert.
+
 ## Authorization matrix
 
 `crates/api/tests/authz_matrix.rs` calls every route as an anonymous visitor, an enrolled student, a student who is not enrolled, the owning creator, another creator and an admin, each time against freshly created resources, and compares the status with a declared policy. A second test reads the router source and fails if any `.route(...)` is missing from the table, or the table lists a route that no longer exists. A new endpoint therefore cannot ship without someone deciding who may call it.
@@ -302,4 +342,4 @@ Other endpoints from the plan answer `501` until they are built. Not built yet: 
 
 ## Status
 
-Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout, the payment provider boundary and the webhooks that grant enrollment are done too. Reconciliation, refunds and dispute handling are done as well. Coupons and invoices (off until the tax side is advised on) are done too. Next in the plan: the creator earnings ledger.
+Stage 1: foundation, auth, video upload, the transcode pipeline, secure playback, versioned course/lesson authoring, enrollment, grants and student access control, and the public catalog with creator profiles and images, lesson progress, rate limits and the authorization matrix are done. Checkout, the payment provider boundary and the webhooks that grant enrollment are done too. Reconciliation, refunds and dispute handling are done as well. Coupons and invoices (off until the tax side is advised on) are done too. The creator earnings ledger and payouts are done too. Next in the plan: a week of breaking the payment path on purpose.
