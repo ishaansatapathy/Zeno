@@ -11,42 +11,47 @@ import { SiteButton } from "./SiteButton";
 import { Wordmark } from "./Wordmark";
 
 const anchors = [
-  ["#how", "howItWorks"],
-  ["#money", "money"],
-  ["#live", "live"],
-  ["#students", "students"],
+  ["#how", "how"],
+  ["#who", "who"],
+  ["#product", "product"],
+  ["#guarantees", "guarantees"],
 ] as const;
 
-/** Transparent over the hero; a paper bar with a hairline once the page moves. */
+/** The mark on the left, a pill of links in the middle, the status and the one button on the right. */
 export function SiteNav() {
   const t = useTranslations("site.nav");
   const { scrollY } = useScroll();
   const [lifted, setLifted] = useState(false);
-  useMotionValueEvent(scrollY, "change", (y) => setLifted(y > 12));
+  useMotionValueEvent(scrollY, "change", (y) => setLifted(y > 24));
 
   return (
-    <header
-      className={cn(
-        "sticky top-0 z-40 transition-[background-color,border-color] duration-300",
-        lifted ? "border-b border-border bg-bg/90 backdrop-blur-[6px]" : "border-b border-transparent",
-      )}
-    >
+    <header className="fixed inset-x-0 top-0 z-40">
+      <div
+        className={cn(
+          "absolute inset-0 -z-10 border-b transition-[background-color,border-color,backdrop-filter] duration-500",
+          lifted ? "border-white/[0.06] bg-[#050505]/75 backdrop-blur-xl" : "border-transparent",
+        )}
+      />
       <div className="mx-auto flex h-[4.5rem] max-w-page items-center justify-between gap-6 px-5 sm:px-8">
         <Link href="/" aria-label={t("home")} className="text-text">
           <Wordmark />
         </Link>
-        <nav aria-label="Main" className="hidden items-center gap-8 lg:flex">
+        <nav aria-label="Main" className="hidden items-center rounded-full border border-white/10 bg-white/[0.03] p-1 lg:flex">
           {anchors.map(([href, key]) => (
-            <a key={href} href={href} className="text-[0.92rem] text-text-muted transition-colors hover:text-text">
+            <a key={href} href={href} className="rounded-full px-4 py-1.5 text-[0.88rem] text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text">
               {t(key)}
             </a>
           ))}
         </nav>
-        <div className="flex items-center gap-2 sm:gap-4">
-          <Link href="/sign-in" className="hidden text-[0.92rem] text-text-muted transition-colors hover:text-text sm:inline">
+        <div className="flex items-center gap-3">
+          <span className="hidden items-center gap-2 rounded-full border border-white/10 px-3 py-1.5 font-mono text-[0.72rem] text-text-muted md:inline-flex">
+            <span className="h-1.5 w-1.5 rounded-full bg-success shadow-[0_0_8px_rgb(var(--success))]" />
+            {t("status")}
+          </span>
+          <Link href="/sign-in" className="hidden text-[0.88rem] text-text-muted transition-colors hover:text-text sm:inline">
             {t("signIn")}
           </Link>
-          <SiteButton href="/sign-up" arrow className="h-10 px-5 text-[0.9rem]">
+          <SiteButton href="/sign-up" size="sm">
             {t("start")}
           </SiteButton>
         </div>
