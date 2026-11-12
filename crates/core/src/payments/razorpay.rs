@@ -505,6 +505,23 @@ mod tests {
     }
 
     #[test]
+    fn a_fee_the_provider_reports_is_kept_only_if_it_makes_sense() {
+        let payment = |fee: Value| {
+            let mut value = json!({
+                "id": "pay_1", "order_id": "order_1", "amount": 49900, "currency": "INR",
+                "status": "captured"
+            });
+            value["fee"] = fee;
+            parse_payment(&value).unwrap().fee_paise
+        };
+        assert_eq!(payment(json!(1180)), Some(1180));
+        assert_eq!(payment(json!(0)), Some(0));
+        assert_eq!(payment(json!(-1)), None);
+        assert_eq!(payment(json!("1180")), None);
+        assert_eq!(payment(json!(null)), None);
+    }
+
+    #[test]
     fn long_or_empty_receipts_never_leave_the_process() {
         assert!(check_receipt("").is_err());
         assert!(check_receipt(&"a".repeat(41)).is_err());

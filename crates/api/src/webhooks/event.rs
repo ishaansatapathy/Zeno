@@ -225,6 +225,36 @@ mod tests {
     }
 
     #[test]
+    fn a_fee_is_only_believed_when_it_is_a_whole_non_negative_number() {
+        for (fee, want) in [
+            (json!(1_180), Some(1_180)),
+            (json!(0), Some(0)),
+            (json!(-1), None),
+            (json!("1180"), None),
+            (json!(11.8), None),
+            (json!(null), None),
+        ] {
+            let mut payment = payment_json("captured");
+            payment["fee"] = fee.clone();
+            let parsed = parse(&body(
+                "payment.captured",
+                json!({"payment": {"entity": payment}}),
+            ));
+            let Ok(Event::PaymentCaptured(p)) = parsed.event else {
+                panic!("{:?}", parsed.event);
+            };
+            assert_eq!(p.fee_paise, want, "{fee}");
+        }
+    }
+
+    #[test]
+    fn an_event_name_is_a_name_not_a_document() {
+        let named = |name: &str| parse(&body(name, json!({}))).event;
+        assert_eq!(named(&"e".repeat(100)), Ok(Event::Other));
+        assert_eq!(named(&"e".repeat(101)), Err("no event name"));
+    }
+
+    #[test]
     fn refunds_are_read_with_or_without_their_payment() {
         let refund =
             json!({"id": "rfnd_1", "payment_id": "pay_1", "amount": 49900, "status": "processed"});

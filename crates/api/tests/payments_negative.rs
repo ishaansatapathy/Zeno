@@ -5,6 +5,8 @@
 
 mod common;
 
+use std::time::Duration;
+
 use axum::http::{Method, StatusCode};
 use common::shop::*;
 use common::*;
@@ -466,6 +468,148 @@ db_test! {
 
         // 30,000 + 30,000 is past 49,900, so whichever got the payment first is the only one.
         assert_eq!(tries.iter().filter(|t| t.is_ok()).count(), 1, "{tries:?}");
+        assert_eq!(succeeded_refunds(&shop).await, 30_000);
+    }
+}
+
+// ---- gaps the mutation pass found --------------------------------------------------------------------
+
+db_test! {
+    async fn a_second_refund_of_a_payment_already_returned_in_full_is_flagged_not_swallowed(pool: PgPool) {
+        let shop = shop(pool).await;
+        pay(&shop, "evt_p", "pay_1").await;
+
+        let first = deliver(&shop, "evt_1", refund_processed("rfnd_1", "pay_1", PRICE, None)).await;
+        assert_eq!(outcome(&first), "refund_applied");
+        // A different refund of the same payment cannot exist at the provider; if one is reported,
+        // a person is told, not the event quietly filed.
+        let second = deliver(&shop, "evt_2", refund_processed("rfnd_2", "pay_1", PRICE, None)).await;
+
+        assert_eq!((second.status, outcome(&second)), (StatusCode::OK, "refund_exceeds_payment"), "{:?}", second.body);
+        assert_eq!(succeeded_refunds(&shop).await, PRICE);
+        assert_eq!(n(&shop, "select count(*) from webhook_events where outcome = 'refund_exceeds_payment' and needs_review").await, 1);
+        integrity_is_clean(&shop).await;
+    }
+}
+
+db_test! {
+    async fn the_same_refund_sent_again_under_a_new_event_id_changes_nothing(pool: PgPool) {
+        let shop = shop(pool).await;
+        pay(&shop, "evt_p", "pay_1").await;
+
+        let partial = deliver(&shop, "evt_1", refund_processed("rfnd_1", "pay_1", 30_000, None)).await;
+        assert_eq!(outcome(&partial), "refund_partial");
+        let after_partial = creator_balance(&shop).await;
+        let again = deliver(&shop, "evt_2", refund_processed("rfnd_1", "pay_1", 30_000, None)).await;
+        assert_eq!((again.status, outcome(&again)), (StatusCode::OK, "already_refunded"), "{:?}", again.body);
+        assert_eq!(succeeded_refunds(&shop).await, 30_000);
+        assert_eq!(creator_balance(&shop).await, after_partial, "the creator was charged twice");
+
+        let rest = deliver(&shop, "evt_3", refund_processed("rfnd_2", "pay_1", PRICE - 30_000, None)).await;
+        assert_eq!(outcome(&rest), "refund_applied");
+        let after_full = creator_balance(&shop).await;
+        let again = deliver(&shop, "evt_4", refund_processed("rfnd_2", "pay_1", PRICE - 30_000, None)).await;
+        assert_eq!(outcome(&again), "already_refunded");
+        assert_eq!(succeeded_refunds(&shop).await, PRICE);
+        assert_eq!(creator_balance(&shop).await, after_full);
+        assert_eq!(n(&shop, "select count(*) from ledger_journals where kind = 'refund'").await, 2);
+        integrity_is_clean(&shop).await;
+    }
+}
+
+db_test! {
+    async fn a_refund_that_arrives_before_its_payment_must_match_it(pool: PgPool) {
+        let shop = shop(pool).await;
+        let usd = {
+            let mut entity = payment("pay_x", &shop.remote, PRICE, "captured");
+            entity["currency"] = json!("USD");
+            entity
+        };
+        let odd = [
+            ("a payment for another amount", payment("pay_x", &shop.remote, PRICE - 1_000, "captured"), PRICE - 1_000),
+            ("a refund of only part of it", payment("pay_x", &shop.remote, PRICE, "captured"), 1_000),
+            ("a payment in another currency", usd, PRICE),
+        ];
+        for (i, (what, entity, amount)) in odd.into_iter().enumerate() {
+            let res = deliver(&shop, &format!("evt_{i}"), refund_processed(&format!("rfnd_{i}"), "pay_x", amount, Some(entity))).await;
+            assert_eq!(outcome(&res), "refund_unknown_payment", "{what}: {:?}", res.body);
+        }
+        assert_eq!(n(&shop, "select count(*) from payments").await, 0);
+        assert_eq!(n(&shop, "select count(*) from refunds").await, 0);
+        assert_eq!(n(&shop, "select count(*) from ledger_journals").await, 0);
+        assert_eq!(order_status(&shop).await, "pending");
+
+        // Exactly what the order was is what is accepted.
+        let exact = payment("pay_x", &shop.remote, PRICE, "captured");
+        let ok = deliver(&shop, "evt_ok", refund_processed("rfnd_ok", "pay_x", PRICE, Some(exact))).await;
+        assert_eq!(outcome(&ok), "refund_before_payment", "{:?}", ok.body);
+    }
+}
+
+db_test! {
+    async fn a_refunded_order_does_not_take_a_second_payment(pool: PgPool) {
+        let shop = shop(pool).await;
+        pay(&shop, "evt_p", "pay_1").await;
+        let refunded = deliver(&shop, "evt_r", refund_processed("rfnd_1", "pay_1", PRICE, None)).await;
+        assert_eq!(outcome(&refunded), "refund_applied");
+        assert_eq!(order_status(&shop).await, "refunded");
+
+        let again = deliver(&shop, "evt_p2", captured("pay_2", &shop.remote, PRICE)).await;
+
+        assert_eq!((again.status, outcome(&again)), (StatusCode::OK, "duplicate_payment"), "{:?}", again.body);
+        assert_eq!(text(&shop, "select status::text from payments where provider_ref = 'pay_2'").await, "duplicate");
+        assert_eq!(order_status(&shop).await, "refunded");
+        assert_eq!(access(&shop).await, "access_revoked", "money for a refunded order buys nothing");
+        assert_eq!(n(&shop, "select count(*) from ledger_journals where kind = 'sale'").await, 1);
+        integrity_is_clean(&shop).await;
+    }
+}
+
+db_test! {
+    async fn access_that_the_system_ended_comes_back_when_the_buyer_pays(pool: PgPool) {
+        let shop = shop(pool).await;
+        // Access that lapsed by itself (not taken away by a person), then a payment for it.
+        sqlx::query(
+            "insert into enrollments (user_id, course_id, source, revoked_at, revocation_kind, revoke_reason) \
+             values ($1, $2, 'grant', now(), 'system', 'Expired')",
+        )
+        .bind(shop.buyer_id)
+        .bind(shop.course)
+        .execute(&shop.pool)
+        .await
+        .unwrap();
+        assert_eq!(access(&shop).await, "access_revoked");
+
+        let paid = pay(&shop, "evt_p", "pay_1").await;
+
+        assert_eq!((paid.status, outcome(&paid)), (StatusCode::OK, "enrolled"), "{:?}", paid.body);
+        assert_eq!(access(&shop).await, "allowed");
+        assert_eq!(n(&shop, "select count(*) from enrollments where revoked_at is null").await, 1);
+        assert_eq!(n(&shop, "select count(*) from enrollments").await, 1, "the same enrollment, brought back");
+    }
+}
+
+db_test! {
+    async fn two_refunds_of_one_payment_take_turns_inside_the_database(pool: PgPool) {
+        let shop = shop(pool).await;
+        pay(&shop, "evt_p", "pay_1").await;
+        let payment = payment_id(&shop, "pay_1").await;
+        const INSERT: &str = "insert into refunds (order_id, payment_id, amount_paise, status, origin, completed_at) \
+                              values ($1, $2, 30000, 'succeeded', 'provider', now())";
+
+        // One refund is mid-way: written, not yet committed.
+        let mut first = shop.pool.begin().await.unwrap();
+        sqlx::query(INSERT).bind(shop.order).bind(payment).execute(&mut *first).await.unwrap();
+
+        // The other must wait for it, not run past it on what it can see (nothing yet).
+        let (pool, order) = (shop.pool.clone(), shop.order);
+        let mut second = tokio::spawn(async move { sqlx::query(INSERT).bind(order).bind(payment).execute(&pool).await });
+        let early = tokio::time::timeout(Duration::from_millis(500), &mut second).await;
+        assert!(early.is_err(), "the second refund did not wait for the first");
+
+        first.commit().await.unwrap();
+        let second = second.await.unwrap();
+        assert!(second.is_err(), "30,000 and 30,000 are more than a payment of 49,900");
         assert_eq!(succeeded_refunds(&shop).await, 30_000);
     }
 }
