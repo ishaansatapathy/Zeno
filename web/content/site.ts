@@ -61,118 +61,106 @@ export const sides = {
   foot: { left: "One platform", right: "Upload · Encode · Lock · Pay out" },
 } as const;
 
-export type Stage = { name: string; time: string };
 export type Step = {
   id: string;
   n: string;
   name: string;
-  blurb: string;
-  log: string;
-  stages: Stage[];
-  claimLabel: string;
   claim: Title;
-  status: string;
-  side: { k: string; v: string };
-  facts: { k: string; v: string; accent?: boolean }[];
+  desc: string;
+  /** The step's own numbers, as the platform runs them. */
+  stats: { k: string; v: string }[];
 };
 
+export type FlowNode = {
+  id: string;
+  /** The step that brings this node onto the canvas (0-based). */
+  step: number;
+  icon: "upload" | "layers" | "lock" | "card" | "ledger" | "bank";
+  meta: string;
+  title: string;
+  line: string;
+  chip: string;
+  /** Position and width on a 1000 by 620 canvas; every node is 150 tall. */
+  x: number;
+  y: number;
+  w: number;
+};
+
+export type FlowEdge = { from: string; to: string; step: number; badge: string };
+
+/**
+ * One lesson's way through Zeno, drawn as a flow: what each step does, and the nodes and links it
+ * adds to the canvas. The canvas is a simulation; the limits and numbers are the platform's own.
+ */
 export const bench = {
-  label: "See it work",
-  title: ["One lesson,", "four steps."] as Title,
-  aside: "Pick a step and watch what Zeno does with a single lesson. It is a simulation; the limits and numbers are the ones the platform runs with.",
-  index: "Step index",
+  label: "One lesson, end to end",
+  canvas: "Lesson canvas",
+  canvasMeta: "4 steps · 1 lesson",
   steps: [
     {
       id: "upload",
       n: "01",
       name: "Upload",
-      blurb: "Straight from the browser, in parts.",
-      log: "upload lesson-07.mp4  size 1.24 GB  parts 24",
-      stages: [
-        { name: "Signed", time: "0.02s" },
-        { name: "Parts 24/24", time: "41.6s" },
-        { name: "Checked", time: "0.31s" },
-      ],
-      claimLabel: "Upload · resumable",
-      claim: ["Lesson 07", "uploaded."],
-      status: "Ready to encode",
-      side: { k: "Retried", v: "part 13" },
-      facts: [
+      claim: ["Up from the browser,", "in parts."],
+      desc: "A dropped connection costs one part, not the whole file, and the upload picks up where it stopped. Up to 10 GB, up to 6 hours.",
+      stats: [
         { k: "Up to", v: "10 GB" },
-        { k: "Length", v: "6 hours" },
-        { k: "Dropped connection", v: "costs one part", accent: true },
-        { k: "Original", v: "deleted after 7 days" },
+        { k: "Length", v: "6 h" },
+        { k: "A drop costs", v: "1 part" },
       ],
     },
     {
       id: "encode",
       n: "02",
       name: "Encode",
-      blurb: "Five qualities from one file.",
-      log: "encode lesson-07  ladder 144p → 720p  never upscaled",
-      stages: [
-        { name: "144p", time: "0.9s" },
-        { name: "240p", time: "1.4s" },
-        { name: "360p", time: "2.2s" },
-        { name: "480p", time: "3.1s" },
-        { name: "720p", time: "5.8s" },
-      ],
-      claimLabel: "Encode · adaptive",
-      claim: ["Five", "qualities."],
-      status: "Adaptive stream ready",
-      side: { k: "Keyframes", v: "aligned" },
-      facts: [
+      claim: ["One file,", "five qualities."],
+      desc: "144p to 720p, never upscaled, with audio alone to fall back on, so a slow connection gets a picture instead of a spinner.",
+      stats: [
+        { k: "Qualities", v: "5" },
         { k: "Lowest", v: "144p" },
         { k: "Highest", v: "720p" },
-        { k: "Slow connection", v: "gets a picture", accent: true },
-        { k: "Fallback", v: "audio only" },
       ],
     },
     {
       id: "lock",
       n: "03",
       name: "Lock",
-      blurb: "Every segment encrypted.",
-      log: "lock lesson-07  aes-128  key wrapped, never stored plain",
-      stages: [
-        { name: "Key made", time: "0.01s" },
-        { name: "Segments", time: "1.9s" },
-        { name: "Key wrapped", time: "0.01s" },
-      ],
-      claimLabel: "Lock · per segment",
-      claim: ["Every segment", "locked."],
-      status: "Keys for paid students only",
-      side: { k: "Screens", v: "2 at once" },
-      facts: [
+      claim: ["Every segment,", "sealed."],
+      desc: "Each few seconds is encrypted on its own. Keys come only from the key server, and only for a student who paid.",
+      stats: [
         { k: "Cipher", v: "AES-128" },
-        { k: "Pass", v: "signed, short-lived" },
-        { k: "Downloaded file", v: "is noise", accent: true },
-        { k: "Idle screen", v: "frees its slot" },
+        { k: "Screens", v: "2" },
+        { k: "Keys for", v: "paid" },
       ],
     },
     {
       id: "paid",
       n: "04",
       name: "Get paid",
-      blurb: "Counted once, paid out.",
-      log: "payment.captured  received ×3  same payment",
-      stages: [
-        { name: "Received ×3", time: "0.00s" },
-        { name: "Applied ×1", time: "0.04s" },
-        { name: "Posted", time: "0.01s" },
-      ],
-      claimLabel: "Ledger · double entry",
-      claim: ["Applied", "once."],
-      status: "Ledger balanced",
-      side: { k: "Off by", v: "0.00" },
-      facts: [
-        { k: "Entries", v: "two per sale" },
-        { k: "Fee", v: "as the provider reports" },
-        { k: "Refund", v: "never more than paid", accent: true },
-        { k: "Payout", v: "to your bank" },
+      claim: ["Counted once,", "paid out."],
+      desc: "A payment reported three times is applied once, written twice in a ledger that has to balance, and paid out to your bank.",
+      stats: [
+        { k: "Applied", v: "1×" },
+        { k: "Entries", v: "2" },
+        { k: "Off by", v: "0.00" },
       ],
     },
   ] satisfies Step[],
+  nodes: [
+    { id: "upload", step: 0, icon: "upload", meta: "Upload · resumable", title: "lesson-07.mp4", line: "1.24 GB in 24 parts", chip: "Part 13 retried", x: 80, y: 235, w: 230 },
+    { id: "encode", step: 1, icon: "layers", meta: "Encode · 5 qualities", title: "144p → 720p", line: "Never upscaled · audio fallback", chip: "Ladder ready", x: 395, y: 50, w: 240 },
+    { id: "lock", step: 2, icon: "lock", meta: "Lock · AES-128", title: "24 segments sealed", line: "Key wrapped, never stored plain", chip: "Keys for paid students", x: 395, y: 355, w: 240 },
+    { id: "checkout", step: 3, icon: "card", meta: "Checkout · payment", title: "Received ×3, applied once", line: "Same payment, counted one time", chip: "Captured", x: 725, y: 25, w: 250 },
+    { id: "ledger", step: 3, icon: "ledger", meta: "Ledger · double entry", title: "Sale, fee and share", line: "Every entry written twice", chip: "Off by 0.00", x: 725, y: 230, w: 250 },
+    { id: "payout", step: 3, icon: "bank", meta: "Payout · your bank", title: "Ready to pay out", line: "Once the refund window closes", chip: "Ready to pay out", x: 725, y: 435, w: 250 },
+  ] satisfies FlowNode[],
+  edges: [
+    { from: "upload", to: "encode", step: 1, badge: "1" },
+    { from: "encode", to: "lock", step: 2, badge: "2" },
+    { from: "lock", to: "checkout", step: 3, badge: "3" },
+    { from: "lock", to: "ledger", step: 3, badge: "4" },
+    { from: "lock", to: "payout", step: 3, badge: "5" },
+  ] satisfies FlowEdge[],
 } as const;
 
 export const pillars = {

@@ -27,12 +27,21 @@ describe("site content", () => {
     }
   });
 
-  it("walks one lesson through four distinct steps, each with four facts", () => {
+  it("walks one lesson through four distinct steps, each adding to the canvas", () => {
     const ids = site.bench.steps.map((s) => s.id);
     expect(new Set(ids).size).toBe(4);
-    for (const s of site.bench.steps) {
-      expect(s.facts).toHaveLength(4);
-      expect(s.stages.length).toBeGreaterThan(0);
+    site.bench.steps.forEach((_, i) => {
+      expect(site.bench.nodes.some((n) => n.step === i)).toBe(true);
+    });
+  });
+
+  it("only links nodes that exist, and never before both ends are on the canvas", () => {
+    const nodes = new Map<string, { step: number }>(site.bench.nodes.map((n) => [n.id, n]));
+    for (const e of site.bench.edges) {
+      const from = nodes.get(e.from);
+      const to = nodes.get(e.to);
+      expect(from && to, `${e.from} → ${e.to}`).toBeTruthy();
+      expect(e.step).toBeGreaterThanOrEqual(Math.max(from!.step, to!.step));
     }
   });
 
