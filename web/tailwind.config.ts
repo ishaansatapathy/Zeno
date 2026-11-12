@@ -1,36 +1,37 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Black, paper-white, and one signal orange for whatever is live, active or wanted next. Grey is
- * only ever for secondary text and hairlines. Nothing else.
+ * Graphite, nearly monochrome. Text is off-white; the second half of a headline steps down to
+ * gray. One cool accent, frost, marks only what is live or locked. A single light section, paper
+ * on bone, breaks the dark once.
  */
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        ink: "#050505",
-        panel: "#0c0c0c",
-        line: "#1f1f1f",
-        "line-hi": "#333333",
-        paper: "#f2efe9",
-        mute: "#8f8f8f",
-        signal: { DEFAULT: "#ff5b14", deep: "#1a0d06" },
+        ink: "#09090b",
+        panel: "#0f1012",
+        raise: "#16171a",
+        line: "#1d1e21",
+        "line-hi": "#2b2d31",
+        paper: "#ededed",
+        mute: "#8a8d94",
+        frost: { DEFAULT: "#b4c2d6", deep: "#7f95b6" },
+        bone: { DEFAULT: "#ececea", line: "#d6d6d2", mute: "#55585e" },
       },
       fontFamily: {
-        serif: ["var(--font-serif)", "Georgia", "serif"],
         sans: ["var(--font-sans)", "system-ui", "sans-serif"],
-        cond: ["var(--font-cond)", "Impact", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
-      maxWidth: { page: "90rem" },
+      maxWidth: { page: "80rem" },
       keyframes: {
         marquee: { from: { transform: "translateX(0)" }, to: { transform: "translateX(-50%)" } },
-        blink: { "50%": { opacity: "0" } },
+        blink: { "50%": { opacity: "0.2" } },
       },
       animation: {
-        marquee: "marquee 40s linear infinite",
-        blink: "blink 1.1s steps(1) infinite",
+        marquee: "marquee 60s linear infinite",
+        blink: "blink 1.4s ease-in-out infinite",
       },
     },
   },

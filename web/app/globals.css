@@ -5,21 +5,18 @@
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
-    background: #050505;
+    background: #09090b;
   }
   body {
     @apply bg-ink font-sans text-paper antialiased;
-    /* The drafting grid everything sits on: a dot every 28px. */
-    background-image: radial-gradient(#262626 1px, transparent 1.3px);
-    background-size: 28px 28px;
   }
   :focus-visible {
-    outline: 2px solid #ff5b14;
+    outline: 2px solid #b4c2d6;
     outline-offset: 2px;
   }
   ::selection {
-    background: #ff5b14;
-    color: #050505;
+    background: #b4c2d6;
+    color: #09090b;
   }
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -34,65 +31,38 @@
 }
 
 @layer components {
-  /* Big statements: a book serif, set tight. The accent is its italic. */
+  /* Headlines: the sans at display sizes, medium weight, set tight. */
   .display {
-    @apply font-serif font-normal;
-    letter-spacing: -0.022em;
+    @apply font-sans font-medium;
+    letter-spacing: -0.038em;
     line-height: 1.02;
   }
   /* Small labels: monospaced capitals, tracked out. */
   .label {
     @apply font-mono text-[0.6875rem] font-medium uppercase text-mute;
-    letter-spacing: 0.14em;
-  }
-  /* Navigation and buttons: the sans in tracked capitals. */
-  .caps {
-    @apply font-sans text-[0.6875rem] font-semibold uppercase;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.12em;
   }
 
-  /* Hover fills a box from the bottom up with signal orange, and its text turns black. */
-  .fillup {
-    position: relative;
-    isolation: isolate;
-    overflow: hidden;
-    transition: color 0.35s ease;
+  /* Buttons: small, quiet, sentence case. */
+  .btn {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-[0.875rem] font-medium transition-[background-color,color,border-color] duration-200;
   }
-  .fillup::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    background: #ff5b14;
-    transform: scaleY(0);
-    transform-origin: bottom;
-    transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  .btn-solid {
+    @apply bg-paper text-ink hover:bg-white;
   }
-  .fillup:hover,
-  .fillup:focus-visible {
-    color: #050505;
+  .btn-line {
+    @apply border border-line-hi text-paper hover:border-mute hover:bg-raise;
   }
-  .fillup:hover::before,
-  .fillup:focus-visible::before {
-    transform: scaleY(1);
+  .btn-dark {
+    @apply bg-ink text-bone hover:bg-[#1b1c1f];
   }
-  /* The same, filling with paper: for boxes that are already orange. */
-  .fillup-paper::before {
-    background: #f2efe9;
-  }
-
-  /* The same, filling with black: for outlined boxes on an orange ground. */
-  .fillup-ink::before {
-    background: #050505;
-  }
-  .fillup-ink:hover,
-  .fillup-ink:focus-visible {
-    color: #ff5b14;
+  .btn-line-dark {
+    @apply border border-ink/25 text-ink hover:border-ink/60 hover:bg-ink/[0.04];
   }
 
   /* The hero's entrance. Plain CSS, so it starts with the first paint, before any script. */
   .rise {
-    animation: rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation: rise 1s cubic-bezier(0.22, 1, 0.36, 1) both;
     animation-delay: var(--delay, 0s);
   }
 }
@@ -100,8 +70,8 @@
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(0.35em);
-    filter: blur(6px);
+    transform: translateY(14px);
+    filter: blur(8px);
   }
   to {
     opacity: 1;
