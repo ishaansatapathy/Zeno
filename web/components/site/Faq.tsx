@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 
 import { faq } from "@/content/site";
 
-import { Label } from "./frame";
+import { Container, Label, Title } from "./frame";
 
 function Item({ q, a, open, onToggle }: { q: string; a: string; open: boolean; onToggle: () => void }) {
   const id = useId();
@@ -16,42 +16,41 @@ function Item({ q, a, open, onToggle }: { q: string; a: string; open: boolean; o
           aria-expanded={open}
           aria-controls={id}
           onClick={onToggle}
-          className="group flex w-full items-center justify-between gap-6 px-1 py-6 text-left transition-colors hover:text-signal"
+          className="flex w-full items-center justify-between gap-6 py-6 text-left text-[1.05rem] font-medium tracking-[-0.01em] transition-colors hover:text-white"
         >
-          <span className="display text-[clamp(1.15rem,1.7vw,1.45rem)]">{q}</span>
-          <span aria-hidden="true" className={`font-mono text-lg transition-transform duration-300 ${open ? "rotate-45 text-signal" : "text-mute"}`}>
-            +
+          {q}
+          <span aria-hidden="true" className="relative size-3 shrink-0 text-mute">
+            <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-current" />
+            <span className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-current transition-transform duration-300 ${open ? "scale-y-0" : ""}`} />
           </span>
         </button>
       </h3>
       <div id={id} className={`grid transition-[grid-template-rows] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
         <div className="overflow-hidden" inert={!open}>
-          <p className="max-w-[38rem] px-1 pb-7 text-[0.95rem] leading-relaxed text-mute">{a}</p>
+          <p className="max-w-[38rem] pb-7 text-[0.95rem] leading-relaxed text-mute">{a}</p>
         </div>
       </div>
     </li>
   );
 }
 
-/** One giant word on the left, the questions on the right. */
+/** The title and a note on the left, the questions on the right. */
 export function Faq() {
   const [open, setOpen] = useState<number | null>(0);
   return (
-    <section id="faq" aria-labelledby="faq-title" className="mx-auto max-w-page scroll-mt-12 px-4 py-28 sm:px-6 lg:px-10 lg:py-36">
-      <div className="grid border-t border-line lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <div className="border-line pb-10 pt-8 lg:border-r lg:pr-12">
-          <Label>{faq.label}</Label>
-          <h2 id="faq-title" className="mt-6 font-cond text-[clamp(7rem,17vw,15rem)] uppercase leading-[0.8] tracking-[-0.01em]">
-            {faq.word}
-          </h2>
-          <p className="mt-8 max-w-[22rem] text-[0.95rem] leading-relaxed text-mute">{faq.aside}</p>
+    <section id="faq" aria-labelledby="faq-title" className="scroll-mt-14 border-t border-line py-28 lg:py-36">
+      <Container className="grid gap-12 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-20">
+        <div>
+          <Label n="06">{faq.label}</Label>
+          <Title id="faq-title" text={faq.title} className="mt-6 text-[clamp(2.4rem,5vw,4.6rem)]" />
+          <p className="mt-6 max-w-[22rem] text-[0.95rem] leading-relaxed text-mute">{faq.aside}</p>
         </div>
-        <ul className="lg:pl-12">
+        <ul className="border-t border-line">
           {faq.items.map((it, i) => (
             <Item key={it.q} q={it.q} a={it.a} open={open === i} onToggle={() => setOpen(open === i ? null : i)} />
           ))}
         </ul>
-      </div>
+      </Container>
     </section>
   );
 }

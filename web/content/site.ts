@@ -245,7 +245,7 @@ export const promises = {
 
 export const faq = {
   label: "Questions",
-  word: "FAQ",
+  title: ["Asked,", "answered."] as Title,
   aside: "Short, honest answers. If one of them is not good enough for you, better to know now.",
   items: [
     {
