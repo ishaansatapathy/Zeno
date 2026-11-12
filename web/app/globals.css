@@ -73,6 +73,49 @@
     animation-delay: var(--delay, 0s);
   }
 
+  /* A brick wall, barely there: the surface everything else is sprayed on. */
+  .bricks {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='52'%3E%3Cg fill='none' stroke='%23f1e6cf' stroke-opacity='0.07' stroke-width='1.5'%3E%3Cpath d='M0 .75h128M0 26.75h128M.75 0v26M64.75 0v26M32.75 26v26M96.75 26v26'/%3E%3C/g%3E%3C/svg%3E");
+  }
+
+  /* A giant tag on the wall: just the outline of the letters, the fill long faded. */
+  .wall-tag {
+    @apply font-tag font-normal normal-case not-italic;
+    color: transparent;
+    -webkit-text-stroke: 2px rgba(185, 162, 255, 0.24);
+    line-height: 0.8;
+  }
+
+  /* Block letters, the way a piece is painted: yellow fill, black outline, violet extrusion. */
+  .piece {
+    @apply font-cond font-extrabold italic;
+    color: #ffc21a;
+    -webkit-text-stroke: 3px #0c0a0f;
+    paint-order: stroke fill;
+    letter-spacing: 0.01em;
+    line-height: 0.85;
+    text-shadow:
+      1px 1px 0 #5b34c9,
+      2px 2px 0 #5b34c9,
+      3px 3px 0 #5b34c9,
+      4px 4px 0 #5b34c9,
+      5px 5px 0 #5b34c9,
+      6px 6px 0 #5b34c9,
+      7px 7px 0 #0c0a0f,
+      8px 8px 0 #0c0a0f;
+  }
+
+  /* Masking tape: off-white, a little see-through, torn at both ends. */
+  .tape {
+    width: 5.5rem;
+    height: 1.6rem;
+    background:
+      repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.07) 0 2px, transparent 2px 7px),
+      rgba(232, 220, 194, 0.82);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    clip-path: polygon(3% 0, 97% 0, 100% 16%, 96.5% 34%, 100% 52%, 97% 72%, 100% 100%, 3% 100%, 0 84%, 3.5% 66%, 0 48%, 3% 28%);
+  }
+
   /* A card from the deck: coal, a hairline cream edge, square-ish corners. */
   .slab {
     @apply rounded-[14px] border border-cream/25 bg-coal;
