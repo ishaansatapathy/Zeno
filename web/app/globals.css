@@ -100,23 +100,6 @@
     background: #f6f8fa;
   }
 
-  /* Polished chrome: bands of light and shade across a bright silver face. */
-  .chrome {
-    background: linear-gradient(145deg, #ffffff 0%, #eef1f4 16%, #a7afba 40%, #fbfcfd 56%, #c4cad2 72%, #ffffff 100%);
-    box-shadow:
-      inset 0 2px 1px rgba(255, 255, 255, 0.95),
-      inset 0 -4px 10px rgba(0, 0, 0, 0.35),
-      inset 0 0 0 1px rgba(255, 255, 255, 0.35),
-      0 50px 90px -30px rgba(0, 0, 0, 0.95),
-      0 0 140px rgba(228, 231, 235, 0.14);
-  }
-  /* A band of light that sweeps across the chrome every few seconds. */
-  .sheen {
-    background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.75) 50%, transparent 65%);
-    background-size: 250% 100%;
-    animation: sheen 5.5s ease-in-out infinite;
-  }
-
   /* The hero's entrance. Plain CSS, so it starts with the first paint, before any script. */
   .rise {
     animation: rise 1s cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -134,15 +117,5 @@
     opacity: 1;
     transform: none;
     filter: none;
-  }
-}
-
-@keyframes sheen {
-  0%,
-  55% {
-    background-position: 130% 0;
-  }
-  100% {
-    background-position: -30% 0;
   }
 }
