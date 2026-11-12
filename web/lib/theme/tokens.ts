@@ -18,6 +18,8 @@ export const roles = [
   "primary",
   "primaryHover",
   "onPrimary",
+  "accent",
+  "onAccent",
   "danger",
   "onDanger",
   "success",
@@ -28,40 +30,50 @@ export const roles = [
 export type Role = (typeof roles)[number];
 export type Palette = Record<Role, string>;
 
+/**
+ * Paper and ink. A warm cream page, near-black ink for text and for the main button, one saffron
+ * accent used as a fill (never as text: it is too light to read on cream), and a deep green that
+ * means "paid". No purple, no blue-violet gradients.
+ */
 export const light: Palette = {
-  bg: "#ffffff",
-  surface: "#f6f7fb",
-  surfaceStrong: "#eceef6",
-  border: "#d9dce8",
-  borderStrong: "#6b7088",
-  text: "#14162a",
-  textMuted: "#4a4f6a",
-  primary: "#4338ca",
-  primaryHover: "#3730a3",
-  onPrimary: "#ffffff",
-  danger: "#b91c1c",
-  onDanger: "#ffffff",
-  success: "#15803d",
-  warning: "#b45309",
-  focus: "#4f46e5",
+  bg: "#f4efe6",
+  surface: "#fbf8f2",
+  surfaceStrong: "#eae2d3",
+  border: "#dcd3c4",
+  borderStrong: "#7d7363",
+  text: "#17140f",
+  textMuted: "#5c5449",
+  primary: "#17140f",
+  primaryHover: "#2e2a23",
+  onPrimary: "#f4efe6",
+  accent: "#e8a33d",
+  onAccent: "#17140f",
+  danger: "#a1281c",
+  onDanger: "#fbf8f2",
+  success: "#2d6a3a",
+  warning: "#865500",
+  focus: "#a3560a",
 };
 
+/** The same roles at night: warm charcoal, not blue-black, so the brand still feels like paper. */
 export const dark: Palette = {
-  bg: "#0d0f1a",
-  surface: "#151828",
-  surfaceStrong: "#1e2236",
-  border: "#2a2f47",
-  borderStrong: "#8a91b0",
-  text: "#eceefb",
-  textMuted: "#a6abc8",
-  primary: "#818cf8",
-  primaryHover: "#a5b4fc",
-  onPrimary: "#0d0f1a",
-  danger: "#f87171",
-  onDanger: "#0d0f1a",
-  success: "#4ade80",
-  warning: "#fbbf24",
-  focus: "#a5b4fc",
+  bg: "#13110d",
+  surface: "#1b1813",
+  surfaceStrong: "#26221b",
+  border: "#36312a",
+  borderStrong: "#8d8474",
+  text: "#f2ece1",
+  textMuted: "#b4aa99",
+  primary: "#f2ece1",
+  primaryHover: "#e2dacb",
+  onPrimary: "#13110d",
+  accent: "#e8a33d",
+  onAccent: "#13110d",
+  danger: "#f0897c",
+  onDanger: "#13110d",
+  success: "#7fc48d",
+  warning: "#e3b160",
+  focus: "#e8a33d",
 };
 
 /** `--text-muted`, from `textMuted`. */
@@ -87,6 +99,8 @@ export function themeCss(): string {
     `:root{${declarations(light, "light")}}`,
     `@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){${declarations(dark, "dark")}}}`,
     `:root[data-theme="dark"]{${declarations(dark, "dark")}}`,
+    // A part of the page that is designed for paper only (the public site) asks for it by name.
+    `[data-palette="light"]{${declarations(light, "light")}}`,
   ].join("");
 }
 

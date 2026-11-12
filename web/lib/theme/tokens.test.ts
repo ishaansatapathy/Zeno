@@ -13,6 +13,7 @@ const textPairs: [keyof Palette, keyof Palette][] = [
   ["onPrimary", "primary"],
   ["onPrimary", "primaryHover"],
   ["onDanger", "danger"],
+  ["onAccent", "accent"],
   ["primary", "bg"],
   ["primary", "surface"],
   ["danger", "bg"],
@@ -54,9 +55,18 @@ describe("the generated CSS", () => {
   it("defines every role in light and in dark, twice for dark (system and forced)", () => {
     for (const role of roles) {
       const name = cssName(role);
-      expect(css.split(`${name}:${channels(light[role])};`).length - 1).toBe(1);
-      expect(css.split(`${name}:${channels(dark[role])};`).length - 1).toBe(2);
+      // Light: the default and the paper-only scope. Dark: the system and the forced choice. A
+      // role that is the same colour in both (the accent) is found in all four.
+      const same = light[role] === dark[role];
+      expect(css.split(`${name}:${channels(light[role])};`).length - 1).toBe(same ? 4 : 2);
+      expect(css.split(`${name}:${channels(dark[role])};`).length - 1).toBe(same ? 4 : 2);
     }
+  });
+
+  it("lets a part of the page insist on paper", () => {
+    expect(css).toContain('[data-palette="light"]{');
+    const scope = css.slice(css.indexOf('[data-palette="light"]{'));
+    for (const role of roles) expect(scope).toContain(`${cssName(role)}:${channels(light[role])};`);
   });
 
   it("follows the system unless told otherwise, and can be forced", () => {
