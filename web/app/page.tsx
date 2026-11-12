@@ -1,4 +1,4 @@
-import { Bench } from "@/components/site/Bench";
+import { Flow } from "@/components/site/Flow";
 import { Faq } from "@/components/site/Faq";
 import { Finale } from "@/components/site/Finale";
 import { Flip } from "@/components/site/Flip";
@@ -18,7 +18,7 @@ export default function Home() {
         <Hero />
         <Flip />
         <Sides />
-        <Bench />
+        <Flow />
         <Pillars />
         <Promises />
         <Faq />
