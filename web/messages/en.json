@@ -81,187 +81,251 @@
   },
   "site": {
     "nav": {
-      "howItWorks": "How it works",
-      "money": "Payments",
-      "live": "Live",
-      "students": "Students",
+      "product": "Product",
+      "how": "How it works",
+      "who": "Who it's for",
+      "guarantees": "Guarantees",
       "signIn": "Sign in",
       "start": "Start teaching",
-      "home": "Zeno, home"
-    },
-    "rail": {
-      "label": "Sections",
-      "hero": "Start",
-      "pipeline": "How it works",
-      "money": "Payments",
-      "live": "Live",
-      "students": "Students",
-      "close": "Begin"
-    },
-    "guide": {
-      "alt": "The Zeno guide"
+      "home": "Zeno, home",
+      "status": "Private beta"
     },
     "hero": {
-      "eyebrow": "Video courses and live classes for independent educators",
+      "tag": "Video courses and live classes",
       "line1": "Teach what you know.",
-      "line2": "Keep what you earn.",
-      "body": "Zeno is a whole school in one place: lessons that stream protected from piracy, students who pay the way they already pay, and every sale accounted for to the last decimal.",
+      "line2": "<i>Keep</i> what you earn.",
+      "body": "Zeno runs the school behind your lessons: streaming that resists piracy, payments in your students' own currency, and a ledger that accounts for every sale.",
       "primary": "Start teaching",
       "secondary": "See how it works",
-      "status": "In private beta",
-      "graphLabel": "How a lesson becomes income",
+      "card": {
+        "title": "Lesson 07 · Photosynthesis",
+        "meta": "4 steps · published",
+        "status": "live",
+        "events": "Last events",
+        "zoom": "100%"
+      },
       "nodes": {
-        "record": {
-          "title": "Record",
-          "hint": "Upload from the browser, in parts that survive a dropped connection."
-        },
-        "protect": {
-          "title": "Protect",
-          "hint": "Encrypted video, with keys only for students who paid."
-        },
-        "sell": {
-          "title": "Sell",
-          "hint": "Checkout, coupons, invoices and refunds, built in."
-        },
-        "paid": {
-          "title": "Paid",
-          "hint": "Every sale in a ledger, paid out to your bank."
-        }
-      }
-    },
-    "pipeline": {
-      "label": "How it works",
-      "title": "From your camera to a student <em>anywhere.</em>",
-      "guide": "Scroll, and I will show you what happens to a lesson.",
-      "steps": {
         "upload": {
           "title": "Upload",
-          "body": "Straight from the browser, in parts. If the Wi-Fi drops halfway, the parts already sent stay sent."
+          "meta": "1.24 GB · 24 parts"
         },
         "transcode": {
           "title": "Transcode",
-          "body": "One file becomes five qualities, so a slow connection gets a smooth picture instead of a spinner."
+          "meta": "5 qualities"
         },
         "protect": {
           "title": "Protect",
-          "body": "Every few seconds of video is encrypted on its own. The key goes only to a student who paid, on at most three devices."
+          "meta": "Encrypted per segment"
         },
-        "deliver": {
-          "title": "Deliver",
-          "body": "Served from the edge nearest each student, wherever in the world they happen to be."
+        "publish": {
+          "title": "Publish",
+          "meta": "Plant Biology · Year 1"
         }
-      },
-      "upload": {
-        "file": "lesson-07-photosynthesis.mp4",
-        "size": "1.24 GB",
-        "parts": "{done} of {total} parts",
-        "dropped": "Connection dropped, resuming",
-        "resumed": "Resumed where it stopped"
-      },
-      "transcode": {
-        "title": "One upload, five qualities"
-      },
-      "protect": {
-        "title": "Segments",
-        "locked": "Encrypted",
-        "key": "Key for paid students only",
-        "devices": "3 devices at most"
-      },
-      "deliver": {
-        "title": "Students watching now"
       }
     },
-    "money": {
-      "label": "Payments",
-      "title": "Every sale, <em>accounted for.</em>",
-      "body": "Each payment is written into a double-entry ledger in the same moment the student gets access. Refunds, fees and payouts land in the same book, so the number you see is the number you get.",
-      "guide": "That bottom line is yours. I checked the arithmetic.",
-      "methods": "Cards, UPI, wallets and bank transfers, through the payment provider your students already trust.",
-      "currency": "Currency",
-      "price": "Course price",
-      "students": "Students",
+    "how": {
+      "tag": "How it works",
+      "title": "One upload. Four <i>quiet</i> steps.",
+      "body": "Everything between your camera and a student's screen happens on its own, in this order, every time.",
+      "columns": {
+        "upload": {
+          "label": "Upload",
+          "title": "Straight from the browser",
+          "body": "In parts, so a dropped connection only costs the part in flight. Close the laptop; it picks up where it stopped."
+        },
+        "transcode": {
+          "label": "Transcode",
+          "title": "Five qualities from one file",
+          "body": "240p to 1080p, so a slow connection gets a smooth picture instead of a spinner."
+        },
+        "protect": {
+          "label": "Protect",
+          "title": "Locked a few seconds at a time",
+          "body": "Every segment encrypted on its own. Keys go only to a student who paid, on at most three devices."
+        },
+        "deliver": {
+          "label": "Deliver",
+          "title": "From the edge nearest them",
+          "body": "Students stream from close by, wherever they are, and pick up where they left off."
+        }
+      }
+    },
+    "who": {
+      "tag": "Who it's for",
+      "title": "Built for how <i>you</i> teach.",
+      "body": "Whether you sell recorded courses, run live cohorts or are the one learning, Zeno does the same work underneath.",
+      "segments": {
+        "creators": {
+          "label": "Creators",
+          "line": "Sell what you already teach.",
+          "points": [
+            "Your first course live in an afternoon",
+            "Prices in your students' currency",
+            "Coupons, refunds and invoices built in",
+            "Paid out to your bank"
+          ],
+          "cta": "Start teaching"
+        },
+        "cohorts": {
+          "label": "Cohorts",
+          "line": "Teach live, keep the recording.",
+          "points": [
+            "Live classes with chat",
+            "The recording becomes the next lesson",
+            "Same protection as recorded video",
+            "One link for the whole cohort"
+          ],
+          "cta": "Run a cohort"
+        },
+        "students": {
+          "label": "Students",
+          "line": "Learn on the phone you have.",
+          "points": [
+            "Nothing to install",
+            "Quality that follows the connection",
+            "Resume where you stopped",
+            "Refunds inside the promised window"
+          ],
+          "cta": "Find a course"
+        }
+      },
+      "widget": {
+        "title": "Plant Biology, Year 1",
+        "status": "Selling · week 3",
+        "sales": "Sales",
+        "refunds": "Refunds",
+        "net": "Yours, after fees",
+        "lift": "this week"
+      }
+    },
+    "statement": {
+      "line1": "Every lesson",
+      "line2": "protected.",
+      "line3": "Every sale",
+      "line4": "accounted for.",
+      "chips": [
+        "AES-128",
+        "3 devices",
+        "Exactly once",
+        "Double-entry",
+        "Refund window",
+        "Paid out"
+      ]
+    },
+    "track": {
+      "tag": "The product",
+      "title": "Everything a course needs, <i>in one place.</i>",
+      "cards": {
+        "payments": {
+          "label": "Payments",
+          "title": "Every sale, to the last cent"
+        },
+        "live": {
+          "label": "Live",
+          "title": "Class ends, lesson begins"
+        },
+        "students": {
+          "label": "Students",
+          "title": "Adapts to their connection"
+        },
+        "ledger": {
+          "label": "Ledger",
+          "title": "A book that must balance"
+        }
+      },
       "receipt": {
-        "title": "Receipt",
         "sales": "{count} sales of {price}",
         "fee": "Payment fees, example {rate}",
         "window": "Refund window",
-        "windowValue": "{days} days, then payable",
-        "net": "Yours",
-        "paid": "Paid out to your bank",
-        "note": "Payment fees vary by country and method; this example uses a typical card rate."
+        "windowValue": "{days} days",
+        "net": "Yours"
       },
-      "chain": {
-        "checkout": "Checkout",
-        "confirmed": "Payment confirmed",
-        "ledger": "Written to the ledger",
-        "payout": "Paid out"
+      "live": {
+        "badge": "Live",
+        "watching": "{count} watching",
+        "chat": [
+          {
+            "name": "Amara",
+            "text": "Can you show the last step again?"
+          },
+          {
+            "name": "Kenji",
+            "text": "That diagram finally makes sense."
+          },
+          {
+            "name": "Lucía",
+            "text": "Is this part on the exam?"
+          }
+        ],
+        "saved": "Saved as Lesson 8"
+      },
+      "students": {
+        "nets": {
+          "slow": "Slow",
+          "mobile": "Mobile",
+          "wifi": "Wi-Fi"
+        },
+        "quality": "{quality}, adapting",
+        "resume": "Resume from {time}",
+        "lesson": "Lesson 4: Light and leaves"
+      },
+      "ledger": {
+        "rows": [
+          {
+            "label": "Sale",
+            "amount": "+49.00"
+          },
+          {
+            "label": "Payment fee",
+            "amount": "−1.42"
+          },
+          {
+            "label": "Refund window, 7 days",
+            "amount": "held"
+          },
+          {
+            "label": "Payout",
+            "amount": "−47.58"
+          }
+        ],
+        "balance": "Balance",
+        "balanced": "Balanced"
       }
     },
-    "live": {
-      "label": "Live",
-      "title": "Go live. <em>Keep the recording.</em>",
-      "body": "Teach a class live and answer questions as they arrive. When you end it, the recording becomes the next lesson in your course, already protected.",
-      "badge": "Live",
-      "watching": "{count} watching",
-      "ended": "Class ended",
-      "saved": "Saved as Lesson {n}",
-      "chatLabel": "Class chat",
-      "chat": [
+    "stack": {
+      "tag": "Guarantees",
+      "title": "The parts <i>nobody</i> demos.",
+      "cards": [
         {
-          "name": "Amara",
-          "text": "Can you show the last step again?"
+          "big": "Exactly once",
+          "body": "A payment is applied once, however many times the provider sends it, even when the database falls over halfway."
         },
         {
-          "name": "Kenji",
-          "text": "That diagram finally makes sense."
+          "big": "To the cent",
+          "body": "Fees, refunds and payouts live in a double-entry ledger that refuses to be out of balance."
         },
         {
-          "name": "Lucia",
-          "text": "Is this part on the exam?"
+          "big": "Three devices",
+          "body": "A paid student watches on up to three devices. The keys go to them and no one else."
         },
         {
-          "name": "Noor",
-          "text": "Watching from the bus, sound is perfect."
-        },
-        {
-          "name": "Tomas",
-          "text": "Will the recording be up later?"
-        },
-        {
-          "name": "Ravi",
-          "text": "Thank you, that was the clearest one yet."
+          "big": "Nothing to install",
+          "body": "A browser on any phone. Quality follows the connection; playback picks up where it stopped."
         }
-      ],
-      "lessons": [
-        "Lesson 6: Roots and water",
-        "Lesson 7: Photosynthesis"
       ]
     },
-    "students": {
-      "label": "Students",
-      "title": "Made for the phone <em>in their pocket.</em>",
-      "body": "The picture adapts to the connection, playback picks up where they stopped, and there is nothing to install.",
-      "network": "Connection",
-      "nets": {
-        "slow": "Slow",
-        "mobile": "Mobile",
-        "wifi": "Wi-Fi"
-      },
-      "quality": "{quality}, adapting",
-      "resume": "Resume from {time}",
-      "lesson": "Lesson 4: Light and leaves",
-      "course": "Plant Biology, Year 1"
-    },
-    "close": {
-      "title": "Your lessons. Your students.<br></br><em>Your income.</em>",
-      "body": "Zeno is in private beta with a small group of educators. Bring your first course.",
+    "cta": {
+      "tag": "Private beta",
+      "title": "Your lessons. Your students. <i>Your income.</i>",
+      "body": "Zeno is opening to educators in small groups. Bring your first course.",
       "primary": "Start teaching",
       "secondary": "Sign in"
     },
     "footer": {
       "tagline": "Video courses and live classes for independent educators.",
       "rights": "© {year} Zeno",
-      "made": "Made with care, for teachers everywhere."
+      "status": "Private beta",
+      "made": "Made for teachers everywhere."
     }
   }
 }
