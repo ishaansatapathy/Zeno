@@ -175,13 +175,29 @@ export const bench = {
   ] satisfies Step[],
 } as const;
 
-export const redacted = {
-  label: "What you actually get",
-  before: "Most course tools give you a video and a payment link. Zeno gives you",
-  parts: [
-    { hidden: "every segment encrypted", after: "," },
-    { hidden: "every sale counted once", after: ", and" },
-    { hidden: "a ledger that has to balance", after: " before a single payout leaves." },
+export const pillars = {
+  label: "Underneath",
+  title: ["Three parts,", "one promise."] as Title,
+  aside: "What happens under every lesson: how it plays, how it is locked, and how the money is counted.",
+  items: [
+    {
+      n: "01 / 03",
+      word: "Stream.",
+      name: "Adaptive streaming",
+      body: "Five qualities from 144p to 720p. The player picks what the connection can carry, a few seconds at a time.",
+    },
+    {
+      n: "02 / 03",
+      word: "Lock.",
+      name: "Encrypted segments",
+      body: "Every few seconds is its own encrypted segment. Keys come from a separate key server, and only for a student who paid.",
+    },
+    {
+      n: "03 / 03",
+      word: "Count.",
+      name: "Double-entry ledger",
+      body: "Every sale, fee, refund and payout is written twice. A payment is applied once, however many times it is reported.",
+    },
   ],
 } as const;
 
