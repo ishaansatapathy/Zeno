@@ -12,12 +12,13 @@ crates/
   live/        stream-key check and live HLS control
   keyserver/   token validation and AES-128 key delivery
 deploy/        docker-compose, SQL migrations
+web/           Next.js public site
 tests/e2e/     Playwright end-to-end suites
 ```
 
 ## Running locally
 
-Needs Rust (rustup), Docker, Node 20+, and ffmpeg (with libx264) on PATH for the worker.
+Needs Rust (rustup), Docker, Node 22.12+, and ffmpeg (with libx264) on PATH for the worker.
 
 ```
 cp .env.example .env              # then set JWT_ACCESS_SECRET (openssl rand -base64 48)
