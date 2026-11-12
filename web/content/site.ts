@@ -24,12 +24,6 @@ export const hero = {
   sprayed: "earn",
   body: "Zeno is the school behind your lessons: streaming that is hard to rip, payments that are counted once, and a ledger that has to balance before you get paid.",
   cta: "Start teaching",
-  plate: [
-    { k: "Qualities", v: "5" },
-    { k: "Streams", v: "2" },
-    { k: "Charged", v: "1×" },
-  ],
-  plateFoot: "lesson 07 · locked",
 } as const;
 
 export const statement = {
