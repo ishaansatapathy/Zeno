@@ -11,7 +11,6 @@ crates/
   worker/      transcode job runner (FFmpeg)
   live/        stream-key check and live HLS control
   keyserver/   token validation and AES-128 key delivery
-web/           Next.js creator dashboard and student app
 deploy/        docker-compose, SQL migrations
 tests/e2e/     Playwright end-to-end suites
 ```
