@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    background: #0c0a0f;
+  }
+  body {
+    @apply bg-ink font-sans text-cream antialiased;
+  }
+  :focus-visible {
+    outline: 2px solid #ffc21a;
+    outline-offset: 3px;
+  }
+  ::selection {
+    background: #8b5cf6;
+    color: #f1e6cf;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* Heavy, slanted, condensed capitals: the voice of the page. */
+  .shout {
+    @apply font-cond font-extrabold uppercase italic;
+    letter-spacing: -0.01em;
+    line-height: 0.88;
+  }
+  /* Small condensed capitals for labels and nav. */
+  .caps {
+    @apply font-cond font-semibold uppercase;
+    letter-spacing: 0.04em;
+  }
+  /* A word sprayed on in marker. */
+  .tag {
+    @apply font-tag font-normal normal-case not-italic;
+    letter-spacing: 0;
+    line-height: 0.9;
+  }
+
+  /* Grit: a fixed film of noise over everything, like the print on the cards. */
+  .grit::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    pointer-events: none;
+    opacity: 0.09;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* Halftone dots, the kind sprayed through a stencil. */
+  .halftone {
+    background-image: radial-gradient(currentColor 1.1px, transparent 1.5px);
+    background-size: 9px 9px;
+  }
+
+  /* The hero's entrance. Plain CSS, so it starts with the first paint instead of waiting for
+     the page's script to load; the reduced-motion rule above turns it into an instant change. */
+  .rise {
+    animation: rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: var(--delay, 0s);
+  }
+
+  /* A card from the deck: coal, a hairline cream edge, square-ish corners. */
+  .slab {
+    @apply rounded-[14px] border border-cream/25 bg-coal;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(0.45em);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
