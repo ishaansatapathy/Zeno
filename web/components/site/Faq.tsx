@@ -16,12 +16,11 @@ function Item({ q, a, open, onToggle }: { q: string; a: string; open: boolean; o
           aria-expanded={open}
           aria-controls={id}
           onClick={onToggle}
-          className="flex w-full items-center justify-between gap-6 py-6 text-left text-[1.05rem] font-medium tracking-[-0.01em] transition-colors hover:text-white"
+          className="flex w-full items-center justify-between gap-6 py-6 text-left transition-colors hover:text-silver-hi"
         >
-          {q}
-          <span aria-hidden="true" className="relative size-3 shrink-0 text-mute">
-            <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-current" />
-            <span className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-current transition-transform duration-300 ${open ? "scale-y-0" : ""}`} />
+          <span className="display text-[clamp(1.35rem,1.9vw,1.7rem)]">{q}</span>
+          <span aria-hidden="true" className={`font-mono text-lg transition-transform duration-300 ${open ? "rotate-45 text-silver" : "text-mute"}`}>
+            +
           </span>
         </button>
       </h3>
@@ -38,11 +37,11 @@ function Item({ q, a, open, onToggle }: { q: string; a: string; open: boolean; o
 export function Faq() {
   const [open, setOpen] = useState<number | null>(0);
   return (
-    <section id="faq" aria-labelledby="faq-title" className="scroll-mt-14 border-t border-line py-28 lg:py-36">
-      <Container className="grid gap-12 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)] lg:gap-20">
+    <section id="faq" aria-labelledby="faq-title" className="scroll-mt-16 py-28 lg:py-36">
+      <Container className="grid gap-12 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:gap-20">
         <div>
           <Label n="06">{faq.label}</Label>
-          <Title id="faq-title" text={faq.title} className="mt-6 text-[clamp(2.4rem,5vw,4.6rem)]" />
+          <Title id="faq-title" text={faq.title} className="mt-6 text-[clamp(2.8rem,6vw,5.6rem)]" />
           <p className="mt-6 max-w-[22rem] text-[0.95rem] leading-relaxed text-mute">{faq.aside}</p>
         </div>
         <ul className="border-t border-line">

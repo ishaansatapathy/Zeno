@@ -2,32 +2,32 @@ import Link from "next/link";
 
 import { finale } from "@/content/site";
 
-import { ArrowRight, Container, Title } from "./frame";
+import { ArrowUpRight, Container, Crosses, Title } from "./frame";
 
-/** The last ask: one statement, and two ways in under it. */
+/** The last ask: one statement in a frame, and two doors under it that fill silver on hover. */
 export function Finale() {
   return (
-    <section aria-labelledby="finale-title" className="border-t border-line py-28 lg:py-36">
+    <section aria-labelledby="finale-title" className="pb-28 lg:pb-36">
       <Container>
-        <div className="relative overflow-hidden rounded-2xl border border-line bg-panel/80">
-          <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_55%_70%_at_50%_0%,rgba(180,194,214,0.08),transparent_70%)]" />
-          <div className="relative px-6 py-20 text-center sm:py-24">
-            <Title id="finale-title" text={finale.title} className="text-[clamp(2.4rem,5.4vw,4.8rem)]" />
+        <div className="relative border border-line bg-ink/60">
+          <Crosses />
+          <div className="px-6 py-20 text-center sm:py-28">
+            <Title id="finale-title" text={finale.title} className="text-[clamp(2.8rem,6.4vw,6rem)]" />
           </div>
-          <div className="relative grid border-t border-line sm:grid-cols-2">
+          <div className="grid border-t border-line sm:grid-cols-2">
             {finale.ctas.map((c, i) => (
               <Link
                 key={c.label}
                 href={c.href}
                 prefetch={false}
-                className={`group block px-6 py-7 transition-colors duration-300 hover:bg-raise sm:px-9 ${i ? "border-t border-line sm:border-l sm:border-t-0" : ""}`}
+                className={`fillup group block px-6 py-8 sm:px-10 ${i ? "border-t border-line sm:border-l sm:border-t-0" : ""}`}
               >
-                <span className="label block">{c.tag}</span>
-                <span className="mt-3 flex items-center justify-between gap-4 text-[1.35rem] font-medium tracking-[-0.02em]">
-                  {c.label}
-                  <ArrowRight className="size-4 text-mute transition-[transform,color] duration-300 group-hover:translate-x-1 group-hover:text-paper" />
+                <span className="label block transition-colors group-hover:text-ink/70">{c.tag}</span>
+                <span className="mt-5 flex items-center justify-between gap-4">
+                  <span className="font-serif text-[clamp(2rem,3.2vw,2.8rem)] italic">{c.label}</span>
+                  <ArrowUpRight className="size-5" />
                 </span>
-                <span className="mt-1 block text-[0.88rem] text-mute">{c.sub}</span>
+                <span className="mt-3 block border-t border-line pt-3 text-[0.88rem] text-mute transition-colors group-hover:border-ink/25 group-hover:text-ink/75">{c.sub}</span>
               </Link>
             ))}
           </div>
