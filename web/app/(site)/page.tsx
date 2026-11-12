@@ -1,25 +1,28 @@
-import { Close } from "@/components/site/Close";
+import { getTranslations } from "next-intl/server";
+
+import { FinalCta } from "@/components/site/FinalCta";
 import { Hero } from "@/components/site/hero/Hero";
-import { Live } from "@/components/site/live/Live";
-import { Money } from "@/components/site/money/Money";
-import { Pipeline } from "@/components/site/pipeline/Pipeline";
-import { Students } from "@/components/site/students/Students";
-import { ZenoRail } from "@/components/site/ZenoRail";
+import { How } from "@/components/site/how/How";
+import { Guarantees } from "@/components/site/stack/Guarantees";
+import { Statement } from "@/components/site/statement/Statement";
+import { Track } from "@/components/site/track/Track";
+import { Who } from "@/components/site/who/Who";
 
 /**
- * The home page, as one line from top to bottom: what Zeno is, how a lesson travels, where the
- * money goes, teaching live, the student's side, and the one thing to do next.
+ * The home page: what Zeno is, how a lesson travels, who it is for, the product itself, the
+ * guarantees underneath, and the one thing to do next.
  */
-export default function Home() {
+export default async function Home() {
+  const t = await getTranslations("site.statement");
   return (
     <>
-      <ZenoRail />
       <Hero />
-      <Pipeline />
-      <Money />
-      <Live />
-      <Students />
-      <Close />
+      <How />
+      <Statement lines={[t("line1"), t("line2"), t("line3"), t("line4")]} chips={t.raw("chips") as string[]} />
+      <Who />
+      <Track />
+      <Guarantees />
+      <FinalCta />
     </>
   );
 }
