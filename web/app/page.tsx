@@ -5,9 +5,9 @@ import { Flip } from "@/components/site/Flip";
 import { Footer } from "@/components/site/Footer";
 import { Hero } from "@/components/site/Hero";
 import { Nav } from "@/components/site/Nav";
+import { Pillars } from "@/components/site/Pillars";
 import { Promises } from "@/components/site/Promises";
 import { Providers } from "@/components/site/Providers";
-import { Redacted } from "@/components/site/Redacted";
 import { Sides } from "@/components/site/Sides";
 
 export default function Home() {
@@ -19,7 +19,7 @@ export default function Home() {
         <Flip />
         <Sides />
         <Bench />
-        <Redacted />
+        <Pillars />
         <Promises />
         <Faq />
         <Finale />
