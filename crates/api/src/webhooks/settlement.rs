@@ -510,11 +510,10 @@ pub async fn apply_refund_processed(
 
     match repo::payment_by_ref(conn, &refund.payment_id, true).await? {
         Some(row) => {
-            if row.status == "refunded" {
-                return Ok(settled(Outcome::AlreadyRefunded, Some(&order)));
-            }
-            // Record it, unless this very refund was recorded before, or it would return more
-            // than the payment was (nothing the provider does can make that true; a person looks).
+            // Record it, unless this very refund was recorded before (a redelivery, whatever its
+            // event id), or it would return more than the payment was. A *different* refund of a
+            // payment already returned in full is that second case, and is flagged for a person
+            // rather than swallowed: nothing the provider does can make it true.
             let recorded = match refunds::record_success(
                 conn,
                 order.id,
