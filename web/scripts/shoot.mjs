@@ -17,8 +17,10 @@ const only = args.find((a) => a.startsWith("--only="))?.slice(7);
 
 const sizes = [
   { name: "desktop", width: 1440, height: 900, isMobile: false },
+  // A 1920 x 1080 laptop at 125% scaling, with the browser's own bars taken off: short and wide.
+  { name: "laptop", width: 1536, height: 730, isMobile: false },
   { name: "phone", width: 390, height: 844, isMobile: true },
-].filter((s) => !only || s.name === only);
+].filter((s) => (only ? s.name === only : s.name !== "laptop"));
 
 const browser = await chromium.launch();
 for (const size of sizes) {
@@ -38,7 +40,7 @@ for (const size of sizes) {
     for (const y of stops) {
       await page.mouse.wheel(0, 0);
       await page.evaluate((top) => window.scrollTo({ top, behavior: "instant" }), y);
-      await page.waitForTimeout(1400);
+      await page.waitForTimeout(Number(process.env.SHOOT_WAIT ?? 1400));
       await page.screenshot({ path: `${out}/${size.name}-${y}.png` });
     }
   } else {
