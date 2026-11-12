@@ -1,0 +1,95 @@
+{
+  "common": {
+    "appName": "Zeno",
+    "skipToContent": "Skip to content",
+    "theme": "Theme",
+    "themeLight": "Light",
+    "themeDark": "Dark",
+    "themeSystem": "System",
+    "close": "Close",
+    "loading": "Loading…",
+    "offline": "You are offline. We will try again when you are back."
+  },
+  "meta": {
+    "title": "Zeno: teach and learn online",
+    "description": "A secure video and live-class platform for Indian educators."
+  },
+  "nav": {
+    "signIn": "Sign in",
+    "signUp": "Create account",
+    "signOut": "Sign out",
+    "account": "Account"
+  },
+  "home": {
+    "title": "Teach on your terms. Get paid in rupees.",
+    "subtitle": "Zeno is a secure video and live-class platform for Indian educators. Your lessons stay yours, and your students pay by UPI.",
+    "ctaCreator": "Start teaching",
+    "ctaStudent": "Find a course",
+    "secureTitle": "Lessons that stay yours",
+    "secureBody": "Video is streamed encrypted and tied to the student who bought it, so it cannot be downloaded and passed around.",
+    "payTitle": "Paid the Indian way",
+    "payBody": "UPI, cards and net banking. Earnings are tracked to the paisa and paid out to your bank account.",
+    "liveTitle": "Live and recorded",
+    "liveBody": "Teach live to a class, then keep the recording as a course. One place for both.",
+    "footer": "Made in India."
+  },
+  "auth": {
+    "signIn": {
+      "title": "Sign in to Zeno",
+      "submit": "Sign in",
+      "forgot": "Forgot your password?",
+      "noAccount": "New here?",
+      "createLink": "Create an account"
+    },
+    "signUp": {
+      "title": "Create your Zeno account",
+      "submit": "Create account",
+      "haveAccount": "Already have an account?",
+      "signInLink": "Sign in",
+      "roleLabel": "I want to",
+      "roleStudent": "Learn from courses",
+      "roleCreator": "Teach and sell courses",
+      "passwordHint": "At least {min} characters.",
+      "checkEmail": "Check your email for a link to verify your address, then sign in."
+    },
+    "name": "Full name",
+    "email": "Email address",
+    "password": "Password"
+  },
+  "account": {
+    "title": "Your account",
+    "welcome": "Welcome, {name}",
+    "role": "Role",
+    "email": "Email",
+    "verified": "Email verified",
+    "notVerified": "Email not verified yet",
+    "roles": {
+      "student": "Student",
+      "creator": "Creator",
+      "admin": "Admin"
+    }
+  },
+  "validation": {
+    "required": "This field is required.",
+    "email": "Enter a valid email address.",
+    "passwordMin": "Use at least {min} characters.",
+    "passwordMax": "Use at most {max} characters.",
+    "nameLength": "Enter your full name (2 to 80 characters)."
+  },
+  "errors": {
+    "invalid_credentials": "That email and password do not match.",
+    "email_not_verified": "Please verify your email address first. We sent you a link.",
+    "validation_failed": "Please check the highlighted fields.",
+    "too_many_requests": "Too many attempts. Please try again in {seconds} seconds.",
+    "too_many_requests_soon": "Too many attempts. Please try again in a little while.",
+    "unauthenticated": "Please sign in to continue.",
+    "session_expired": "Your session has ended. Please sign in again.",
+    "payload_too_large": "That is too large to send.",
+    "internal_error": "Something went wrong on our side. Please try again.",
+    "offline": "We could not reach Zeno. Check your connection and try again.",
+    "timeout": "That took too long. Please try again.",
+    "aborted": "Cancelled.",
+    "unknown": "Something went wrong. Please try again.",
+    "reference": "Reference: {id}"
+  }
+}
