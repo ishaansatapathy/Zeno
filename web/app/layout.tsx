@@ -25,6 +25,14 @@ const display = localFont({
   fallback: ["Georgia", "Times New Roman", "serif"],
 });
 
+/** The condensed capitals for big statements: Anton (OFL), self-hosted. */
+const condensed = localFont({
+  src: [{ path: "../node_modules/@fontsource/anton/files/anton-latin-400-normal.woff2", style: "normal", weight: "400" }],
+  variable: "--font-condensed",
+  display: "swap",
+  fallback: ["Impact", "Arial Narrow", "sans-serif"],
+});
+
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("meta");
   return { title: { default: t("title"), template: "%s · Zeno" }, description: t("description") };
@@ -32,8 +40,8 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export const viewport: Viewport = {
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#f4efe6" },
-    { media: "(prefers-color-scheme: dark)", color: "#13110d" },
+    { media: "(prefers-color-scheme: light)", color: "#fafafa" },
+    { media: "(prefers-color-scheme: dark)", color: "#050505" },
   ],
 };
 
@@ -46,7 +54,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     <html
       lang={locale}
       data-theme={theme}
-      className={`${GeistSans.variable} ${GeistMono.variable} ${display.variable}`}
+      className={`${GeistSans.variable} ${GeistMono.variable} ${display.variable} ${condensed.variable}`}
       suppressHydrationWarning
     >
       <head>

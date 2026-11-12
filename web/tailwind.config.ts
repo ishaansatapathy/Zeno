@@ -26,10 +26,11 @@ const config: Config = {
         warning: token("warning"),
         focus: token("focus"),
       },
-      borderRadius: { control: "0.75rem", card: "1.25rem" },
+      borderRadius: { control: "0.75rem", card: "1.4rem" },
       fontFamily: {
         sans: ["var(--font-geist-sans)", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],
         serif: ["var(--font-display)", "Georgia", "Times New Roman", "serif"],
+        condensed: ["var(--font-condensed)", "Impact", "Arial Narrow", "sans-serif"],
         mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       letterSpacing: { label: "0.14em" },
