@@ -11,27 +11,14 @@
     "offline": "You are offline. We will try again when you are back."
   },
   "meta": {
-    "title": "Zeno: teach and learn online",
-    "description": "A secure video and live-class platform for Indian educators."
+    "title": "Zeno: teach what you know, keep what you earn",
+    "description": "Video courses and live classes for independent educators: lessons streamed protected, students who pay the way they already pay, and every sale accounted for."
   },
   "nav": {
     "signIn": "Sign in",
     "signUp": "Create account",
     "signOut": "Sign out",
     "account": "Account"
-  },
-  "home": {
-    "title": "Teach on your terms. Get paid in rupees.",
-    "subtitle": "Zeno is a secure video and live-class platform for Indian educators. Your lessons stay yours, and your students pay by UPI.",
-    "ctaCreator": "Start teaching",
-    "ctaStudent": "Find a course",
-    "secureTitle": "Lessons that stay yours",
-    "secureBody": "Video is streamed encrypted and tied to the student who bought it, so it cannot be downloaded and passed around.",
-    "payTitle": "Paid the Indian way",
-    "payBody": "UPI, cards and net banking. Earnings are tracked to the paisa and paid out to your bank account.",
-    "liveTitle": "Live and recorded",
-    "liveBody": "Teach live to a class, then keep the recording as a course. One place for both.",
-    "footer": "Made in India."
   },
   "auth": {
     "signIn": {
@@ -91,5 +78,190 @@
     "aborted": "Cancelled.",
     "unknown": "Something went wrong. Please try again.",
     "reference": "Reference: {id}"
+  },
+  "site": {
+    "nav": {
+      "howItWorks": "How it works",
+      "money": "Payments",
+      "live": "Live",
+      "students": "Students",
+      "signIn": "Sign in",
+      "start": "Start teaching",
+      "home": "Zeno, home"
+    },
+    "rail": {
+      "label": "Sections",
+      "hero": "Start",
+      "pipeline": "How it works",
+      "money": "Payments",
+      "live": "Live",
+      "students": "Students",
+      "close": "Begin"
+    },
+    "guide": {
+      "alt": "The Zeno guide"
+    },
+    "hero": {
+      "eyebrow": "Video courses and live classes for independent educators",
+      "line1": "Teach what you know.",
+      "line2": "Keep what you earn.",
+      "body": "Zeno is a whole school in one place: lessons that stream protected from piracy, students who pay the way they already pay, and every sale accounted for to the last decimal.",
+      "primary": "Start teaching",
+      "secondary": "See how it works",
+      "status": "In private beta",
+      "graphLabel": "How a lesson becomes income",
+      "nodes": {
+        "record": {
+          "title": "Record",
+          "hint": "Upload from the browser, in parts that survive a dropped connection."
+        },
+        "protect": {
+          "title": "Protect",
+          "hint": "Encrypted video, with keys only for students who paid."
+        },
+        "sell": {
+          "title": "Sell",
+          "hint": "Checkout, coupons, invoices and refunds, built in."
+        },
+        "paid": {
+          "title": "Paid",
+          "hint": "Every sale in a ledger, paid out to your bank."
+        }
+      }
+    },
+    "pipeline": {
+      "label": "How it works",
+      "title": "From your camera to a student <em>anywhere.</em>",
+      "guide": "Scroll, and I will show you what happens to a lesson.",
+      "steps": {
+        "upload": {
+          "title": "Upload",
+          "body": "Straight from the browser, in parts. If the Wi-Fi drops halfway, the parts already sent stay sent."
+        },
+        "transcode": {
+          "title": "Transcode",
+          "body": "One file becomes five qualities, so a slow connection gets a smooth picture instead of a spinner."
+        },
+        "protect": {
+          "title": "Protect",
+          "body": "Every few seconds of video is encrypted on its own. The key goes only to a student who paid, on at most three devices."
+        },
+        "deliver": {
+          "title": "Deliver",
+          "body": "Served from the edge nearest each student, wherever in the world they happen to be."
+        }
+      },
+      "upload": {
+        "file": "lesson-07-photosynthesis.mp4",
+        "size": "1.24 GB",
+        "parts": "{done} of {total} parts",
+        "dropped": "Connection dropped, resuming",
+        "resumed": "Resumed where it stopped"
+      },
+      "transcode": {
+        "title": "One upload, five qualities"
+      },
+      "protect": {
+        "title": "Segments",
+        "locked": "Encrypted",
+        "key": "Key for paid students only",
+        "devices": "3 devices at most"
+      },
+      "deliver": {
+        "title": "Students watching now"
+      }
+    },
+    "money": {
+      "label": "Payments",
+      "title": "Every sale, <em>accounted for.</em>",
+      "body": "Each payment is written into a double-entry ledger in the same moment the student gets access. Refunds, fees and payouts land in the same book, so the number you see is the number you get.",
+      "guide": "That bottom line is yours. I checked the arithmetic.",
+      "methods": "Cards, UPI, wallets and bank transfers, through the payment provider your students already trust.",
+      "currency": "Currency",
+      "price": "Course price",
+      "students": "Students",
+      "receipt": {
+        "title": "Receipt",
+        "sales": "{count} sales of {price}",
+        "fee": "Payment fees, example {rate}",
+        "window": "Refund window",
+        "windowValue": "{days} days, then payable",
+        "net": "Yours",
+        "paid": "Paid out to your bank",
+        "note": "Payment fees vary by country and method; this example uses a typical card rate."
+      },
+      "chain": {
+        "checkout": "Checkout",
+        "confirmed": "Payment confirmed",
+        "ledger": "Written to the ledger",
+        "payout": "Paid out"
+      }
+    },
+    "live": {
+      "label": "Live",
+      "title": "Go live. <em>Keep the recording.</em>",
+      "body": "Teach a class live and answer questions as they arrive. When you end it, the recording becomes the next lesson in your course, already protected.",
+      "badge": "Live",
+      "watching": "{count} watching",
+      "ended": "Class ended",
+      "saved": "Saved as Lesson {n}",
+      "chatLabel": "Class chat",
+      "chat": [
+        {
+          "name": "Amara",
+          "text": "Can you show the last step again?"
+        },
+        {
+          "name": "Kenji",
+          "text": "That diagram finally makes sense."
+        },
+        {
+          "name": "Lucia",
+          "text": "Is this part on the exam?"
+        },
+        {
+          "name": "Noor",
+          "text": "Watching from the bus, sound is perfect."
+        },
+        {
+          "name": "Tomas",
+          "text": "Will the recording be up later?"
+        },
+        {
+          "name": "Ravi",
+          "text": "Thank you, that was the clearest one yet."
+        }
+      ],
+      "lessons": [
+        "Lesson 6: Roots and water",
+        "Lesson 7: Photosynthesis"
+      ]
+    },
+    "students": {
+      "label": "Students",
+      "title": "Made for the phone <em>in their pocket.</em>",
+      "body": "The picture adapts to the connection, playback picks up where they stopped, and there is nothing to install.",
+      "network": "Connection",
+      "nets": {
+        "slow": "Slow",
+        "mobile": "Mobile",
+        "wifi": "Wi-Fi"
+      },
+      "quality": "{quality}, adapting",
+      "resume": "Resume from {time}",
+      "lesson": "Lesson 4: Light and leaves",
+      "course": "Plant Biology, Year 1"
+    },
+    "close": {
+      "title": "Your lessons. Your students.<br></br><em>Your income.</em>",
+      "body": "Zeno is in private beta with a small group of educators. Bring your first course.",
+      "primary": "Start teaching",
+      "secondary": "Sign in"
+    },
+    "footer": {
+      "tagline": "Video courses and live classes for independent educators.",
+      "rights": "© {year} Zeno",
+      "made": "Made with care, for teachers everywhere."
+    }
   }
 }
