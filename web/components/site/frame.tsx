@@ -1,61 +1,83 @@
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 import type { Title as TitleText } from "@/content/site";
 
-/** A small + at each corner of a box, the registration marks of a drafting sheet. */
-export function Crosses({ className = "text-line-hi" }: { className?: string }) {
-  const at = ["-left-[5px] -top-[5px]", "-right-[5px] -top-[5px]", "-bottom-[5px] -left-[5px]", "-bottom-[5px] -right-[5px]"];
-  return (
-    <>
-      {at.map((pos) => (
-        <svg key={pos} viewBox="0 0 10 10" aria-hidden="true" focusable="false" className={`pointer-events-none absolute size-[10px] ${pos} ${className}`}>
-          <path d="M5 0v10M0 5h10" stroke="currentColor" strokeWidth="1" />
-        </svg>
-      ))}
-    </>
-  );
-}
-
-/** A title whose second half is set in the serif's italic, in signal orange. */
-export function Title({ text, as: Tag = "h2", id, className = "" }: { text: TitleText; as?: "h1" | "h2" | "h3"; id?: string; className?: string }) {
+/** A headline in two tones: the claim in white, the follow-through in gray. */
+export function Title({ text, as: Tag = "h2", id, className = "", tone = "dark" }: { text: TitleText; as?: "h1" | "h2" | "h3"; id?: string; className?: string; tone?: "dark" | "light" }) {
   return (
     <Tag id={id} className={`display ${className}`}>
       <span className="block">{text[0]}</span>
-      <em className="block italic text-signal">{text[1]}</em>
+      <span className={`block ${tone === "dark" ? "text-mute" : "text-bone-mute"}`}>{text[1]}</span>
     </Tag>
   );
 }
 
-/** A label in brackets, the way every section introduces itself. */
-export function Label({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <p className={`label ${className}`}>[ {children} ]</p>;
+/** A section's index and name, in small mono capitals, with a short rule before them. */
+export function Label({ n, children, className = "" }: { n?: string; children: ReactNode; className?: string }) {
+  return (
+    <p className={`label flex items-center gap-3 ${className}`}>
+      {n ? <span className="font-semibold">{n}</span> : null}
+      <span aria-hidden="true" className="h-px w-6 bg-current opacity-40" />
+      {children}
+    </p>
+  );
 }
 
-/** The standard opening of a section: label, title on the left, a short note on the right. */
-export function SectionHead({ id, label, title, aside }: { id: string; label: string; title: TitleText; aside: string }) {
+/** The page's width and side margins. */
+export function Container({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`mx-auto w-full max-w-page px-5 sm:px-8 ${className}`}>{children}</div>;
+}
+
+/** How every section opens: index and name, the headline on the left, a short note on the right. */
+export function SectionHead({ id, n, label, title, aside, compact = false }: { id: string; n: string; label: string; title: TitleText; aside: string; compact?: boolean }) {
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)] lg:items-end lg:gap-16">
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-end lg:gap-16">
       <div>
-        <Label>{label}</Label>
-        <Title id={id} text={title} className="mt-6 text-[clamp(2.6rem,5.4vw,5rem)]" />
+        <Label n={n}>{label}</Label>
+        <Title id={id} text={title} className={compact ? "mt-5 text-[clamp(2.2rem,min(4.2vw,7svh),3.8rem)]" : "mt-6 text-[clamp(2.4rem,5vw,4.6rem)]"} />
       </div>
-      <p className="max-w-[24rem] text-[0.95rem] leading-relaxed text-mute lg:pb-3">{aside}</p>
+      <p className="max-w-[22rem] text-[0.95rem] leading-relaxed text-mute lg:pb-2">{aside}</p>
     </div>
   );
 }
 
-export function ArrowUpRight({ className = "size-3" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" className={className}>
-      <path d="M3 9 9 3M4 3h5v5" fill="none" stroke="currentColor" strokeWidth="1.4" />
-    </svg>
+/** A hairline panel with softly rounded corners: where anything interactive lives. */
+export function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`overflow-hidden rounded-xl border border-line bg-panel/80 ${className}`}>{children}</div>;
+}
+
+const btnTone = {
+  solid: "btn btn-solid",
+  line: "btn btn-line",
+  dark: "btn btn-dark",
+  "line-dark": "btn btn-line-dark",
+} as const;
+
+/** A button that is a link: in-page anchors stay plain, routes go through Next without prefetching. */
+export function Button({ href, children, tone = "solid", arrow = true, className = "" }: { href: string; children: string; tone?: keyof typeof btnTone; arrow?: boolean; className?: string }) {
+  const inner = (
+    <>
+      {children}
+      {arrow ? <ArrowRight className="size-3.5 transition-transform duration-200 group-hover:translate-x-0.5" /> : null}
+    </>
+  );
+  const cls = `group ${btnTone[tone]} ${className}`;
+  return href.startsWith("#") ? (
+    <a href={href} className={cls}>
+      {inner}
+    </a>
+  ) : (
+    <Link href={href} prefetch={false} className={cls}>
+      {inner}
+    </Link>
   );
 }
 
 export function ArrowRight({ className = "size-3" }: { className?: string }) {
   return (
     <svg viewBox="0 0 12 12" aria-hidden="true" focusable="false" className={className}>
-      <path d="M1.5 6h9M7 2.5 10.5 6 7 9.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M1.5 6h9M7 2.5 10.5 6 7 9.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
