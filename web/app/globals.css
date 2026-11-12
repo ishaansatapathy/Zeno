@@ -5,18 +5,21 @@
 @layer base {
   html {
     -webkit-text-size-adjust: 100%;
-    background: #09090b;
+    background: #000000;
   }
   body {
     @apply bg-ink font-sans text-paper antialiased;
+    /* The drafting grid everything sits on: a faint dot every 32px. */
+    background-image: radial-gradient(#1d1d1f 1px, transparent 1.3px);
+    background-size: 32px 32px;
   }
   :focus-visible {
-    outline: 2px solid #b4c2d6;
+    outline: 2px solid #e4e7eb;
     outline-offset: 2px;
   }
   ::selection {
-    background: #b4c2d6;
-    color: #09090b;
+    background: #e4e7eb;
+    color: #000000;
   }
   @media (prefers-reduced-motion: reduce) {
     *,
@@ -31,33 +34,87 @@
 }
 
 @layer components {
-  /* Headlines: the sans at display sizes, medium weight, set tight. */
+  /* Statements: the serif, large and close-set. */
   .display {
-    @apply font-sans font-medium;
-    letter-spacing: -0.038em;
-    line-height: 1.02;
+    @apply font-serif font-normal;
+    letter-spacing: -0.012em;
+    line-height: 1;
+  }
+  /* The italic half of a statement, in polished silver: light at the top, darker below. */
+  .metal {
+    @apply font-serif italic;
+    background-image: linear-gradient(180deg, #ffffff 10%, #e6e9ed 48%, #aab2bc 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    /* Italic overhangs its box; keep the last letter's tail inside the painted area. */
+    padding-right: 0.08em;
   }
   /* Small labels: monospaced capitals, tracked out. */
   .label {
     @apply font-mono text-[0.6875rem] font-medium uppercase text-mute;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.14em;
+  }
+  /* Navigation and buttons: the sans in tracked capitals. */
+  .caps {
+    @apply font-sans text-[0.7rem] font-semibold uppercase;
+    letter-spacing: 0.18em;
   }
 
-  /* Buttons: small, quiet, sentence case. */
-  .btn {
-    @apply inline-flex h-10 items-center justify-center gap-2 rounded-md px-4 text-[0.875rem] font-medium transition-[background-color,color,border-color] duration-200;
+  /* Hover fills a box from the bottom up with silver, and its text turns dark. */
+  .fillup {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    transition: color 0.35s ease;
   }
-  .btn-solid {
-    @apply bg-paper text-ink hover:bg-white;
+  .fillup::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: #e4e7eb;
+    transform: scaleY(0);
+    transform-origin: bottom;
+    transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .btn-line {
-    @apply border border-line-hi text-paper hover:border-mute hover:bg-raise;
+  .fillup:hover,
+  .fillup:focus-visible {
+    color: #000000;
   }
-  .btn-dark {
-    @apply bg-ink text-bone hover:bg-[#1b1c1f];
+  .fillup:hover::before,
+  .fillup:focus-visible::before {
+    transform: scaleY(1);
   }
-  .btn-line-dark {
-    @apply border border-ink/25 text-ink hover:border-ink/60 hover:bg-ink/[0.04];
+  /* The same, filling with charcoal: for boxes that are already silver. */
+  .fillup-ink::before {
+    background: #000000;
+  }
+  .fillup-ink:hover,
+  .fillup-ink:focus-visible {
+    color: #eceef1;
+  }
+
+  /* The same, filling with near-white: for dark boxes on the silver section. */
+  .fillup-white::before {
+    background: #f6f8fa;
+  }
+
+  /* Polished chrome: bands of light and shade across a bright silver face. */
+  .chrome {
+    background: linear-gradient(145deg, #ffffff 0%, #eef1f4 16%, #a7afba 40%, #fbfcfd 56%, #c4cad2 72%, #ffffff 100%);
+    box-shadow:
+      inset 0 2px 1px rgba(255, 255, 255, 0.95),
+      inset 0 -4px 10px rgba(0, 0, 0, 0.35),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.35),
+      0 50px 90px -30px rgba(0, 0, 0, 0.95),
+      0 0 140px rgba(228, 231, 235, 0.14);
+  }
+  /* A band of light that sweeps across the chrome every few seconds. */
+  .sheen {
+    background: linear-gradient(105deg, transparent 35%, rgba(255, 255, 255, 0.75) 50%, transparent 65%);
+    background-size: 250% 100%;
+    animation: sheen 5.5s ease-in-out infinite;
   }
 
   /* The hero's entrance. Plain CSS, so it starts with the first paint, before any script. */
@@ -70,12 +127,22 @@
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(14px);
-    filter: blur(8px);
+    transform: translateY(0.3em);
+    filter: blur(6px);
   }
   to {
     opacity: 1;
     transform: none;
     filter: none;
+  }
+}
+
+@keyframes sheen {
+  0%,
+  55% {
+    background-position: 130% 0;
+  }
+  100% {
+    background-position: -30% 0;
   }
 }

@@ -1,37 +1,37 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Graphite, nearly monochrome. Text is off-white; the second half of a headline steps down to
- * gray. One cool accent, frost, marks only what is live or locked. A single light section, paper
- * on bone, breaks the dark once.
+ * Pure black, and bright polished silver for whatever is live, active or wanted next. One bright
+ * silver section breaks the dark once.
  */
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
       colors: {
-        ink: "#09090b",
-        panel: "#0f1012",
-        raise: "#16171a",
-        line: "#1d1e21",
-        "line-hi": "#2b2d31",
-        paper: "#ededed",
-        mute: "#8a8d94",
-        frost: { DEFAULT: "#b4c2d6", deep: "#7f95b6" },
-        bone: { DEFAULT: "#ececea", line: "#d6d6d2", mute: "#55585e" },
+        ink: "#000000",
+        panel: "#080808",
+        raise: "#101010",
+        line: "#1c1c1c",
+        "line-hi": "#2e2e2e",
+        paper: "#f2f3f5",
+        mute: "#8e939a",
+        silver: { DEFAULT: "#e4e7eb", hi: "#ffffff", lo: "#b9c0c9" },
+        chrome: { DEFAULT: "#e7eaee", line: "#c3c8cf", mute: "#4d525a" },
       },
       fontFamily: {
+        serif: ["var(--font-serif)", "Georgia", "serif"],
         sans: ["var(--font-sans)", "system-ui", "sans-serif"],
         mono: ["var(--font-mono)", "ui-monospace", "monospace"],
       },
-      maxWidth: { page: "80rem" },
+      maxWidth: { page: "90rem" },
       keyframes: {
         marquee: { from: { transform: "translateX(0)" }, to: { transform: "translateX(-50%)" } },
-        blink: { "50%": { opacity: "0.2" } },
+        blink: { "50%": { opacity: "0.15" } },
       },
       animation: {
-        marquee: "marquee 60s linear infinite",
-        blink: "blink 1.4s ease-in-out infinite",
+        marquee: "marquee 45s linear infinite",
+        blink: "blink 1.2s steps(2) infinite",
       },
     },
   },
