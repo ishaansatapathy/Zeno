@@ -31,49 +31,49 @@ export type Role = (typeof roles)[number];
 export type Palette = Record<Role, string>;
 
 /**
- * Paper and ink. A warm cream page, near-black ink for text and for the main button, one saffron
- * accent used as a fill (never as text: it is too light to read on cream), and a deep green that
- * means "paid". No purple, no blue-violet gradients.
+ * Black and silver. Light is the same idea in daylight: near-white paper, near-black ink. The
+ * accent is silver itself, used as a fill or a sheen (never as small text on a light page); the
+ * only other colours are functional: paid, live, warning.
  */
 export const light: Palette = {
-  bg: "#f4efe6",
-  surface: "#fbf8f2",
-  surfaceStrong: "#eae2d3",
-  border: "#dcd3c4",
-  borderStrong: "#7d7363",
-  text: "#17140f",
-  textMuted: "#5c5449",
-  primary: "#17140f",
-  primaryHover: "#2e2a23",
-  onPrimary: "#f4efe6",
-  accent: "#e8a33d",
-  onAccent: "#17140f",
-  danger: "#a1281c",
-  onDanger: "#fbf8f2",
-  success: "#2d6a3a",
-  warning: "#865500",
-  focus: "#a3560a",
+  bg: "#fafafa",
+  surface: "#ffffff",
+  surfaceStrong: "#f0f0f2",
+  border: "#e4e4e7",
+  borderStrong: "#71717a",
+  text: "#0a0a0b",
+  textMuted: "#52525b",
+  primary: "#0a0a0b",
+  primaryHover: "#27272a",
+  onPrimary: "#fafafa",
+  accent: "#c8c8ce",
+  onAccent: "#0a0a0b",
+  danger: "#b42318",
+  onDanger: "#ffffff",
+  success: "#1f7a3d",
+  warning: "#8a5300",
+  focus: "#3f3f46",
 };
 
-/** The same roles at night: warm charcoal, not blue-black, so the brand still feels like paper. */
+/** Night: true black, steel greys, silver-white text and a silver button. */
 export const dark: Palette = {
-  bg: "#13110d",
-  surface: "#1b1813",
-  surfaceStrong: "#26221b",
-  border: "#36312a",
-  borderStrong: "#8d8474",
-  text: "#f2ece1",
-  textMuted: "#b4aa99",
-  primary: "#f2ece1",
-  primaryHover: "#e2dacb",
-  onPrimary: "#13110d",
-  accent: "#e8a33d",
-  onAccent: "#13110d",
-  danger: "#f0897c",
-  onDanger: "#13110d",
-  success: "#7fc48d",
-  warning: "#e3b160",
-  focus: "#e8a33d",
+  bg: "#050505",
+  surface: "#0e0e10",
+  surfaceStrong: "#17171a",
+  border: "#232327",
+  borderStrong: "#6e6e77",
+  text: "#f4f4f5",
+  textMuted: "#a1a1aa",
+  primary: "#f4f4f5",
+  primaryHover: "#d4d4d8",
+  onPrimary: "#050505",
+  accent: "#d4d4d8",
+  onAccent: "#050505",
+  danger: "#f97066",
+  onDanger: "#050505",
+  success: "#6ee7a0",
+  warning: "#f5c46b",
+  focus: "#e4e4e7",
 };
 
 /** `--text-muted`, from `textMuted`. */
@@ -99,8 +99,10 @@ export function themeCss(): string {
     `:root{${declarations(light, "light")}}`,
     `@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){${declarations(dark, "dark")}}}`,
     `:root[data-theme="dark"]{${declarations(dark, "dark")}}`,
-    // A part of the page that is designed for paper only (the public site) asks for it by name.
+    // A part of the page designed for one palette only asks for it by name: the public site is
+    // always black and silver, whatever the visitor's theme.
     `[data-palette="light"]{${declarations(light, "light")}}`,
+    `[data-palette="dark"]{${declarations(dark, "dark")}}`,
   ].join("");
 }
 

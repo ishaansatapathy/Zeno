@@ -52,21 +52,25 @@ describe.each([
 describe("the generated CSS", () => {
   const css = themeCss();
 
-  it("defines every role in light and in dark, twice for dark (system and forced)", () => {
+  it("defines every role for light (default, named scope) and dark (system, forced, named scope)", () => {
     for (const role of roles) {
       const name = cssName(role);
-      // Light: the default and the paper-only scope. Dark: the system and the forced choice. A
-      // role that is the same colour in both (the accent) is found in all four.
+      // A role that is the same colour in both palettes is found in all five places.
       const same = light[role] === dark[role];
-      expect(css.split(`${name}:${channels(light[role])};`).length - 1).toBe(same ? 4 : 2);
-      expect(css.split(`${name}:${channels(dark[role])};`).length - 1).toBe(same ? 4 : 2);
+      expect(css.split(`${name}:${channels(light[role])};`).length - 1).toBe(same ? 5 : 2);
+      expect(css.split(`${name}:${channels(dark[role])};`).length - 1).toBe(same ? 5 : 3);
     }
   });
 
-  it("lets a part of the page insist on paper", () => {
-    expect(css).toContain('[data-palette="light"]{');
-    const scope = css.slice(css.indexOf('[data-palette="light"]{'));
-    for (const role of roles) expect(scope).toContain(`${cssName(role)}:${channels(light[role])};`);
+  it("lets a part of the page insist on one palette, whatever the visitor's theme", () => {
+    const lightScope = css.slice(css.indexOf('[data-palette="light"]{'), css.indexOf('[data-palette="dark"]{'));
+    const darkScope = css.slice(css.indexOf('[data-palette="dark"]{'));
+    expect(lightScope).not.toBe("");
+    expect(darkScope).not.toBe("");
+    for (const role of roles) {
+      expect(lightScope).toContain(`${cssName(role)}:${channels(light[role])};`);
+      expect(darkScope).toContain(`${cssName(role)}:${channels(dark[role])};`);
+    }
   });
 
   it("follows the system unless told otherwise, and can be forced", () => {
