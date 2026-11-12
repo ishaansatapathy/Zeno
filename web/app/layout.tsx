@@ -19,7 +19,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const [locale, messages, t] = await Promise.all([getLocale(), getMessages(), getTranslations("common")]);
-  const saved = cookies().get(THEME_COOKIE)?.value;
+  const saved = (await cookies()).get(THEME_COOKIE)?.value;
   const theme = saved === "light" || saved === "dark" ? saved : "system";
 
   return (

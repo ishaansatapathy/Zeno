@@ -10,7 +10,8 @@ import { TIME_ZONE } from "@/lib/i18n/format";
  * is no flash of English and no mismatch for the client to repair.
  */
 export default getRequestConfig(async () => {
-  const locale = pickLocale(cookies().get(LOCALE_COOKIE)?.value, headers().get("accept-language"));
+  const [jar, sent] = await Promise.all([cookies(), headers()]);
+  const locale = pickLocale(jar.get(LOCALE_COOKIE)?.value, sent.get("accept-language"));
   return {
     locale,
     timeZone: TIME_ZONE,
