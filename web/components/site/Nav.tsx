@@ -5,7 +5,7 @@ import { links, nav } from "@/content/site";
 import { ArrowUpRight } from "./frame";
 
 /** The wordmark: a silver tile with a play mark cut into it, and the name in the serif. */
-export function Mark({ className = "" }: { className?: string }) {
+function Mark({ className = "" }: { className?: string }) {
   return (
     <span className={`inline-flex items-center gap-2.5 ${className}`}>
       <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" className="size-[1.2em]">

@@ -59,7 +59,7 @@ export function Hero() {
         {/* Where the flood starts: the middle of the screen. */}
         <div ref={origin} aria-hidden="true" className="pointer-events-none absolute left-1/2 top-1/2 size-px" />
         <m.p style={{ opacity: hint }} className="label absolute bottom-5 left-1/2 z-10 -translate-x-1/2">
-          Scroll ↓
+          {hero.scroll} ↓
         </m.p>
         <Bloom progress={bloom} origin={origin} color="#e7eaee" />
       </div>
