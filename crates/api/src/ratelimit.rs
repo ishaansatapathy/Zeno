@@ -84,6 +84,33 @@ pub mod policies {
         rule: Rule::per_minute(60),
         fail: Fail::Closed,
     };
+    /// Looking up a share link, per client address. The answer is cacheable, so an edge absorbs
+    /// most visits; this protects the origin from what gets through.
+    pub const SHARE_RESOLVE: Policy = Policy {
+        name: "share_resolve",
+        rule: Rule::per_minute(300),
+        fail: Fail::Open,
+    };
+    /// Starting to watch through a link, per client address. Open: a Redis outage should not
+    /// stop people watching something that was shared with them.
+    pub const SHARE_PLAY: Policy = Policy {
+        name: "share_play",
+        rule: Rule::per_minute(30),
+        fail: Fail::Open,
+    };
+    /// Guessing a link's password, per link and client address. Each try costs a password hash,
+    /// so it is counted before the hash is computed, and with no counter to count on, refused.
+    pub const SHARE_PASSWORD: Policy = Policy {
+        name: "share_password",
+        rule: Rule::per_minute(10),
+        fail: Fail::Closed,
+    };
+    /// Making and revoking links, per account.
+    pub const SHARE_WRITE: Policy = Policy {
+        name: "share_write",
+        rule: Rule::per_minute(30),
+        fail: Fail::Closed,
+    };
     /// Webhook calls whose signature did not check out, per client address. Only failures are
     /// counted, so a flood of forgeries is turned away while the provider's real traffic is not
     /// limited at all.
