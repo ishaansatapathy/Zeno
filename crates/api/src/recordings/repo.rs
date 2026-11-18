@@ -127,6 +127,25 @@ pub async fn update<'e>(
     Ok(result.rows_affected() == 1)
 }
 
+/// Sets who may watch, bumping the version so an editor holding an older copy conflicts.
+pub async fn set_visibility<'e>(
+    db: impl PgExecutor<'e>,
+    id: Uuid,
+    owner_id: Uuid,
+    visibility: &str,
+) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "update recordings set visibility = $3, version = version + 1, updated_at = now() \
+         where id = $1 and owner_id = $2 and deleted_at is null and visibility <> $3",
+    )
+    .bind(id)
+    .bind(owner_id)
+    .bind(visibility)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 /// Sets the video of a recording that has none. `false`: no such recording, or it already has one.
 pub async fn attach_video(
     db: &mut PgConnection,

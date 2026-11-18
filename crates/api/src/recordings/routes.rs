@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .route("/", get(list).post(create))
         .route("/:id", get(show).patch(update).delete(remove))
         .route("/:id/video", put(attach_video))
+        .merge(crate::shares::routes::recording_router())
 }
 
 /// An id that is not a UUID names nothing: it is "not found", like any other missing recording.

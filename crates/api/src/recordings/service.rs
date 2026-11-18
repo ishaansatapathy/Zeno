@@ -152,6 +152,11 @@ pub async fn update(
             "This recording changed elsewhere. Reload it and try again.",
         ));
     }
+    if changes.visibility == Some("private") {
+        // Every link stops working at once: viewings under way end now rather than at their
+        // next request (which would refuse them anyway).
+        crate::playback::repo::end_for_recording_links(&state.db, id, "access_revoked").await?;
+    }
     load(state, user, id).await
 }
 
@@ -203,6 +208,7 @@ pub async fn delete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), A
     let video = repo::soft_delete(&state.db, id, user.id)
         .await?
         .ok_or_else(not_found)?;
+    crate::playback::repo::end_for_recording_links(&state.db, id, "access_revoked").await?;
     let Some(video) = video else {
         return Ok(());
     };
