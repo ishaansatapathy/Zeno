@@ -265,8 +265,11 @@ struct World {
     course: Uuid,
     lesson: Uuid,
     video: Uuid,
-    /// A recording the owner has made.
+    /// A recording the owner has made, shared through one open link.
     recording: Uuid,
+    link: Uuid,
+    /// That link's public code.
+    share_code: String,
     /// A real, unfinished multipart upload owned by the owner (only when a route needs one).
     upload: Uuid,
     session: Uuid,
@@ -480,11 +483,27 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
         .execute(pool)
         .await
         .unwrap();
+    let link = Uuid::new_v4();
+    let share_code = link.simple().to_string()[..22].to_owned();
+    sqlx::query("insert into share_links (id, code, recording_id) values ($1, $2, $3)")
+        .bind(link)
+        .bind(&share_code)
+        .bind(recording)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("update recordings set visibility = 'link' where id = $1")
+        .bind(recording)
+        .execute(pool)
+        .await
+        .unwrap();
     World {
         course,
         lesson,
         video,
         recording,
+        link,
+        share_code,
         upload,
         session,
         token: sign(session),
@@ -505,6 +524,8 @@ fn fill(path: &str, world: &World) -> String {
         .replace("{lesson}", &world.lesson.to_string())
         .replace("{video}", &world.video.to_string())
         .replace("{recording}", &world.recording.to_string())
+        .replace("{link}", &world.link.to_string())
+        .replace("{code}", &world.share_code)
         .replace("{upload}", &world.upload.to_string())
         .replace("{session}", &world.session.to_string())
         .replace("{student}", &world.student.to_string())
@@ -624,6 +645,13 @@ fn rows() -> Vec<Row> {
         row(patch.clone(), "/v1/recordings/{recording}", OwnerOnly).json(|_, _| json!({"version": 1, "title": "Renamed"})),
         row(delete.clone(), "/v1/recordings/{recording}", OwnerOnly),
         row(put.clone(), "/v1/recordings/{recording}/video", OwnerOnly).json(|world, _| json!({"video_id": world.video})),
+        // Share links. The owner's side is the owner's alone; the visitor's side is open to anyone
+        // holding the code, signed in or not.
+        row(post.clone(), "/v1/recordings/{recording}/links", OwnerOnly).json(|_, _| json!({})),
+        row(get.clone(), "/v1/recordings/{recording}/links", OwnerOnly),
+        row(delete.clone(), "/v1/recordings/{recording}/links/{link}", OwnerOnly),
+        row(get.clone(), "/v1/s/{code}", Public),
+        row(post.clone(), "/v1/s/{code}/play", Public).json(|_, _| json!({})),
         // Playback
         row(delete.clone(), "/v1/play/{session}", SessionViewer),
         row(post.clone(), "/v1/play/{session}/heartbeat", SessionViewer).json(|_, _| json!({"position_seconds": 5})),

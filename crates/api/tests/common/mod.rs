@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod media;
 pub mod shop;
 
 use std::sync::Arc;

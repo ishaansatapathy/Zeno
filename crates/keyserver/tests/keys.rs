@@ -11,7 +11,7 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 use zeno_core::keyvault::KeyVault;
-use zeno_core::playback::{PlaybackClaims, PlaybackSigner};
+use zeno_core::playback::{PlaybackClaims, PlaybackSigner, ANONYMOUS_VIEWER};
 use zeno_keyserver::{router, KeyLimiter, KeyServer, MAX_KEY_FETCHES_PER_SESSION};
 
 const ORIGIN: &str = "http://localhost:3000";
@@ -403,5 +403,183 @@ db_test! {
     async fn health_answers(pool: PgPool) {
         let reply = get(&app(pool), "/health", None).await;
         assert_eq!((reply.status, reply.body.as_slice()), (StatusCode::OK, &b"ok"[..]));
+    }
+}
+
+// ---- watching through a share link: no account, the link is the credential -------------------
+
+struct LinkSeed {
+    owner: Uuid,
+    video: Uuid,
+    link: Uuid,
+    session: Uuid,
+    expires_at: DateTime<Utc>,
+}
+
+impl LinkSeed {
+    fn claims(&self) -> PlaybackClaims {
+        PlaybackClaims {
+            session_id: self.session,
+            video_id: self.video,
+            user_id: ANONYMOUS_VIEWER,
+            expires_at: self.expires_at,
+        }
+    }
+
+    fn url(&self) -> String {
+        format!(
+            "/v1/keys/{}?t={}",
+            self.video,
+            signer().sign(&self.claims())
+        )
+    }
+
+    /// The same link and video, with another visitor's session.
+    async fn another_visitor(&self, pool: &PgPool) -> LinkSeed {
+        let (session, expires_at) = new_link_session(pool, self.link, self.video).await;
+        LinkSeed {
+            owner: self.owner,
+            video: self.video,
+            link: self.link,
+            session,
+            expires_at,
+        }
+    }
+}
+
+/// A shared recording with an open link, and a visitor's session on it.
+async fn seed_link(pool: &PgPool) -> LinkSeed {
+    let owner = Uuid::new_v4();
+    sqlx::query("insert into users (id, name, email, password_hash, role) values ($1, 'Asha', $2, 'x', 'creator')")
+        .bind(owner)
+        .bind(format!("{owner}@x.in"))
+        .execute(pool)
+        .await
+        .unwrap();
+    let video = seed_video(pool, owner, &KEY).await;
+    let recording = Uuid::new_v4();
+    sqlx::query("insert into recordings (id, owner_id, video_id, source, title, visibility) values ($1, $2, $3, 'extension', 'Shared', 'link')")
+        .bind(recording)
+        .bind(owner)
+        .bind(video)
+        .execute(pool)
+        .await
+        .unwrap();
+    let link = Uuid::new_v4();
+    sqlx::query("insert into share_links (id, code, recording_id) values ($1, $2, $3)")
+        .bind(link)
+        .bind(link.simple().to_string()[..22].to_owned())
+        .bind(recording)
+        .execute(pool)
+        .await
+        .unwrap();
+    let (session, expires_at) = new_link_session(pool, link, video).await;
+    LinkSeed {
+        owner,
+        video,
+        link,
+        session,
+        expires_at,
+    }
+}
+
+async fn new_link_session(pool: &PgPool, link: Uuid, video: Uuid) -> (Uuid, DateTime<Utc>) {
+    let session = Uuid::new_v4();
+    let expires_at =
+        DateTime::from_timestamp((Utc::now() + Duration::hours(2)).timestamp(), 0).unwrap();
+    sqlx::query("insert into playback_sessions (id, share_link_id, video_id, expires_at) values ($1, $2, $3, $4)")
+        .bind(session)
+        .bind(link)
+        .bind(video)
+        .bind(expires_at)
+        .execute(pool)
+        .await
+        .unwrap();
+    (session, expires_at)
+}
+
+db_test! {
+    async fn a_link_viewing_gets_the_key_and_loses_it_when_the_link_is_closed(pool: PgPool) {
+        let app = app(pool.clone());
+        let s = seed_link(&pool).await;
+        let ok = get(&app, &s.url(), Some(ORIGIN)).await;
+        assert_eq!((ok.status, ok.body.as_slice()), (StatusCode::OK, &KEY[..]));
+        assert_eq!(ok.headers[header::CACHE_CONTROL], "no-store, private");
+
+        sqlx::query("update share_links set revoked_at = now() where id = $1").bind(s.link).execute(&pool).await.unwrap();
+        let after = get(&app, &s.url(), Some(ORIGIN)).await;
+        assert_eq!(after.status, StatusCode::FORBIDDEN);
+        assert!(!after.body.starts_with(&KEY));
+        let (ended, reason): (bool, Option<String>) =
+            sqlx::query_as("select ended_at is not null, end_reason from playback_sessions where id = $1")
+                .bind(s.session).fetch_one(&pool).await.unwrap();
+        assert_eq!((ended, reason.as_deref()), (true, Some("access_revoked")));
+    }
+}
+
+db_test! {
+    async fn each_way_of_closing_a_link_stops_its_keys(pool: PgPool) {
+        let app = app(pool.clone());
+        let s = seed_link(&pool).await;
+        assert_eq!(get(&app, &s.url(), None).await.status, StatusCode::OK);
+
+        // Made private.
+        sqlx::query("update recordings set visibility = 'private' where video_id = $1").bind(s.video).execute(&pool).await.unwrap();
+        assert_eq!(get(&app, &s.url(), None).await.status, StatusCode::FORBIDDEN);
+
+        // Shared again, a fresh viewing works; then the recording is deleted.
+        sqlx::query("update recordings set visibility = 'link' where video_id = $1").bind(s.video).execute(&pool).await.unwrap();
+        let second = s.another_visitor(&pool).await;
+        assert_eq!(get(&app, &second.url(), None).await.status, StatusCode::OK);
+        sqlx::query("update recordings set deleted_at = now() where video_id = $1").bind(s.video).execute(&pool).await.unwrap();
+        assert_eq!(get(&app, &second.url(), None).await.status, StatusCode::FORBIDDEN);
+
+        // Restored, and then the link expires under a third viewing.
+        sqlx::query("update recordings set deleted_at = null where video_id = $1").bind(s.video).execute(&pool).await.unwrap();
+        let third = s.another_visitor(&pool).await;
+        assert_eq!(get(&app, &third.url(), None).await.status, StatusCode::OK);
+        sqlx::query("update share_links set expires_at = now() - interval '1 second' where id = $1").bind(s.link).execute(&pool).await.unwrap();
+        assert_eq!(get(&app, &third.url(), None).await.status, StatusCode::FORBIDDEN);
+        let reason: Option<String> = sqlx::query_scalar("select end_reason from playback_sessions where id = $1")
+            .bind(third.session).fetch_one(&pool).await.unwrap();
+        assert_eq!(reason.as_deref(), Some("expired"));
+    }
+}
+
+db_test! {
+    async fn visitors_do_not_share_one_key_budget(pool: PgPool) {
+        // Two key fetches a day per viewer. If every visitor were the same nil "user", the third
+        // fetch by anyone would be refused for everyone.
+        let app = limited_app(pool.clone(), 10_000, 2);
+        let a = seed_link(&pool).await;
+        let b = a.another_visitor(&pool).await;
+        assert_eq!(get(&app, &a.url(), None).await.status, StatusCode::OK);
+        assert_eq!(get(&app, &a.url(), None).await.status, StatusCode::OK);
+        assert_eq!(get(&app, &a.url(), None).await.status, StatusCode::TOO_MANY_REQUESTS, "a viewer's own third");
+        assert_eq!(get(&app, &b.url(), None).await.status, StatusCode::OK, "another visitor is unaffected");
+    }
+}
+
+db_test! {
+    async fn a_token_must_describe_the_session_it_names(pool: PgPool) {
+        let app = app(pool.clone());
+        let link = seed_link(&pool).await;
+        // A link session with a token that names an account.
+        let as_user = PlaybackClaims { user_id: Uuid::new_v4(), ..link.claims() };
+        let url = format!("/v1/keys/{}?t={}", link.video, signer().sign(&as_user));
+        assert_eq!(get(&app, &url, None).await.status, StatusCode::FORBIDDEN);
+
+        // A signed-in viewer's session with a token that claims to be a visitor.
+        let account = seed(&pool).await;
+        let as_visitor = PlaybackClaims { user_id: ANONYMOUS_VIEWER, ..account.claims() };
+        let url = format!("/v1/keys/{}?t={}", account.video, signer().sign(&as_visitor));
+        assert_eq!(get(&app, &url, None).await.status, StatusCode::FORBIDDEN);
+        assert_eq!(get(&app, &account.url(), None).await.status, StatusCode::OK, "its own token still works");
+
+        // A link session does not unlock another video.
+        let elsewhere = seed_video(&pool, link.owner, &KEY).await;
+        let moved = PlaybackClaims { video_id: elsewhere, ..link.claims() };
+        let url = format!("/v1/keys/{elsewhere}?t={}", signer().sign(&moved));
+        assert_eq!(get(&app, &url, None).await.status, StatusCode::FORBIDDEN);
     }
 }
