@@ -83,8 +83,9 @@ or after the recording was deleted is `409 id_conflict`. Ten parallel retries ma
 transaction. If a video row is removed outright (an aborted upload), the recording goes back to
 `capturing`.
 
-`visibility` records intent only. Nothing reads it yet: playback stays owner-only until share links
-exist.
+`visibility` is who may watch: `private` (only the owner), `link` (anyone holding one of its
+share links) or `public`. Making a recording private switches every link off at once; see the
+Share links API.
 
 Writes are limited to 60 a minute per account (`recording_write`, fails closed); reading is not
 limited here.
@@ -95,6 +96,65 @@ costs the same at any depth and never skips or repeats rows while someone scroll
 200,000 recordings (200 owners): the first page of a library 0.15 ms, a page 500 rows in 0.18 ms,
 with a source filter 0.2 ms, all index scans with no sort. Nothing is counted or cached per request,
 and the status is one join on the video's primary key, so there is no stored copy to drift.
+
+## Share links API
+
+Anyone with a link can watch a recording, no account needed. The owner makes links (optionally
+with a password and an expiry) and can revoke any of them; a visitor resolves a link to what the
+page needs, then asks to play. Owner endpoints are the recording's owner's alone (admins cannot
+manage someone else's links); the visitor endpoints are open to anyone holding the code.
+
+| Endpoint | Who | Purpose |
+| --- | --- | --- |
+| `POST /v1/recordings/:id/links` | owner | Make a link: optional `password` (4 to 128 characters) and `expires_at` (a minute to ten years away). `201` with the link and its `url`. A private recording is switched to `link` in the same transaction. At most 10 live links per recording (`409 too_many_links`) |
+| `GET /v1/recordings/:id/links` | owner | The recording's links, newest first, each `active`, `expired` or `revoked`. Never carries the password hash |
+| `DELETE /v1/recordings/:id/links/:link` | owner | Revoke. Ends every viewing under way through it at once. Safe to repeat |
+| `GET /v1/s/:code` | anyone | What the page needs: `{share: {code, requires_password, title, status, duration_seconds, expires_at}}`. A password-protected link reveals only `requires_password: true`: not even the title. Cacheable: `Cache-Control: public, max-age=15, stale-while-revalidate=45` and an `ETag` (`304` on a repeat) |
+| `POST /v1/s/:code/play` | anyone | Start watching: body `{}` or `{"password": ...}`. `201` with `{playback: {session_id, playlist_url, expires_at, watermark}}`. No heartbeat and no resume point: there is no account to remember either for. `403 password_required` / `403 wrong_password`, `409 not_ready` while the video is still processing |
+
+A code is 22 URL-safe characters (128 random bits), so a link cannot be guessed and the code is the
+credential. A code of the wrong shape is `404` without touching the database; a well-formed code
+that never existed is `404`; a link that was good and has closed (revoked, expired, switched off by
+making the recording private, or its recording deleted) is `410 link_unavailable`, so a visitor
+holding it is told it has closed. Setting the recording back to `link` brings its links back to
+life, so making it private is a reversible kill switch.
+
+**How a visitor plays.** `play` opens an ordinary playback session, tied to the link instead of an
+account (`playback_sessions.share_link_id`, with a null `user_id`). The token carries the nil UUID
+(`ANONYMOUS_VIEWER`), which no account can have. From there the same playlists and key server apply,
+and each request asks one SQL function, `playback_access_state(user, video, link)`, whether the
+session may continue: for an account it is exactly the existing course rule; for a link, the link
+must be live, the recording still exist and still be shared, and still be made of this video. So
+revoking a link, making the recording private, letting the link expire or deleting the recording
+ends the viewing at its next playlist or key request (and revoking, going private and deleting also
+end open sessions immediately). Segments already fetched keep playing, as for any viewer, but no
+new key is released. A token for a link session does not work with a user's session, or the other
+way round, or for another video.
+
+**Passwords.** Argon2id, checked before a session starts. Each guess costs a password hash, so it
+is counted first: 10 a minute per link and client address (`share_password`, fails closed), and a
+spent budget refuses even the right password until the window passes.
+
+**Limits** (per client address unless noted): `share_resolve` 300 a minute (open), `share_play` 30 a
+minute (open: a Redis outage should not stop people watching what was shared with them),
+`share_password` 10 a minute per link and address (closed), `share_write` 30 a minute per account
+(closed). A link viewing has no concurrent-screen limit (no account to count it against); the key
+server meters it per session, and the per-address limit bounds how fast sessions start.
+
+**Scale.** A visit is one indexed lookup by code (`share_links_code_unique`) joined to the recording
+and video by primary key, and the answer is edge-cacheable: with a 15 s lifetime an edge asks the
+origin about a link at most about four times a minute however many people open it. A cached page
+never lets anyone watch after a revoke, because playlists and keys ask the database again. Measured
+on a laptop (Postgres in Docker) with 300,000 links: a lookup averages 1.2 ms from one client and
+about 3,000 a second across 16; a whole visitor start (find the link, open a session, one access
+check) runs about 780 a second across 16 clients with real commits, none failing. The cost per
+viewing is a session row; link sessions that ended are forgotten after 7 days (account sessions
+after 90). If one link's traffic ever outgrows that, the next step is stateless link tokens with
+the link's status cached for a few seconds, trading instant revocation for fewer writes.
+
+**Rolling deploys.** Until every API and key-server instance runs this version, an instance that
+meets an anonymous session cannot read its null user and refuses it. Roll both services out before
+anyone creates a link.
 
 ## Course API
 
@@ -173,6 +233,10 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `progress_read` | account | 120 / minute | lets requests through |
 | `checkout` | account | 10 / minute | refuses (`503`) |
 | `recording_write` | account | 60 / minute | refuses (`503`) |
+| `share_resolve` | client address | 300 / minute | lets requests through |
+| `share_play` | client address | 30 / minute | lets requests through |
+| `share_password` | link and client address | 10 / minute | refuses (`503`) |
+| `share_write` | account | 30 / minute | refuses (`503`) |
 | `order_read` | account | 120 / minute | lets requests through |
 | `coupon_write` | account | 30 / minute | refuses (`503`) |
 | `coupon_try` | account | 20 / minute | refuses (`503`) |
@@ -346,6 +410,10 @@ Three things try to get around the payment path from the outside, and a mutation
 | `POST /v1/play/:session/heartbeat` | Every 30 s with `{"position_seconds": n}`: keeps the session alive and saves the position for resume |
 | `DELETE /v1/play/:session` | Stop watching and free the screen |
 | `GET /v1/keys/:video_id?t=` | `zeno-keyserver`: the 16-byte AES key, `no-store` |
+
+A viewer with no account can also watch through a share link (`POST /v1/s/:code/play`, see the
+Share links API): their session is tied to the link instead of a user, and `playback_access_state`
+answers for it; everything below about tokens, playlists and the key server applies to both.
 
 Who may watch is decided by one database access rule. Creators and admins may preview their videos directly through `POST /v1/videos/:id/play`; students start through `POST /v1/lessons/:id/play` and need either a published free-preview lesson or an active enrollment (`not revoked` and `not expired`) in any course containing that video. Existing enrollments keep working while a creator temporarily unpublishes to edit, and for 30 days after a course is soft-deleted; new claims require a published course. Raw video IDs never act as a student access API.
 

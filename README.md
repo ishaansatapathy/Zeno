@@ -6,7 +6,7 @@ payments underneath. Built for teachers and creators everywhere. (Zeno is a work
 
 | Surface | What it does | State |
 | --- | --- | --- |
-| **Hosting** | Upload once; encoded to five qualities (144p to 720p), encrypted segment by segment, played behind short-lived signed tokens. Courses, enrollment, checkout, refunds and a double-entry earnings ledger. A library of recordings on top (named, retry-safe to create, deleted together with their video). | Built |
+| **Hosting** | Upload once; encoded to five qualities (144p to 720p), encrypted segment by segment, played behind short-lived signed tokens. Courses, enrollment, checkout, refunds and a double-entry earnings ledger. A library of recordings on top (named, retry-safe to create, deleted together with their video), and share links: anyone with a link watches with no account, optionally behind a password or an expiry, and revoking one ends every viewing at once. | Built |
 | **Web app** | Public site; library, share pages and the player next. | Site built |
 | **Extension** | Record screen, camera and mic in Chrome, Edge or Brave; a share link exists before you stop recording. | Planned |
 | **Studio** (desktop) | Windows first, then macOS. Record and stream; go live to only the platforms you tick for that stream (YouTube, Twitch, Instagram, X, any RTMP key), wide and tall at once, one merged chat. Pick any camera, including a phone. | Planned |
@@ -32,7 +32,7 @@ handful of stateless servers serve very large audiences, and it is how the parts
 | Upload | `POST /v1/videos` → presigned part URLs | Browser → object storage, in parallel parts, resumable | Yes |
 | Encode | Completion enqueues a job (Postgres `SKIP LOCKED`) | Worker ↔ object storage | Yes |
 | Watch | `POST /v1/lessons/:id/play` → signed playlist + token | Player ← CDN (segments); a tiny key server checks each key request | Yes |
-| Share link | One cached lookup of the link | Viewer ← CDN | Next |
+| Share link | `GET /v1/s/:code` (one indexed lookup, edge-cacheable), then `POST /v1/s/:code/play` | Viewer ← CDN (segments); the key server re-checks the link on every key | Yes |
 | Go live to many platforms | `POST /v1/streams` → credentials for each ticked destination | Studio → YouTube, Twitch, Instagram, X directly. **Our egress: zero** | Planned |
 | Live on Zeno | Stream key check | Studio → media server → CDN (rolling HLS) | Partly |
 | Meeting | Mint a room token | Participants ↔ SFU (LiveKit) | Planned |
@@ -185,6 +185,6 @@ capped at what was paid, coupons, invoices (off until tax advice), the earnings 
 and the public site. CI runs the Rust suite, the web build and tests, and a dependency audit on
 every push.
 
-and the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows).
+the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows), and share links (22-character unguessable codes, passwords checked behind a per-link guess limit, instant revocation; about 780 visitor starts a second on a laptop).
 
-Next: share links, then the extension.
+Next: the web app's pages (sign-in, library, share page), then the extension.
