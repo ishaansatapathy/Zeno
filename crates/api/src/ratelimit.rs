@@ -77,6 +77,13 @@ pub mod policies {
         rule: Rule::per_minute(10),
         fail: Fail::Closed,
     };
+    /// Making or changing recordings, per account. A person records a handful a day; a client
+    /// that retries aggressively is slowed here instead of filling a library with duplicates.
+    pub const RECORDING_WRITE: Policy = Policy {
+        name: "recording_write",
+        rule: Rule::per_minute(60),
+        fail: Fail::Closed,
+    };
     /// Webhook calls whose signature did not check out, per client address. Only failures are
     /// counted, so a flood of forgeries is turned away while the provider's real traffic is not
     /// limited at all.
