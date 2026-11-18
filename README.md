@@ -6,7 +6,7 @@ payments underneath. Built for teachers and creators everywhere. (Zeno is a work
 
 | Surface | What it does | State |
 | --- | --- | --- |
-| **Hosting** | Upload once; encoded to five qualities (144p to 720p), encrypted segment by segment, played behind short-lived signed tokens. Courses, enrollment, checkout, refunds and a double-entry earnings ledger. | Built (742 Rust tests) |
+| **Hosting** | Upload once; encoded to five qualities (144p to 720p), encrypted segment by segment, played behind short-lived signed tokens. Courses, enrollment, checkout, refunds and a double-entry earnings ledger. A library of recordings on top (named, retry-safe to create, deleted together with their video). | Built |
 | **Web app** | Public site; library, share pages and the player next. | Site built |
 | **Extension** | Record screen, camera and mic in Chrome, Edge or Brave; a share link exists before you stop recording. | Planned |
 | **Studio** (desktop) | Windows first, then macOS. Record and stream; go live to only the platforms you tick for that stream (YouTube, Twitch, Instagram, X, any RTMP key), wide and tall at once, one merged chat. Pick any camera, including a phone. | Planned |
@@ -185,4 +185,6 @@ capped at what was paid, coupons, invoices (off until tax advice), the earnings 
 and the public site. CI runs the Rust suite, the web build and tests, and a dependency audit on
 every push.
 
-Next: recordings and share links, then the extension.
+and the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows).
+
+Next: share links, then the extension.

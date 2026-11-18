@@ -54,6 +54,48 @@ Unfinished uploads are cancelled after 24 hours. Original uploads are deleted `S
 
 Uploads are untrusted input to ffmpeg, so only an allowlist of media containers is accepted (playlists, concat scripts and other formats that reference further resources are refused before any encode); ffmpeg runs with `-protocol_whitelist file`, a scrubbed environment, a hard timeout and kill-on-cancel; output is capped at the duration limit; and metadata, chapters and subtitles are stripped. A file that cannot be processed fails for good with a short code (`unsupported_media`, `no_video_stream`, `too_long`, `resolution_too_high`); infrastructure trouble is retried with backoff.
 
+## Recordings API
+
+A recording is a thin row on top of a video: the entry in a person's library, whatever made it
+(`upload`, `extension`, `studio`, `stream` or `meeting`). The heavy part (upload, encode, protect,
+play) is the video pipeline above; recordings are the small, cheap layer people name, find and
+delete. Creators and admins have a library; a recording is visible only to its owner (admins cannot
+read someone else's; a moderation takedown is planned).
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/recordings` | Make one: `source` (required), `title` (default "Untitled recording", 1 to 120 characters), optional `id` (a client-chosen UUID) and optional `video_id` (one of your own). `201`, or `200` with the existing one if this `id` was already created by you |
+| `GET /v1/recordings` | Your library, newest first. `limit` (1 to 50, default 20), `cursor`, `source`. Answers `{recordings, next_cursor}` |
+| `GET /v1/recordings/:id` | One recording. Someone else's, a deleted one and a malformed id all answer `404` |
+| `PATCH /v1/recordings/:id` | Change `title` and/or `visibility` (`private`, `link`, `public`). Needs the current `version` in `If-Match` or the body: `428` without it, `409 version_conflict` if it moved on |
+| `PUT /v1/recordings/:id/video` | Give a recording its video (`{"video_id": ...}`). Repeating it is safe; a different second video is `409 video_already_attached`; a video already in another recording is `409 video_in_use`; someone else's is `404 video_not_found` |
+| `DELETE /v1/recordings/:id` | Deletes the recording and, unless a course still uses it, its video |
+
+A recording's `status` is read from its video, never stored: `capturing` (no video yet),
+`uploading`, `processing`, `ready` or `failed`. `duration_seconds` comes from the same place.
+
+**Creating is safe to retry.** The extension and the studio create a recording from flaky networks,
+so a client sends its own random `id`. A second request with the same `id` returns the first
+recording instead of making another; the same `id` with a different `source`, from another person,
+or after the recording was deleted is `409 id_conflict`. Ten parallel retries make exactly one row.
+
+**A recording follows its video.** Deleting a video deletes the recordings made of it, in the same
+transaction. If a video row is removed outright (an aborted upload), the recording goes back to
+`capturing`.
+
+`visibility` records intent only. Nothing reads it yet: playback stays owner-only until share links
+exist.
+
+Writes are limited to 60 a minute per account (`recording_write`, fails closed); reading is not
+limited here.
+
+**Scale.** The library is keyset-paginated on `(created_at, id)` against the partial index
+`recordings_owner_list_idx (owner_id, created_at desc, id desc) where deleted_at is null`, so a page
+costs the same at any depth and never skips or repeats rows while someone scrolls. Measured on
+200,000 recordings (200 owners): the first page of a library 0.15 ms, a page 500 rows in 0.18 ms,
+with a source filter 0.2 ms, all index scans with no sort. Nothing is counted or cached per request,
+and the status is one join on the video's primary key, so there is no stored copy to drift.
+
 ## Course API
 
 Creators and admins can build courses through a versioned API. Prices are integer paise in INR; slugs are stable after creation; deleting a course is a soft delete so future enrollment and audit history are not orphaned. Updates use optimistic concurrency: send the current `version` in the JSON body or `If-Match`; a stale editor receives `409 version_conflict` instead of silently overwriting newer work.
@@ -130,6 +172,7 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `enroll` | account | 20 / minute | refuses (`503`) |
 | `progress_read` | account | 120 / minute | lets requests through |
 | `checkout` | account | 10 / minute | refuses (`503`) |
+| `recording_write` | account | 60 / minute | refuses (`503`) |
 | `order_read` | account | 120 / minute | lets requests through |
 | `coupon_write` | account | 30 / minute | refuses (`503`) |
 | `coupon_try` | account | 20 / minute | refuses (`503`) |
