@@ -1,10 +1,9 @@
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::http::HeaderMap;
+use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::catalog::dto::{
     creator_page, ApiQuery, CatalogPage, CatalogQuery, CourseCard, CourseDetailEnvelope,
@@ -25,41 +24,9 @@ pub fn router() -> Router<AppState> {
         .route("/creators/:handle", get(creator))
 }
 
-/// JSON with a content-derived `ETag`: a repeat request that already holds this exact answer
-/// gets an empty `304` instead.
+/// JSON with a content-derived `ETag` and the catalogue's cache lifetime.
 fn cacheable<T: Serialize>(request: &HeaderMap, value: &T) -> Response {
-    let body = serde_json::to_vec(value).expect("catalogue responses serialise");
-    let digest = Sha256::digest(&body);
-    let etag = format!(
-        "W/\"{}\"",
-        digest[..8]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    );
-    let unchanged = request
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|sent| {
-            sent.split(',')
-                .map(str::trim)
-                .any(|candidate| candidate == "*" || candidate == etag)
-        });
-    let mut response = if unchanged {
-        StatusCode::NOT_MODIFIED.into_response()
-    } else {
-        ([(header::CONTENT_TYPE, "application/json")], body).into_response()
-    };
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static(CACHE_CONTROL),
-    );
-    headers.insert(
-        header::ETAG,
-        HeaderValue::from_str(&etag).expect("hex is a valid header value"),
-    );
-    response
+    crate::httpcache::json_with_etag(request, value, CACHE_CONTROL)
 }
 
 async fn list(

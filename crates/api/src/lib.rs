@@ -10,6 +10,7 @@ pub mod enrollments;
 pub mod error;
 pub mod etag;
 pub mod health;
+pub mod httpcache;
 pub mod images;
 pub mod invoices;
 pub mod ledger;
