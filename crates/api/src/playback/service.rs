@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 use zeno_core::model::{Role, VideoStatus};
-use zeno_core::playback::PlaybackClaims;
+use zeno_core::playback::{PlaybackClaims, ANONYMOUS_VIEWER};
 use zeno_core::storage::StorageError;
 
 use crate::auth::extractor::AuthUser;
@@ -162,7 +162,8 @@ async fn start_with_video(
         &mut tx,
         &NewSession {
             id: session_id,
-            user_id: user.id,
+            user_id: Some(user.id),
+            share_link_id: None,
             video_id,
             device: &truncate(
                 ctx.user_agent.as_deref().unwrap_or_default(),
@@ -189,6 +190,70 @@ async fn start_with_video(
         expires_at,
         resume_from_seconds: position,
         watermark: watermark(&viewer, session_id),
+    })
+}
+
+/// Starts a viewing through a share link. The caller has already checked the link (live, not
+/// password-protected or the password was right) and found the video it plays; this makes the
+/// session and its token. There is no account: the token carries the anonymous viewer, and the
+/// session row names the link, so revoking the link ends every viewing at the next request.
+///
+/// No concurrent-screen limit applies (there is no account to count them against); the share
+/// routes are limited per address instead, and keys per session.
+pub async fn start_link(
+    state: &AppState,
+    link_id: Uuid,
+    video: VideoRow,
+    ctx: &ClientContext,
+) -> Result<Started, ApiError> {
+    if video.status != VideoStatus::Ready {
+        return Err(conflict(
+            "not_ready",
+            "This video is not ready to play yet.",
+        ));
+    }
+    let session_id = Uuid::new_v4();
+    let now = Utc::now();
+    let expires_at = DateTime::from_timestamp(
+        (now + session_length(video.duration_seconds)).timestamp(),
+        0,
+    )
+    .unwrap_or(now + MIN_SESSION);
+    let mut conn = state.db.acquire().await?;
+    repo::insert(
+        &mut conn,
+        &NewSession {
+            id: session_id,
+            user_id: None,
+            share_link_id: Some(link_id),
+            video_id: video.id,
+            device: &truncate(
+                ctx.user_agent.as_deref().unwrap_or_default(),
+                MAX_DEVICE_LEN,
+            ),
+            ip: ctx.ip,
+            expires_at,
+            position: 0,
+            lesson_id: None,
+        },
+    )
+    .await?;
+    let token = state.config.playback.sign(&PlaybackClaims {
+        session_id,
+        video_id: video.id,
+        user_id: ANONYMOUS_VIEWER,
+        expires_at,
+    });
+    let session_code = session_id.simple().to_string()[..8].to_uppercase();
+    Ok(Started {
+        session_id,
+        token,
+        expires_at,
+        resume_from_seconds: 0,
+        watermark: Watermark {
+            text: format!("Shared view · {session_code}"),
+            session_code,
+        },
     })
 }
 
@@ -257,7 +322,9 @@ async fn authorize(
     let session = repo::touch_playable(&state.db, session_id)
         .await?
         .ok_or_else(denied)?;
-    if session.user_id != claims.user_id || session.video_id != claims.video_id {
+    if session.user_id.unwrap_or(ANONYMOUS_VIEWER) != claims.user_id
+        || session.video_id != claims.video_id
+    {
         return Err(denied());
     }
     let renditions = session

@@ -33,12 +33,24 @@ const CONTEXT: &[u8] = b"zeno-playback-token-v2";
 /// Longest token accepted before any decoding is attempted.
 const MAX_TOKEN_LEN: usize = 180;
 
+/// The `user_id` in the token of someone watching through a share link: no account. It is the
+/// nil UUID, which no real user can have (accounts get random v4 ids), so it cannot be mistaken
+/// for one. The session row the token names says which link the viewing belongs to.
+pub const ANONYMOUS_VIEWER: Uuid = Uuid::nil();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlaybackClaims {
     pub session_id: Uuid,
     pub video_id: Uuid,
     pub user_id: Uuid,
     pub expires_at: DateTime<Utc>,
+}
+
+impl PlaybackClaims {
+    /// The account behind this token, or `None` for a share-link viewer.
+    pub fn account(&self) -> Option<Uuid> {
+        (self.user_id != ANONYMOUS_VIEWER).then_some(self.user_id)
+    }
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

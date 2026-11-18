@@ -314,7 +314,14 @@ async fn key(
             return denied();
         }
     };
-    match state.limiter.user(claims.user_id).await {
+    // A signed-in viewer is limited as themselves. A share-link viewer has no account to count
+    // against (every anonymous viewer would otherwise share one budget), so the session is their
+    // own bucket; the per-address limit above and the per-session cap below do the rest.
+    match state
+        .limiter
+        .user(claims.account().unwrap_or(claims.session_id))
+        .await
+    {
         Ok(()) => {}
         Err(LimitError::Exceeded(retry)) => return limited(retry),
         Err(LimitError::Unavailable(err)) => return unavailable(err),
@@ -326,12 +333,12 @@ async fn key(
                  when s.expires_at <= now() then 'expired' \
                  when v.deleted_at is not null then 'video_deleted' \
                  when v.status <> 'ready' then 'access_revoked' \
-                 else video_access_state(s.user_id, s.video_id) \
+                 else playback_access_state(s.user_id, s.video_id, s.share_link_id) \
              end as access_state \
              from playback_sessions s \
              join videos v on v.id=s.video_id \
              join video_keys k on k.video_id=s.video_id \
-             where s.id=$1 and s.user_id=$2 and s.video_id=$3 and s.ended_at is null \
+             where s.id=$1 and s.user_id is not distinct from $2 and s.video_id=$3 and s.ended_at is null \
          ), ended as ( \
              update playback_sessions s set ended_at=now(), end_reason=c.access_state \
              from candidate c where s.id=c.id and c.access_state <> 'allowed' \
@@ -341,7 +348,7 @@ async fn key(
          returning s.key_fetches, c.wrapped_key",
     )
     .bind(claims.session_id)
-    .bind(claims.user_id)
+    .bind(claims.account())
     .bind(video_id)
     .fetch_optional(&state.db)
     .await

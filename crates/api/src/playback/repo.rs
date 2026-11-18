@@ -71,7 +71,10 @@ pub async fn last_position(
 
 pub struct NewSession<'a> {
     pub id: Uuid,
-    pub user_id: Uuid,
+    /// The signed-in viewer; `None` when the viewing comes through a share link.
+    pub user_id: Option<Uuid>,
+    /// The share link a link viewing belongs to. Exactly one of this and `user_id` is set.
+    pub share_link_id: Option<Uuid>,
     pub video_id: Uuid,
     pub device: &'a str,
     pub ip: Option<IpAddr>,
@@ -83,8 +86,8 @@ pub struct NewSession<'a> {
 
 pub async fn insert(db: &mut PgConnection, session: &NewSession<'_>) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "insert into playback_sessions (id, user_id, video_id, device, ip, expires_at, last_position_seconds, lesson_id) \
-         values ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "insert into playback_sessions (id, user_id, share_link_id, video_id, device, ip, expires_at, last_position_seconds, lesson_id) \
+         values ($1, $2, $9, $3, $4, $5, $6, $7, $8)",
     )
     .bind(session.id)
     .bind(session.user_id)
@@ -94,6 +97,7 @@ pub async fn insert(db: &mut PgConnection, session: &NewSession<'_>) -> Result<(
     .bind(session.expires_at)
     .bind(session.position)
     .bind(session.lesson_id)
+    .bind(session.share_link_id)
     .execute(db)
     .await?;
     Ok(())
@@ -119,7 +123,8 @@ pub async fn viewer<'e>(
 /// A session that may still be served, with what serving it needs.
 #[derive(sqlx::FromRow)]
 pub struct Playable {
-    pub user_id: Uuid,
+    /// `None` for a share-link viewing.
+    pub user_id: Option<Uuid>,
     pub video_id: Uuid,
     pub expires_at: DateTime<Utc>,
     pub renditions: Value,
@@ -138,7 +143,7 @@ pub async fn touch_playable<'e>(
                     when s.expires_at <= now() then 'expired' \
                     when v.deleted_at is not null then 'video_deleted' \
                     when v.status <> 'ready' then 'access_revoked' \
-                    else video_access_state(s.user_id, s.video_id) \
+                    else playback_access_state(s.user_id, s.video_id, s.share_link_id) \
                 end as access_state \
              from playback_sessions s join videos v on v.id=s.video_id \
              where s.id=$1 and s.ended_at is null \
@@ -195,7 +200,7 @@ pub async fn heartbeat<'e>(
                  when s.expires_at <= now() then 'expired' \
                  when v.deleted_at is not null then 'video_deleted' \
                  when v.status <> 'ready' then 'access_revoked' \
-                 else video_access_state(s.user_id, s.video_id) \
+                 else playback_access_state(s.user_id, s.video_id, s.share_link_id) \
              end as access_state \
              from playback_sessions s join videos v on v.id=s.video_id \
              where s.id=$1 and s.user_id=$2 and s.ended_at is null \
@@ -265,6 +270,41 @@ pub async fn end_all_for_video<'e>(
     .rows_affected())
 }
 
+/// Ends every open viewing through one share link (it was revoked).
+pub async fn end_for_link<'e>(
+    db: impl PgExecutor<'e>,
+    link_id: Uuid,
+    reason: &str,
+) -> Result<u64, sqlx::Error> {
+    Ok(sqlx::query(
+        "update playback_sessions set ended_at = now(), end_reason = $2 \
+         where share_link_id = $1 and ended_at is null",
+    )
+    .bind(link_id)
+    .bind(reason)
+    .execute(db)
+    .await?
+    .rows_affected())
+}
+
+/// Ends every open viewing through any link of a recording (it went private, or was deleted).
+pub async fn end_for_recording_links<'e>(
+    db: impl PgExecutor<'e>,
+    recording_id: Uuid,
+    reason: &str,
+) -> Result<u64, sqlx::Error> {
+    Ok(sqlx::query(
+        "update playback_sessions set ended_at = now(), end_reason = $2 \
+         where ended_at is null and share_link_id in \
+             (select id from share_links where recording_id = $1)",
+    )
+    .bind(recording_id)
+    .bind(reason)
+    .execute(db)
+    .await?
+    .rows_affected())
+}
+
 /// Hourly housekeeping: closes expired sessions and forgets sessions that ended long ago.
 pub async fn sweep<'e, E>(db: E, keep_days: i32) -> Result<(u64, u64), sqlx::Error>
 where
@@ -277,8 +317,11 @@ where
     .execute(db)
     .await?
     .rows_affected();
+    // Sessions of signed-in viewers are kept for resume points and abuse investigations. A link
+    // viewing has neither, and a popular link makes a great many of them: keep those a week.
     let forgotten = sqlx::query(
-        "delete from playback_sessions where ended_at < now() - make_interval(days => $1)",
+        "delete from playback_sessions where ended_at < now() - \
+             case when share_link_id is null then make_interval(days => $1) else interval '7 days' end",
     )
     .bind(keep_days)
     .execute(db)
