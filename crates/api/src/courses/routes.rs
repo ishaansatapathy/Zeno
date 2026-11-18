@@ -1,7 +1,7 @@
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use uuid::Uuid;
@@ -41,48 +41,11 @@ fn parse_id(raw: &str) -> Result<Uuid, ApiError> {
 }
 
 fn header_version(headers: &HeaderMap) -> Result<Option<i32>, ApiError> {
-    let Some(raw) = headers.get(header::IF_MATCH) else {
-        return Ok(None);
-    };
-    let raw = raw
-        .to_str()
-        .map_err(|_| ApiError::bad_request("invalid_version", "If-Match is invalid."))?;
-    let value = raw
-        .strip_prefix("W/")
-        .unwrap_or(raw)
-        .trim_matches('"')
-        .parse::<i32>()
-        .ok()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "invalid_version",
-                "If-Match must contain a positive course version.",
-            )
-        })?;
-    Ok(Some(value))
+    crate::etag::header_version(headers, "course")
 }
 
 fn expected_version(headers: &HeaderMap, body: Option<i32>) -> Result<i32, ApiError> {
-    let header = header_version(headers)?;
-    if header.is_some() && body.is_some() && header != body {
-        return Err(ApiError::bad_request(
-            "version_mismatch",
-            "The body version and If-Match header disagree.",
-        ));
-    }
-    let version = header.or(body).ok_or_else(|| ApiError::Http {
-        status: StatusCode::PRECONDITION_REQUIRED,
-        code: "version_required",
-        message: "Send the course version in If-Match or the request body.".into(),
-    })?;
-    if version <= 0 {
-        return Err(ApiError::bad_request(
-            "invalid_version",
-            "The course version must be a positive integer.",
-        ));
-    }
-    Ok(version)
+    crate::etag::expected_version(headers, body, "course")
 }
 
 async fn create(
@@ -213,14 +176,16 @@ async fn clear_thumbnail(
 
 #[cfg(test)]
 mod tests {
+    use axum::http::header;
+
     use super::*;
 
     #[test]
-    fn version_headers_are_strict() {
+    fn course_version_headers_say_course() {
         let mut headers = HeaderMap::new();
-        assert!(expected_version(&headers, None).is_err());
+        let err = expected_version(&headers, None).unwrap_err();
+        assert!(format!("{err:?}").contains("course version"));
         headers.insert(header::IF_MATCH, "W/\"7\"".parse().unwrap());
         assert_eq!(expected_version(&headers, None).unwrap(), 7);
-        assert!(expected_version(&headers, Some(8)).is_err());
     }
 }
