@@ -265,6 +265,8 @@ struct World {
     course: Uuid,
     lesson: Uuid,
     video: Uuid,
+    /// A recording the owner has made.
+    recording: Uuid,
     /// A real, unfinished multipart upload owned by the owner (only when a route needs one).
     upload: Uuid,
     session: Uuid,
@@ -471,10 +473,18 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
     } else {
         Uuid::nil()
     };
+    let recording = Uuid::new_v4();
+    sqlx::query("insert into recordings (id, owner_id, source, title) values ($1, $2, 'extension', 'Matrix recording')")
+        .bind(recording)
+        .bind(actors.owner_id)
+        .execute(pool)
+        .await
+        .unwrap();
     World {
         course,
         lesson,
         video,
+        recording,
         upload,
         session,
         token: sign(session),
@@ -494,6 +504,7 @@ fn fill(path: &str, world: &World) -> String {
     path.replace("{course}", &world.course.to_string())
         .replace("{lesson}", &world.lesson.to_string())
         .replace("{video}", &world.video.to_string())
+        .replace("{recording}", &world.recording.to_string())
         .replace("{upload}", &world.upload.to_string())
         .replace("{session}", &world.session.to_string())
         .replace("{student}", &world.student.to_string())
@@ -606,6 +617,13 @@ fn rows() -> Vec<Row> {
         row(post.clone(), "/v1/videos/{upload}/complete", OwnerOnly).upload(),
         row(post.clone(), "/v1/videos/{upload}/abort", OwnerOnly).upload(),
         row(post.clone(), "/v1/videos/{video}/play", OwnedRefused),
+        // Recordings: a person's own library. Admins cannot read or change someone else's.
+        row(post.clone(), "/v1/recordings", Creator).json(|_, _| json!({"source": "upload"})),
+        row(get.clone(), "/v1/recordings", Creator),
+        row(get.clone(), "/v1/recordings/{recording}", OwnerOnly),
+        row(patch.clone(), "/v1/recordings/{recording}", OwnerOnly).json(|_, _| json!({"version": 1, "title": "Renamed"})),
+        row(delete.clone(), "/v1/recordings/{recording}", OwnerOnly),
+        row(put.clone(), "/v1/recordings/{recording}/video", OwnerOnly).json(|world, _| json!({"video_id": world.video})),
         // Playback
         row(delete.clone(), "/v1/play/{session}", SessionViewer),
         row(post.clone(), "/v1/play/{session}/heartbeat", SessionViewer).json(|_, _| json!({"position_seconds": 5})),
@@ -806,8 +824,7 @@ fn no_route_is_missing_from_the_matrix() {
 
     // A router declares a path relative to where it is mounted, so a declared path matches a table
     // row whose path ends with it. A bare "/" is a mount point: it means the collection itself.
-    let is_mount =
-        |segs: &[String]| matches!(segs, [v, c] if v == "v1" && (c == "courses" || c == "videos"));
+    let is_mount = |segs: &[String]| matches!(segs, [v, c] if v == "v1" && matches!(c.as_str(), "courses" | "videos" | "recordings"));
     let covers = |declared: &RouteSig, row: &RouteSig| {
         declared.method == row.method
             && if declared.segments.is_empty() {
