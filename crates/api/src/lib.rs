@@ -24,6 +24,7 @@ pub mod profiles;
 pub mod progress;
 pub mod ratelimit;
 pub mod reconcile;
+pub mod recordings;
 pub mod refunds;
 pub mod secret;
 pub mod security;
@@ -99,6 +100,7 @@ pub fn build_app(state: AppState) -> Router {
         )
         .nest("/v1/lessons", courses::lessons::routes::item_router())
         .nest("/v1/videos", videos::routes::router())
+        .nest("/v1/recordings", recordings::routes::router())
         .nest("/v1/play", playback::routes::router())
         .merge(coupons::routes::router())
         .merge(invoices::routes::router())

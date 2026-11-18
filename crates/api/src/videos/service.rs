@@ -364,6 +364,7 @@ pub async fn delete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<(), A
         return Err(not_found());
     }
     repo::invalidate_courses_for_video(&mut tx, id).await?;
+    crate::recordings::repo::soft_delete_for_video(&mut *tx, id).await?;
     crate::playback::repo::end_all_for_video(&mut *tx, id, "video_deleted").await?;
     tx.commit().await?;
     Ok(())
