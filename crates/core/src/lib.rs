@@ -10,3 +10,4 @@ pub mod playback;
 pub mod ratelimit;
 pub mod secret;
 pub mod storage;
+pub mod views;
