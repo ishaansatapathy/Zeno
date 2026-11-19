@@ -161,6 +161,7 @@ pub fn make_state_with(
         payments: zeno_api::payments::PaymentsConfig::Fake,
         order_ttl_minutes: 30,
         reconcile_interval_secs: 300,
+        view_flush_interval_secs: 60,
         invoices: zeno_api::invoices::InvoicesConfig::disabled(),
         ledger: zeno_api::ledger::LedgerConfig::defaults(),
     };

@@ -36,6 +36,9 @@ pub struct ApiConfig {
     pub order_ttl_minutes: u32,
     /// Seconds between passes of the payment reconciliation job.
     pub reconcile_interval_secs: u64,
+    /// Seconds between moves of view counts from Redis to Postgres. Views reach the owner's
+    /// numbers up to this late.
+    pub view_flush_interval_secs: u64,
     /// Invoices: off until the tax side has been advised on.
     pub invoices: InvoicesConfig,
     /// The earnings ledger: the fallback gateway fee and the smallest payout.
@@ -74,6 +77,13 @@ impl ApiConfig {
             return Err(ConfigError::Invalid {
                 name: "RECONCILE_INTERVAL_SECS",
                 reason: "must be between 30 and 3600".into(),
+            });
+        }
+        let view_flush_interval_secs = parse_or("VIEW_FLUSH_INTERVAL_SECS", 60u64)?;
+        if !(5..=3600).contains(&view_flush_interval_secs) {
+            return Err(ConfigError::Invalid {
+                name: "VIEW_FLUSH_INTERVAL_SECS",
+                reason: "must be between 5 and 3600".into(),
             });
         }
         if max_concurrent_streams == 0 {
@@ -135,6 +145,7 @@ impl ApiConfig {
             payments,
             order_ttl_minutes,
             reconcile_interval_secs,
+            view_flush_interval_secs,
             invoices,
             ledger,
         })

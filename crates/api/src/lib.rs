@@ -33,6 +33,7 @@ pub mod shares;
 pub mod state;
 pub mod stubs;
 pub mod videos;
+pub mod views;
 pub mod webhooks;
 
 use std::time::Duration;

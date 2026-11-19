@@ -63,7 +63,8 @@ async fn main() -> anyhow::Result<()> {
         Passwords::new(PasswordParams::default())?,
         store,
     )
-    .with_limiter(zeno_core::ratelimit::RateLimiter::redis(redis));
+    .with_limiter(zeno_core::ratelimit::RateLimiter::redis(redis.clone()))
+    .with_views(zeno_core::views::ViewCounter::redis(redis));
 
     tracing::info!(provider = state.payments.name(), "payments ready");
     zeno_api::auth::cleanup::spawn_periodic(state.clone());
@@ -74,7 +75,12 @@ async fn main() -> anyhow::Result<()> {
         state.clone(),
         std::time::Duration::from_secs(state.config.reconcile_interval_secs),
     );
+    zeno_api::views::flush::spawn_periodic(
+        state.clone(),
+        std::time::Duration::from_secs(state.config.view_flush_interval_secs),
+    );
     let background = state.background.clone();
+    let shutdown_state = state.clone();
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     tracing::info!("api listening on {bind_addr}");
     axum::serve(
@@ -86,6 +92,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Let queued emails and follow-up jobs finish, but never hang shutdown on them.
     let _ = tokio::time::timeout(std::time::Duration::from_secs(10), background.idle()).await;
+    // Counts still in Redis are not lost (another instance will flush them), but writing them
+    // now keeps the owner's numbers from waiting on the next instance's timer.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        zeno_api::views::flush::run_once(&shutdown_state),
+    )
+    .await;
     Ok(())
 }
 

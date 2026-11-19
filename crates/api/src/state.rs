@@ -7,6 +7,7 @@ use tokio::sync::Notify;
 use zeno_core::payments::PaymentProvider;
 use zeno_core::ratelimit::RateLimiter;
 use zeno_core::storage::S3Store;
+use zeno_core::views::ViewCounter;
 
 use crate::auth::counters::CounterStore;
 use crate::auth::password::Passwords;
@@ -69,6 +70,8 @@ pub struct AppState {
     pub background: Background,
     pub store: S3Store,
     pub limiter: RateLimiter,
+    /// Where views are counted before a flush writes them to Postgres.
+    pub views: ViewCounter,
     pub payments: Arc<dyn PaymentProvider>,
 }
 
@@ -97,6 +100,7 @@ impl AppState {
             background: Background::default(),
             store,
             limiter: RateLimiter::memory(),
+            views: ViewCounter::memory(),
             payments,
         }
     }
@@ -111,6 +115,13 @@ impl AppState {
     /// limiter with a controllable clock.
     pub fn with_limiter(mut self, limiter: RateLimiter) -> Self {
         self.limiter = limiter;
+        self
+    }
+
+    /// Replaces the per-process view counter with the shared one (Redis) or, in tests, one with
+    /// a controllable clock.
+    pub fn with_views(mut self, views: ViewCounter) -> Self {
+        self.views = views;
         self
     }
 }

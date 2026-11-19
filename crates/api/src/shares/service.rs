@@ -219,5 +219,17 @@ pub async fn play(
         None => None,
     }
     .ok_or_else(|| conflict("not_ready", "This video is not ready to play yet."))?;
-    playback::service::start_link(state, target.link_id, video, ctx).await
+    let started = playback::service::start_link(state, target.link_id, video, ctx).await?;
+    // Counted only once a session really started, and off the request: a counter that is down
+    // must not stop anyone watching.
+    crate::views::record(
+        state,
+        target.recording_id,
+        crate::views::viewer_id(
+            &state.config.jwt_access_secret,
+            ctx.ip,
+            ctx.user_agent.as_deref(),
+        ),
+    );
+    Ok(started)
 }
