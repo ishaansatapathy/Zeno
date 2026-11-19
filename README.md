@@ -185,6 +185,6 @@ capped at what was paid, coupons, invoices (off until tax advice), the earnings 
 and the public site. CI runs the Rust suite, the web build and tests, and a dependency audit on
 every push.
 
-the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows), and share links (22-character unguessable codes, passwords checked behind a per-link guess limit, instant revocation; about 780 visitor starts a second on a laptop).
+the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows), share links (22-character unguessable codes, passwords checked behind a per-link guess limit, instant revocation; about 780 visitor starts a second on a laptop), and view counts (counted in Redis, written to Postgres in batches: 10,000 views became 5 rows written, with exact totals).
 
 Next: the web app's pages (sign-in, library, share page), then the extension.

@@ -156,6 +156,69 @@ the link's status cached for a few seconds, trading instant revocation for fewer
 meets an anonymous session cannot read its null user and refuses it. Roll both services out before
 anyone creates a link.
 
+## View counts
+
+A view is counted when a share link's `play` succeeds, and it costs the visitor no database write.
+
+| Endpoint | Who | Purpose |
+| --- | --- | --- |
+| `GET /v1/recordings/:id/views?days=30` | owner | `{views: {total, days: [{day, views, viewers}]}}`: all-time views, and one entry per UTC day for the last `days` (1 to 90, default 30), oldest first, zero where nobody watched. `viewers` is that day's unique viewers |
+| `GET /v1/recordings/:id` and the library list | owner | carry `view_count`, the same all-time number |
+
+**How it is counted.** `play` hands the view to a background task (`views::record`), so a counter
+that is down loses that view, logs it, and never stops anyone watching. The task does one call to
+Redis (`zeno_core::views`): a Lua script checks a repeat marker (`SET NX EX`, 30 minutes) and feeds a
+per-recording, per-day HyperLogLog, then a `HINCRBY` adds one to a pending hash. The pending counts
+are spread over 16 hashes (`recording id mod 16`) so one hot recording does not make one hot key,
+and a recording and day are one field, so a million views are still one number.
+
+**Who is "the same viewer".** A keyed hash (HMAC-SHA256 of the client's network bucket, IPv6 by /64,
+and its `User-Agent`, keyed with a server secret, truncated to 128 bits). The address is never
+stored and the hash cannot be checked against a guess without the secret. It is not an identity: two
+people behind one address with the same browser are one viewer. Opening the same link again within
+30 minutes is not a new view; unique viewers per day are a HyperLogLog estimate (about 1% off; the
+test allows 2%), per day because unique counts cannot be added across days.
+
+**The flush.** Every `VIEW_FLUSH_INTERVAL_SECS` (default 60, range 5 to 3600) and once more on
+graceful shutdown, each instance goes over the 16 hashes. For each it atomically renames the pending
+hash to an in-flight batch (`RENAME`, so a view lands either in the batch or in the next one, never
+both and never neither), writes the batch in **one transaction**, and then deletes the in-flight
+batch:
+
+1. the batch id goes into `view_flushes` (a primary key), and if that insert finds it taken the
+   batch was already written and only the Redis copy is dropped;
+2. the recordings that still exist are locked in id order (`for no key update`, so two flushers
+   cannot deadlock), and counts for ones that no longer exist are skipped, so a deleted recording
+   never poisons a batch;
+3. one upsert adds the days to `recording_views` (one row per recording per day; `views` add up, a
+   day's `viewers` keeps the larger estimate), and one update adds the totals to
+   `recordings.view_count`. The update leaves `version` and `updated_at` alone: a view is not an
+   edit, and must not make an editor's copy stale.
+
+If the process dies before the commit, nothing was written and the batch, still in Redis, is found
+after two minutes as a stale batch and written. If it dies after the commit, the batch is found the
+same way, its id is already marked, and only the leftover Redis copy is dropped. Two instances
+finding the same stale batch at once write it once: the second marker insert waits for the first and
+then finds it taken. So a view is counted at most once, and at least once unless Redis itself loses
+the pending counts: the development Redis in `deploy/docker-compose.yml` is not configured for
+persistence, so a Redis crash loses the views of the last interval, which is the price of not writing
+to Postgres per view. A production Redis should run with append-only persistence
+(`appendfsync everysec`), which bounds that loss to about a second. Markers are kept for 14 days,
+longer than Redis keeps an unfinished batch (7).
+
+**What it costs.** Per view: one Lua call and one `HINCRBY` in Redis. Per flush: at most 16
+transactions, each touching one row per recording-day that had a view, in chunks of 1,000, however
+many views that was. Measured on a laptop with Redis and Postgres in Docker: 10,000 views across 5
+recordings (2,000 distinct viewers each) from 64 concurrent tasks counted in 1.3 s and flushed in
+0.38 s as 5 batches writing 5 rows; every total exact, unique viewers within 2% of the true 2,000.
+Counting in memory (the test double) takes 0.12 s and flushes in 0.1 s. A recording shows its new
+views within one flush interval; the number is a counter for the owner, not a statement of record.
+
+**Not done, on purpose.** Counting views on playback of an account's own videos (courses already have
+progress), and per-country or per-referrer breakdowns, which would be more fields in the same
+hashes. A bot farm can raise a view count by varying `User-Agent` and address; the per-address
+`share_play` limit (30 a minute) bounds how fast, and nothing is paid on a count.
+
 ## Course API
 
 Creators and admins can build courses through a versioned API. Prices are integer paise in INR; slugs are stable after creation; deleting a course is a soft delete so future enrollment and audit history are not orphaned. Updates use optimistic concurrency: send the current `version` in the JSON body or `If-Match`; a stale editor receives `409 version_conflict` instead of silently overwriting newer work.
