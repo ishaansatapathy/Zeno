@@ -650,6 +650,8 @@ fn rows() -> Vec<Row> {
         row(post.clone(), "/v1/recordings/{recording}/links", OwnerOnly).json(|_, _| json!({})),
         row(get.clone(), "/v1/recordings/{recording}/links", OwnerOnly),
         row(delete.clone(), "/v1/recordings/{recording}/links/{link}", OwnerOnly),
+        // View numbers are the owner's alone.
+        row(get.clone(), "/v1/recordings/{recording}/views", OwnerOnly),
         row(get.clone(), "/v1/s/{code}", Public),
         row(post.clone(), "/v1/s/{code}/play", Public).json(|_, _| json!({})),
         // Playback
