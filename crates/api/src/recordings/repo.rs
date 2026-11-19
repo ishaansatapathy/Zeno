@@ -19,11 +19,14 @@ pub struct RecordingRow {
     pub updated_at: DateTime<Utc>,
     pub video_status: Option<VideoStatus>,
     pub duration_seconds: Option<i32>,
+    /// All-time views, as of the last flush.
+    pub view_count: i64,
 }
 
 /// One join on the video's primary key; no stored status to drift out of step with it.
 const SELECT: &str = "select r.id, r.owner_id, r.video_id, r.source, r.title, r.visibility, \
-    r.version, r.created_at, r.updated_at, v.status as video_status, v.duration_seconds \
+    r.version, r.created_at, r.updated_at, r.view_count, v.status as video_status, \
+    v.duration_seconds \
     from recordings r left join videos v on v.id = r.video_id";
 
 /// What a retried create needs to know about the row that already has its id.

@@ -163,6 +163,8 @@ pub struct RecordingResponse {
     pub video_id: Option<Uuid>,
     pub duration_seconds: Option<i32>,
     pub version: i32,
+    /// All-time views, as of the last flush (see `GET /v1/recordings/{id}/views`).
+    pub view_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -179,6 +181,7 @@ impl From<RecordingRow> for RecordingResponse {
             video_id: row.video_id,
             duration_seconds: row.duration_seconds,
             version: row.version,
+            view_count: row.view_count,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }
