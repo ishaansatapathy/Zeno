@@ -7,7 +7,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::auth::extractor::{ApiJson, AuthUser, Client};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::net::limit_bucket;
 use crate::ratelimit::{self, policies};
 use crate::shares::dto::{
@@ -49,7 +49,27 @@ fn parse(raw: &str, what: &'static str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(raw).map_err(|_| not_found(what))
 }
 
-async fn create(
+/// Makes a share link for a recording. A private recording is switched to `link` in the same
+/// call: a link to something nobody may see would be a trap.
+#[utoipa::path(
+    post,
+    path = "/v1/recordings/{id}/links",
+    operation_id = "links_create",
+    tag = "recordings",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The recording.")),
+    request_body = CreateLinkRequest,
+    responses(
+        (status = 201, description = "Made. `link.url` is what to hand out.", body = LinkEnvelope),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`forbidden` or `forbidden_origin`.", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 409, description = "`too_many_links`: a recording may have 10 live links; revoke one first.", body = ErrorBody),
+        (status = 422, description = "`validation_failed` (the password or the expiry) or `invalid_request`.", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn create(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
@@ -68,7 +88,22 @@ async fn create(
     ))
 }
 
-async fn list(
+/// The recording's links, newest first, whether they still work or not. Never carries a password.
+#[utoipa::path(
+    get,
+    path = "/v1/recordings/{id}/links",
+    operation_id = "links_list",
+    tag = "recordings",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The recording.")),
+    responses(
+        (status = 200, description = "Up to 100 links.", body = LinkListEnvelope),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`forbidden`", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn list(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
@@ -83,7 +118,23 @@ async fn list(
     }))
 }
 
-async fn revoke(
+/// Revokes a link and ends every viewing under way through it. Safe to repeat.
+#[utoipa::path(
+    delete,
+    path = "/v1/recordings/{id}/links/{link}",
+    operation_id = "links_revoke",
+    tag = "recordings",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The recording."), ("link" = Uuid, Path, description = "The link.")),
+    responses(
+        (status = 204, description = "Revoked."),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`forbidden` or `forbidden_origin`.", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn revoke(
     State(state): State<AppState>,
     user: AuthUser,
     Path((id, link)): Path<(String, String)>,

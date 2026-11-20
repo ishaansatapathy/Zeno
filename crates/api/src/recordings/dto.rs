@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 use zeno_core::model::VideoStatus;
 
@@ -13,14 +14,19 @@ pub const DEFAULT_TITLE: &str = "Untitled recording";
 pub const SOURCES: &[&str] = &["upload", "extension", "studio", "stream", "meeting"];
 /// Who may watch. Nothing but the owner can until share links exist; this only records intent.
 pub const VISIBILITIES: &[&str] = &["private", "link", "public"];
+/// Where a recording is in its life; what `status_of` can answer.
+pub const STATUSES: &[&str] = &["capturing", "uploading", "processing", "ready", "failed"];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateRecordingRequest {
     /// A client-chosen id (a random UUID). Sending the same one again returns the recording the
     /// first attempt made, so a retry after a dropped connection never makes a duplicate.
     pub id: Option<Uuid>,
+    /// Defaults to "Untitled recording".
+    #[schema(min_length = 1, max_length = 120)]
     pub title: Option<String>,
+    /// What produces the recording. Fixed for its life.
     pub source: String,
     /// An upload of the caller's own to attach straight away.
     pub video_id: Option<Uuid>,
@@ -74,11 +80,15 @@ impl CreateRecordingRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UpdateRecordingRequest {
+    /// The version you read. Required, here or in `If-Match`.
+    #[schema(minimum = 1)]
     pub version: Option<i32>,
+    #[schema(min_length = 1, max_length = 120)]
     pub title: Option<String>,
+    /// Who may watch. Changing it to `private` ends every viewing under way through a link.
     pub visibility: Option<String>,
 }
 
@@ -119,11 +129,16 @@ pub struct AttachVideoRequest {
     pub video_id: Uuid,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, IntoParams)]
 #[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
 pub struct ListRecordingsQuery {
+    /// `next_cursor` from the previous page.
     pub cursor: Option<String>,
+    /// 1 to 50; default 20.
+    #[param(minimum = 1, maximum = 50)]
     pub limit: Option<u32>,
+    /// Only recordings made this way.
     pub source: Option<String>,
 }
 
@@ -152,16 +167,18 @@ pub fn status_of(video: Option<VideoStatus>) -> &'static str {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RecordingResponse {
     pub id: Uuid,
     pub owner_id: Uuid,
     pub title: String,
     pub source: String,
     pub visibility: String,
+    /// Read from the video underneath; never stored.
     pub status: &'static str,
     pub video_id: Option<Uuid>,
     pub duration_seconds: Option<i32>,
+    /// Changes on every edit; send it back to edit.
     pub version: i32,
     /// All-time views, as of the last flush (see `GET /v1/recordings/{id}/views`).
     pub view_count: i64,
@@ -188,14 +205,15 @@ impl From<RecordingRow> for RecordingResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RecordingEnvelope {
     pub recording: RecordingResponse,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct RecordingListEnvelope {
     pub recordings: Vec<RecordingResponse>,
+    /// Pass as `cursor` for the next page; absent on the last.
     pub next_cursor: Option<String>,
 }
 
@@ -285,6 +303,20 @@ mod tests {
             visibility: None,
         };
         assert!(stale.validate().is_err());
+    }
+
+    #[test]
+    fn every_status_is_listed() {
+        for video in [
+            None,
+            Some(VideoStatus::Uploading),
+            Some(VideoStatus::Processing),
+            Some(VideoStatus::Ready),
+            Some(VideoStatus::Failed),
+        ] {
+            assert!(STATUSES.contains(&status_of(video)));
+        }
+        assert_eq!(STATUSES.len(), 5);
     }
 
     #[test]

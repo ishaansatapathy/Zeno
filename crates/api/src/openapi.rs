@@ -9,12 +9,15 @@
 //! The web app generates its types from the committed file (`npm run api:types`), so a change to
 //! the API that the web app has not caught up with is a type error, not a surprise in production.
 //!
-//! Covered so far: authentication. Other areas are added as the web app starts to use them.
+//! Covered so far: authentication, the recordings library and the owner's side of share links.
+//! Other areas are added as the web app starts to use them; `tests/openapi.rs` lists the routes
+//! that exist but are not described yet, so none is forgotten.
 
+use serde_json::{json, Value};
 use utoipa::openapi::path::{Operation, PathItem};
 use utoipa::openapi::response::ResponseBuilder;
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
-use utoipa::openapi::{ContentBuilder, Ref, RefOr, Response};
+use utoipa::openapi::{ContentBuilder, Ref, RefOr, Response, Schema};
 use utoipa::{Modify, OpenApi};
 
 use crate::auth::cookies::ACCESS_COOKIE;
@@ -40,6 +43,14 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::auth::routes::reset_password,
         crate::auth::routes::me,
         crate::auth::routes::activity,
+        crate::recordings::routes::create,
+        crate::recordings::routes::list,
+        crate::recordings::routes::show,
+        crate::recordings::routes::update,
+        crate::recordings::routes::remove,
+        crate::shares::routes::create,
+        crate::shares::routes::list,
+        crate::shares::routes::revoke,
     ),
     components(schemas(
         crate::auth::dto::RegisterRequest,
@@ -57,9 +68,21 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::error::ErrorDetail,
         crate::error::FieldError,
         zeno_core::model::Role,
+        crate::recordings::dto::CreateRecordingRequest,
+        crate::recordings::dto::UpdateRecordingRequest,
+        crate::recordings::dto::RecordingResponse,
+        crate::recordings::dto::RecordingEnvelope,
+        crate::recordings::dto::RecordingListEnvelope,
+        crate::shares::dto::CreateLinkRequest,
+        crate::shares::dto::LinkResponse,
+        crate::shares::dto::LinkEnvelope,
+        crate::shares::dto::LinkListEnvelope,
     )),
-    modifiers(&SessionCookie, &CommonErrors),
-    tags((name = "auth", description = "Accounts and sessions."))
+    modifiers(&SessionCookie, &CommonErrors, &Enums),
+    tags(
+        (name = "auth", description = "Accounts and sessions."),
+        (name = "recordings", description = "A person's library, and the links that share its recordings."),
+    )
 )]
 pub struct ApiDoc;
 
@@ -148,6 +171,57 @@ impl Modify for CommonErrors {
                 add_common(operation, true);
             }
         }
+    }
+}
+
+/// Fields that hold one of a fixed set of words say which words. The lists come from the constants
+/// the validation and the response builders use, so the document cannot name a value the API does
+/// not, or leave one out.
+struct Enums;
+
+fn restrict(
+    openapi: &mut utoipa::openapi::OpenApi,
+    schema: &str,
+    field: &str,
+    values: &[&str],
+    nullable: bool,
+) {
+    let components = openapi.components.as_mut().expect("components exist");
+    let Some(RefOr::T(Schema::Object(object))) = components.schemas.get_mut(schema) else {
+        panic!("{schema} is not an object schema");
+    };
+    let Some(RefOr::T(Schema::Object(property))) = object.properties.get_mut(field) else {
+        panic!("{schema}.{field} is not a plain property");
+    };
+    let mut words: Vec<Value> = values.iter().map(|word| json!(word)).collect();
+    if nullable {
+        words.push(Value::Null);
+    }
+    property.enum_values = Some(words);
+}
+
+impl Modify for Enums {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use crate::recordings::dto::{SOURCES, STATUSES, VISIBILITIES};
+        use crate::shares::dto::LINK_STATES;
+        restrict(openapi, "CreateRecordingRequest", "source", SOURCES, false);
+        restrict(
+            openapi,
+            "UpdateRecordingRequest",
+            "visibility",
+            VISIBILITIES,
+            true,
+        );
+        restrict(openapi, "RecordingResponse", "source", SOURCES, false);
+        restrict(
+            openapi,
+            "RecordingResponse",
+            "visibility",
+            VISIBILITIES,
+            false,
+        );
+        restrict(openapi, "RecordingResponse", "status", STATUSES, false);
+        restrict(openapi, "LinkResponse", "state", LINK_STATES, false);
     }
 }
 

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 use zeno_core::model::VideoStatus;
 
@@ -16,11 +17,16 @@ pub const MIN_LIFETIME: Duration = Duration::minutes(1);
 pub const MAX_LIFETIME: Duration = Duration::days(3650);
 /// How many links one recording may have live at once.
 pub const MAX_LIVE_LINKS: i64 = 10;
+/// Where a link stands; what `link_state` can answer.
+pub const LINK_STATES: &[&str] = &["active", "expired", "revoked"];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateLinkRequest {
+    /// A speed bump for casual sharing, not an account. Checked before a viewing starts.
+    #[schema(value_type = Option<String>, format = Password, min_length = 4, max_length = 128)]
     pub password: Option<String>,
+    /// From a minute to ten years from now. Without one the link never expires.
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -88,7 +94,7 @@ pub fn link_state(link: &LinkRow, now: DateTime<Utc>) -> &'static str {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LinkResponse {
     pub id: Uuid,
     pub code: String,
@@ -116,7 +122,7 @@ impl LinkResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LinkEnvelope {
     pub link: LinkResponse,
     /// The recording's visibility after the call: making a link switches a private recording to
@@ -124,7 +130,7 @@ pub struct LinkEnvelope {
     pub recording_visibility: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LinkListEnvelope {
     pub links: Vec<LinkResponse>,
 }
@@ -209,6 +215,19 @@ mod tests {
             revoked_at: None,
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn every_link_state_is_listed() {
+        let now = Utc::now();
+        let mut revoked = link();
+        revoked.revoked_at = Some(now);
+        let mut expired = link();
+        expired.expires_at = Some(now - Duration::hours(1));
+        for row in [link(), revoked, expired] {
+            assert!(LINK_STATES.contains(&link_state(&row, now)));
+        }
+        assert_eq!(LINK_STATES.len(), 3);
     }
 
     fn target(password: bool) -> Target {
