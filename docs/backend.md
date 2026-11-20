@@ -8,6 +8,33 @@ Money is integer minor units, never floats. Today the code prices in paise and s
 Razorpay, behind a provider trait (`zeno_core::payments`) so nothing else depends on the provider;
 more currencies and providers are planned (see the README roadmap).
 
+## OpenAPI document
+
+The API is described as an OpenAPI 3.1 document, committed as [`openapi.json`](openapi.json). The web
+app generates its types from it, so a change to the API that the web app has not caught up with is a
+type error, not a surprise in production (see [web.md](web.md)). So far it covers the auth API; other
+areas are added as the web app starts to use them.
+
+The description is written next to the code (`#[utoipa::path]` on each handler, `#[derive(ToSchema)]`
+on each type; `crates/api/src/openapi.rs` collects them), so it is compiled with the handlers and
+cannot name a type that is gone. What the compiler cannot check, `tests/openapi.rs` does:
+
+* the committed file is exactly what the code produces. After changing the API, regenerate it with
+  `UPDATE_OPENAPI=1 cargo test -p zeno-api --test openapi`, then `npm run api:types` in `web/`;
+* every auth route in the router is in the document, and everything in it is a real route;
+* the limits it states (password and name lengths) are the ones the validation enforces;
+* **every real response is one the document lists**: the test drives sign-up, confirmation,
+  sign-in, refresh, sign-out, forgot and reset, rate limiting, and every shared failure (malformed
+  JSON, wrong media type, too large, a foreign `Origin`) on every operation, and checks each
+  response's status, its declared headers (`Set-Cookie`, `Retry-After`) and that its body validates
+  against the schema the document gives for it;
+* every response the document lists has been seen, except `500` (our own bug) and `503` (the limiter
+  being down), which a test cannot ask for.
+
+Errors always have the shape `{"error": {"code", "message", "fields"?}}`. Valid JSON of the wrong
+shape (or with an unknown field) is `422 invalid_request`; a failed field check is
+`422 validation_failed` with `fields`; unreadable JSON is `400 invalid_request`.
+
 ## Auth API
 
 Cookie-based (`HttpOnly`, `SameSite=Lax`): a 15-minute access JWT plus a rotating 30-day refresh token that is only sent to `/v1/auth/*`.
