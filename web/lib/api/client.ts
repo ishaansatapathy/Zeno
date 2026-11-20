@@ -161,6 +161,12 @@ export function createApi(options: ClientOptions = {}) {
         call(() => client.PATCH("/v1/recordings/{id}", { params: { path: { id } }, body: { version, title } })),
       remove: (id: string) => call(() => client.DELETE("/v1/recordings/{id}", { params: { path: { id } } })),
     },
+    /** What anyone holding a share link can do: no account, no cookie. */
+    share: {
+      resolve: (code: string) => call(() => client.GET("/v1/s/{code}", { params: { path: { code } } })),
+      play: (code: string, password?: string) =>
+        call(() => client.POST("/v1/s/{code}/play", { params: { path: { code } }, body: password ? { password } : {} })),
+    },
     links: {
       list: (recording: string) => call(() => client.GET("/v1/recordings/{id}/links", { params: { path: { id: recording } } })),
       create: (recording: string, body: Schemas["CreateLinkRequest"] = {}) =>

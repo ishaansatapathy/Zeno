@@ -266,6 +266,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/s/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a visitor's page needs before anyone presses play.
+         * @description Public and cacheable: an edge may reuse the answer for 15 seconds and serve it stale for 45
+         *     more while it fetches a fresh one, so the origin hears about a link about four times a minute
+         *     however many people open it. A cached answer never lets anyone watch after a revoke: playing
+         *     asks the database again.
+         */
+        get: operations["share_resolve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/s/{code}/play": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts watching through a link: checks the password if there is one, then opens a session.
+         * @description `playback.playlist_url` is relative to this origin and is handed to the HLS player as it is.
+         *     There is no heartbeat and no resume point: there is no account to remember either for.
+         */
+        post: operations["share_play"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -370,6 +414,13 @@ export interface components {
         MessageResponse: {
             message: string;
         };
+        PlayRequest: {
+            /**
+             * Format: password
+             * @description Needed when the page said `requires_password`.
+             */
+            password?: string | null;
+        };
         RecordingEnvelope: {
             recording: components["schemas"]["RecordingResponse"];
         };
@@ -435,6 +486,51 @@ export interface components {
         };
         /** @enum {string} */
         Role: "student" | "creator" | "admin";
+        /**
+         * @description A viewing started through a link. No heartbeat and no resume point: there is no account to
+         *     remember either for.
+         */
+        SharedPlayback: {
+            /** Format: date-time */
+            expires_at: string;
+            /** @description Relative to the API's origin; hand it to the HLS player as is. */
+            playlist_url: string;
+            /** Format: uuid */
+            session_id: string;
+            watermark: components["schemas"]["SharedWatermark"];
+        };
+        SharedPlaybackEnvelope: {
+            playback: components["schemas"]["SharedPlayback"];
+        };
+        SharedWatermark: {
+            session_code: string;
+            text: string;
+        };
+        ShareEnvelope: {
+            share: components["schemas"]["ShareView"];
+        };
+        /**
+         * @description What a visitor's page needs before anyone presses play. A password-protected link reveals
+         *     nothing but that it needs one: not even the title.
+         */
+        ShareView: {
+            code: string;
+            /** Format: int32 */
+            duration_seconds?: number | null;
+            /**
+             * Format: date-time
+             * @description When the link stops working, if it does.
+             */
+            expires_at?: string | null;
+            /** @description When true, nothing else about the recording is revealed until the password is given. */
+            requires_password: boolean;
+            /**
+             * @description Where the video is in its life; only `ready` can be played.
+             * @enum {string|null}
+             */
+            status?: "capturing" | "uploading" | "processing" | "ready" | "failed" | null;
+            title?: string | null;
+        };
         /**
          * @description Who a new account is for. Admins are never self-service.
          * @enum {string}
@@ -1859,6 +1955,204 @@ export interface operations {
                 };
             };
             /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    share_resolve: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The `ETag` of an answer already held. */
+                "If-None-Match"?: string | null;
+            };
+            path: {
+                /** @description The 22 characters after `/s/` in the link. */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What the page needs. */
+            200: {
+                headers: {
+                    /** @description `public, max-age=15, stale-while-revalidate=45` */
+                    "Cache-Control"?: string;
+                    /** @description A weak validator over the body. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShareEnvelope"];
+                };
+            };
+            /** @description The caller already holds this exact answer. */
+            304: {
+                headers: {
+                    /** @description As for `200`. */
+                    "Cache-Control"?: string;
+                    /** @description The validator the caller sent. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `not_found`: no such link (a code of the wrong shape never reaches the database). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `link_unavailable`: the link was good and has closed (revoked, expired, switched off, or its recording deleted). */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    share_play: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The 22 characters after `/s/` in the link. */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlayRequest"];
+            };
+        };
+        responses: {
+            /** @description A viewing started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SharedPlaybackEnvelope"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `password_required`, `wrong_password` (a guess costs a password hash, so guesses are limited per link and address), or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_ready`: the video is still being prepared. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `link_unavailable`: the link has closed, including a moment ago. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `invalid_request`: valid JSON, but not the shape this route takes (or an unknown field). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests`: too many viewings started from this address, or too many password guesses. */
             429: {
                 headers: {
                     /** @description Seconds until the budget is available again. */
