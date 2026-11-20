@@ -16,6 +16,8 @@ const config: Config = {
         "line-hi": "#2e2e2e",
         paper: "#f2f3f5",
         mute: "#8e939a",
+        // Errors: a muted rose, readable on black without shouting.
+        fault: "#e3a3a3",
         silver: { DEFAULT: "#e4e7eb", hi: "#ffffff", lo: "#b9c0c9" },
         chrome: { DEFAULT: "#e7eaee", line: "#c3c8cf", mute: "#4d525a" },
       },

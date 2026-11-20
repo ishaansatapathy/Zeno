@@ -10,8 +10,8 @@
 export type Title = readonly [string, string];
 
 export const links = {
-  start: "/sign-up",
-  login: "/sign-in",
+  start: "/register",
+  login: "/login",
 } as const;
 
 export const nav = [
