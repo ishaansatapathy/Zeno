@@ -7,7 +7,7 @@ payments underneath. Built for teachers and creators everywhere. (Zeno is a work
 | Surface | What it does | State |
 | --- | --- | --- |
 | **Hosting** | Upload once; encoded to five qualities (144p to 720p), encrypted segment by segment, played behind short-lived signed tokens. Courses, enrollment, checkout, refunds and a double-entry earnings ledger. A library of recordings on top (named, retry-safe to create, deleted together with their video), and share links: anyone with a link watches with no account, optionally behind a password or an expiry, and revoking one ends every viewing at once. | Built |
-| **Web app** | Public site; account screens (sign-up, sign-in, email confirmation, password reset) and a signed-in shell. The library, share pages and the player next. | Site and account screens built |
+| **Web app** | Public site; account screens (sign-up, sign-in, email confirmation, password reset) and the library (list, rename, delete, copy link). Share pages and the player next. | Site, account screens and library built |
 | **Extension** | Record screen, camera and mic in Chrome, Edge or Brave; a share link exists before you stop recording. | Planned |
 | **Studio** (desktop) | Windows first, then macOS. Record and stream; go live to only the platforms you tick for that stream (YouTube, Twitch, Instagram, X, any RTMP key), wide and tall at once, one merged chat. Pick any camera, including a phone. | Planned |
 | **Editor** | Trim, cut, captions, and vertical clips for Shorts and Reels, from any recording or stream. | Planned |
@@ -100,7 +100,7 @@ flowchart LR
 | `crates/keyserver` | Rust | Releases content keys only to an open, entitled session; per-user and per-address limits; fails closed. |
 | `crates/live` | Rust + MediaMTX | Stream-key check against the scheduled class; rolling HLS. |
 | `crates/core` | Rust | Config, database, job queue, key vault, payment provider trait. |
-| `web/` | Next.js 16, React 19 | Public site and account screens; library and share pages next. |
+| `web/` | Next.js 16, React 19 | Public site, account screens and library; share pages next. |
 | `apps/studio` | Electron + React, native helpers | Planned. Capture, compose, record, stream; ffmpeg for one encode and many outputs. |
 | `apps/extension` | Chrome MV3 | Planned. Records in an offscreen document and uploads parts while recording, so the link is ready at stop. |
 
@@ -185,6 +185,6 @@ capped at what was paid, coupons, invoices (off until tax advice), the earnings 
 and the public site. CI runs the Rust suite, the web build and tests, and a dependency audit on
 every push.
 
-Also built: the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows), share links (22-character unguessable codes, passwords checked behind a per-link guess limit, instant revocation; about 780 visitor starts a second on a laptop), view counts (counted in Redis, written to Postgres in batches: 10,000 views became 5 rows written, with exact totals), and the account screens in the web app, typed from the API's OpenAPI document and covered by browser tests.
+Also built: the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows), share links (22-character unguessable codes, passwords checked behind a per-link guess limit, instant revocation; about 780 visitor starts a second on a laptop), view counts (counted in Redis, written to Postgres in batches: 10,000 views became 5 rows written, with exact totals), and, in the web app, the account screens and the library (list, rename with conflict handling, delete, copy link), typed from the API's OpenAPI document and covered by browser tests.
 
-Next: the library and share pages, then the extension.
+Next: the share page and player, then the extension.

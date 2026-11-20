@@ -49,7 +49,7 @@ objections beside the field they are about. The server stays the authority.
 | `/register`, `/login`, `/forgot-password` | The forms. `?next=` on `/login` is honoured only for a path on this site (`lib/next-path.ts`) |
 | `/verify-email`, `/verify-email/:token` | Ask for a new link; open the emailed link |
 | `/reset-password/:token` | Choose a new password |
-| `/library` | The signed-in app. Nothing is shown before the API has said who is signed in; a signed-out visitor is sent to `/login?next=...` and brought back |
+| `/library` | The signed-in app: the person's recordings. Nothing is shown before the API has said who is signed in; a signed-out visitor is sent to `/login?next=...` and brought back |
 
 The paths are the ones the API puts in its emails (`/verify-email/:token`, `/reset-password/:token`,
 `/login`).
@@ -65,6 +65,32 @@ The paths are the ones the API puts in its emails (`/verify-email/:token`, `/res
 * **A failed fetch is not a sign-out.** If the API cannot be reached the app says so and offers to
   try again; it does not send the person to the sign-in page.
 
+## The library
+
+`/library` lists the signed-in person's recordings, newest first, twenty at a time (`Load more`
+follows the API's keyset cursor, so a page costs the same however far back it goes and nothing is
+skipped or repeated if recordings arrive meanwhile). It can be narrowed to how a recording was made
+(upload, extension, studio, stream, meeting). Each row shows its title, source, date, length, status,
+who may watch it and its views, and offers three things:
+
+* **Rename**, in place. The request carries the version the row was read at. If the recording was
+  changed elsewhere (another tab, another device) the API answers `409 version_conflict`; the row is
+  reloaded to what it now is and the person is told, instead of their rename silently overwriting the
+  other one. Enter saves, Escape cancels, and focus goes back to the button that opened the editor.
+* **Delete**, after an inline question that defaults to keeping it ("Keep it" has the focus) and says
+  what goes with it: the video, and every link. A recording already deleted elsewhere counts as deleted.
+* **Copy link**. It reuses the recording's existing link when there is one that works for anyone (no
+  password, no end date), and makes one only when there is not, so pressing it twice does not pile up
+  links. Making the first link switches a private recording to "anyone with the link", which is an edit,
+  so the row takes the recording's new version straight away or the next rename would be refused as
+  out of date. If the browser refuses to write to the clipboard, the address is shown in a box to copy
+  by hand. The address points at the share page, which is built later: until then it does not open.
+
+An account that only watches (a student) has no library: the API answers `403 forbidden`, and the page
+says so in words instead of showing an error. The list's logic (merging pages, replacing and removing
+rows, choosing the link to hand out, wording) is plain functions in `components/library/rows.ts`,
+unit-tested apart from React.
+
 ## Tests
 
 * `npm test`: unit tests (the client's renewal and error mapping against a fake server, the
@@ -77,4 +103,10 @@ The paths are the ones the API puts in its emails (`/verify-email/:token`, `/res
   stopped first. The suite covers register, confirm, sign out and in, wrong and unconfirmed sign-ins,
   forgot and reset (and a reset link working once), the sign-in redirect and the open-redirect guard,
   silent session renewal, a session that cannot be renewed, the token-page headers, and axe-core
-  checks of every account screen at desktop and phone sizes.
+  checks of every account screen at desktop and phone sizes. For the library: an empty library, a new
+  recording and what the row says, rename (saved, cancelled, refused, and the conflict case), delete
+  (kept, then deleted for good), copy link (made once, reused, replaced after a revoke, and rename
+  still working afterwards), 23 recordings read in two pages in order, the source filter, the
+  student's message, and axe-core on the library in every state a row can be in. Signing up is limited
+  to ten a hour from one address, so tests that only need somebody signed in share one account
+  (`sharedAccount` in `e2e/helpers.ts`); the library tests empty its library before each test.

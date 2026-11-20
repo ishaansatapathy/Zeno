@@ -12,8 +12,12 @@ more currencies and providers are planned (see the README roadmap).
 
 The API is described as an OpenAPI 3.1 document, committed as [`openapi.json`](openapi.json). The web
 app generates its types from it, so a change to the API that the web app has not caught up with is a
-type error, not a surprise in production (see [web.md](web.md)). So far it covers the auth API; other
-areas are added as the web app starts to use them.
+type error, not a surprise in production (see [web.md](web.md)). So far it covers the auth API, the
+recordings library (create, list, get, rename, delete) and a recording's share links (create, list,
+revoke); other areas are added as the web app starts to use them. The routes that exist but are not
+described yet (attaching a video, view counts, and the visitor's side of a share link) are named in
+`NOT_DESCRIBED_YET` in `tests/openapi.rs`: a new route that is neither documented nor on that list
+fails the build, and the list can only shrink.
 
 The description is written next to the code (`#[utoipa::path]` on each handler, `#[derive(ToSchema)]`
 on each type; `crates/api/src/openapi.rs` collects them), so it is compiled with the handlers and
@@ -21,11 +25,15 @@ cannot name a type that is gone. What the compiler cannot check, `tests/openapi.
 
 * the committed file is exactly what the code produces. After changing the API, regenerate it with
   `UPDATE_OPENAPI=1 cargo test -p zeno-api --test openapi`, then `npm run api:types` in `web/`;
-* every auth route in the router is in the document, and everything in it is a real route;
-* the limits it states (password and name lengths) are the ones the validation enforces;
-* **every real response is one the document lists**: the test drives sign-up, confirmation,
-  sign-in, refresh, sign-out, forgot and reset, rate limiting, and every shared failure (malformed
-  JSON, wrong media type, too large, a foreign `Origin`) on every operation, and checks each
+* every route in the routers is in the document or on the not-yet-described list, and everything in
+  the document is a real route;
+* the limits it states (password and name lengths) are the ones the validation enforces, and the
+  words a field may hold (a recording's source, visibility and status, a link's state) are listed
+  from the same constants the API validates and answers with;
+* **every real response is one the document lists**: the tests drive sign-up, confirmation,
+  sign-in, refresh, sign-out, forgot and reset, the whole library (signed out, a student, every way
+  to create, page, rename, conflict, share, revoke and delete), rate limiting, and every shared
+  failure (malformed JSON, wrong media type, too large, a foreign `Origin`) on every operation, and check each
   response's status, its declared headers (`Set-Cookie`, `Retry-After`) and that its body validates
   against the schema the document gives for it;
 * every response the document lists has been seen, except `500` (our own bug) and `503` (the limiter
