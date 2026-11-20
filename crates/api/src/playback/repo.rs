@@ -103,6 +103,49 @@ pub async fn insert(db: &mut PgConnection, session: &NewSession<'_>) -> Result<(
     Ok(())
 }
 
+/// Starts a viewing through a share link, unless the link has closed. `false`: it has.
+///
+/// The check and the insert are one statement, and the statement takes a shared lock on the link
+/// and on its recording. Closing a link (revoking it, making the recording private, deleting it)
+/// updates one of those rows and then ends the viewings it can see. A viewing that started after
+/// the closer looked, but before it committed, would be missed by that sweep and stay open on a
+/// closed link. With the lock, either the closer committed first (this statement waits, re-reads
+/// the row, finds it closed and inserts nothing) or this commits first (and the closer's sweep,
+/// which runs after, sees and ends it).
+pub async fn insert_for_link(
+    db: &mut PgConnection,
+    session: &NewSession<'_>,
+) -> Result<bool, sqlx::Error> {
+    let Some(link) = session.share_link_id else {
+        return Ok(false);
+    };
+    let inserted = sqlx::query(
+        "with open as (
+             select l.id from share_links l join recordings r on r.id = l.recording_id
+             where l.id = $9 and r.video_id = $3 and r.deleted_at is null
+               and r.visibility in ('link', 'public')
+               and l.revoked_at is null and (l.expires_at is null or l.expires_at > now())
+             for share of l, r
+         )
+         insert into playback_sessions
+             (id, user_id, share_link_id, video_id, device, ip, expires_at, last_position_seconds, lesson_id)
+         select $1::uuid, $2::uuid, open.id, $3::uuid, $4::text, $5::inet, $6::timestamptz, $7::int4, $8::uuid
+         from open",
+    )
+    .bind(session.id)
+    .bind(session.user_id)
+    .bind(session.video_id)
+    .bind(session.device)
+    .bind(session.ip.map(IpNetwork::from))
+    .bind(session.expires_at)
+    .bind(session.position)
+    .bind(session.lesson_id)
+    .bind(link)
+    .execute(db)
+    .await?;
+    Ok(inserted.rows_affected() == 1)
+}
+
 #[derive(sqlx::FromRow)]
 pub struct Viewer {
     pub name: String,

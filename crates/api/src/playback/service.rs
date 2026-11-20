@@ -200,12 +200,14 @@ async fn start_with_video(
 ///
 /// No concurrent-screen limit applies (there is no account to count them against); the share
 /// routes are limited per address instead, and keys per session.
+/// Starts a viewing through a share link. `None`: the link closed while the visitor was getting
+/// here (see [`repo::insert_for_link`]), and no viewing was started.
 pub async fn start_link(
     state: &AppState,
     link_id: Uuid,
     video: VideoRow,
     ctx: &ClientContext,
-) -> Result<Started, ApiError> {
+) -> Result<Option<Started>, ApiError> {
     if video.status != VideoStatus::Ready {
         return Err(conflict(
             "not_ready",
@@ -220,7 +222,7 @@ pub async fn start_link(
     )
     .unwrap_or(now + MIN_SESSION);
     let mut conn = state.db.acquire().await?;
-    repo::insert(
+    let started = repo::insert_for_link(
         &mut conn,
         &NewSession {
             id: session_id,
@@ -238,6 +240,9 @@ pub async fn start_link(
         },
     )
     .await?;
+    if !started {
+        return Ok(None);
+    }
     let token = state.config.playback.sign(&PlaybackClaims {
         session_id,
         video_id: video.id,
@@ -245,7 +250,7 @@ pub async fn start_link(
         expires_at,
     });
     let session_code = session_id.simple().to_string()[..8].to_uppercase();
-    Ok(Started {
+    Ok(Some(Started {
         session_id,
         token,
         expires_at,
@@ -254,7 +259,7 @@ pub async fn start_link(
             text: format!("Shared view · {session_code}"),
             session_code,
         },
-    })
+    }))
 }
 
 /// Direct video playback is a creator/admin preview surface. Student entitlements are resolved

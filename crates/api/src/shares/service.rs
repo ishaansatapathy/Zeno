@@ -58,6 +58,13 @@ fn conflict(code: &'static str, message: &'static str) -> ApiError {
     }
 }
 
+fn too_many_links() -> ApiError {
+    conflict(
+        "too_many_links",
+        "This recording already has the most links it can have. Revoke one first.",
+    )
+}
+
 fn unique_violation(err: &sqlx::Error) -> bool {
     matches!(err, sqlx::Error::Database(db) if db.is_unique_violation())
 }
@@ -78,17 +85,25 @@ pub async fn create(
         .await?
         .ok_or_else(recording_not_found)?;
     if repo::count_live(&state.db, recording_id).await? >= MAX_LIVE_LINKS {
-        return Err(conflict(
-            "too_many_links",
-            "This recording already has the most links it can have. Revoke one first.",
-        ));
+        return Err(too_many_links());
     }
+    // The hash is the expensive part, so a request that is going to be refused anyway is refused
+    // before it. This count is not the check that holds: two requests can both pass it. The one
+    // inside the transaction below does.
     let hash = match input.password {
         Some(password) => Some(state.passwords.hash(password).await?),
         None => None,
     };
 
     let mut tx = state.db.begin().await?;
+    // One creator at a time per recording: a count and an insert are only a cap if nobody else can
+    // insert between them.
+    if !recordings::lock(&mut tx, recording_id).await? {
+        return Err(recording_not_found());
+    }
+    if repo::count_live(&mut *tx, recording_id).await? >= MAX_LIVE_LINKS {
+        return Err(too_many_links());
+    }
     let mut link = None;
     for _ in 0..CODE_ATTEMPTS {
         // A failed insert aborts the transaction, so each attempt gets a savepoint.
@@ -219,7 +234,10 @@ pub async fn play(
         None => None,
     }
     .ok_or_else(|| conflict("not_ready", "This video is not ready to play yet."))?;
-    let started = playback::service::start_link(state, target.link_id, video, ctx).await?;
+    // `None`: the link was closed after we read it and before the viewing could start.
+    let started = playback::service::start_link(state, target.link_id, video, ctx)
+        .await?
+        .ok_or_else(unavailable)?;
     // Counted only once a session really started, and off the request: a counter that is down
     // must not stop anyone watching.
     crate::views::record(
