@@ -1792,6 +1792,285 @@
           }
         ]
       }
+    },
+    "/v1/s/{code}": {
+      "get": {
+        "tags": [
+          "share"
+        ],
+        "summary": "What a visitor's page needs before anyone presses play.",
+        "description": "Public and cacheable: an edge may reuse the answer for 15 seconds and serve it stale for 45\nmore while it fetches a fresh one, so the origin hears about a link about four times a minute\nhowever many people open it. A cached answer never lets anyone watch after a revoke: playing\nasks the database again.",
+        "operationId": "share_resolve",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The 22 characters after `/s/` in the link.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The `ETag` of an answer already held.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the page needs.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`public, max-age=15, stale-while-revalidate=45`"
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "A weak validator over the body."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareEnvelope"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The caller already holds this exact answer.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "As for `200`."
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "The validator the caller sent."
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: no such link (a code of the wrong shape never reaches the database).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`link_unavailable`: the link was good and has closed (revoked, expired, switched off, or its recording deleted).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/s/{code}/play": {
+      "post": {
+        "tags": [
+          "share"
+        ],
+        "summary": "Starts watching through a link: checks the password if there is one, then opens a session.",
+        "description": "`playback.playlist_url` is relative to this origin and is handed to the HLS player as it is.\nThere is no heartbeat and no resume point: there is no account to remember either for.",
+        "operationId": "share_play",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The 22 characters after `/s/` in the link.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "A viewing started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedPlaybackEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password_required`, `wrong_password` (a guess costs a password hash, so guesses are limited per link and address), or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_ready`: the video is still being prepared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`link_unavailable`: the link has closed, including a moment ago.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request`: valid JSON, but not the shape this route takes (or an unknown field).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`: too many viewings started from this address, or too many password guesses.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2088,6 +2367,21 @@
           }
         }
       },
+      "PlayRequest": {
+        "type": "object",
+        "properties": {
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "password",
+            "description": "Needed when the page said `requires_password`.",
+            "maxLength": 128
+          }
+        },
+        "additionalProperties": false
+      },
       "RecordingEnvelope": {
         "type": "object",
         "required": [
@@ -2277,6 +2571,122 @@
           "admin"
         ]
       },
+      "ShareEnvelope": {
+        "type": "object",
+        "required": [
+          "share"
+        ],
+        "properties": {
+          "share": {
+            "$ref": "#/components/schemas/ShareView"
+          }
+        }
+      },
+      "ShareView": {
+        "type": "object",
+        "description": "What a visitor's page needs before anyone presses play. A password-protected link reveals\nnothing but that it needs one: not even the title.",
+        "required": [
+          "code",
+          "requires_password"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the link stops working, if it does."
+          },
+          "requires_password": {
+            "type": "boolean",
+            "description": "When true, nothing else about the recording is revealed until the password is given."
+          },
+          "status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the video is in its life; only `ready` can be played.",
+            "enum": [
+              "capturing",
+              "uploading",
+              "processing",
+              "ready",
+              "failed"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SharedPlayback": {
+        "type": "object",
+        "description": "A viewing started through a link. No heartbeat and no resume point: there is no account to\nremember either for.",
+        "required": [
+          "session_id",
+          "playlist_url",
+          "expires_at",
+          "watermark"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "playlist_url": {
+            "type": "string",
+            "description": "Relative to the API's origin; hand it to the HLS player as is."
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "watermark": {
+            "$ref": "#/components/schemas/SharedWatermark"
+          }
+        }
+      },
+      "SharedPlaybackEnvelope": {
+        "type": "object",
+        "required": [
+          "playback"
+        ],
+        "properties": {
+          "playback": {
+            "$ref": "#/components/schemas/SharedPlayback"
+          }
+        }
+      },
+      "SharedWatermark": {
+        "type": "object",
+        "required": [
+          "text",
+          "session_code"
+        ],
+        "properties": {
+          "session_code": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
       "SignupRole": {
         "type": "string",
         "description": "Who a new account is for. Admins are never self-service.",
@@ -2393,6 +2803,10 @@
     {
       "name": "recordings",
       "description": "A person's library, and the links that share its recordings."
+    },
+    {
+      "name": "share",
+      "description": "What anyone holding a share link can do. No account, no cookie."
     }
   ]
 }

@@ -149,8 +149,36 @@ pub(crate) async fn revoke(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /v1/s/:code`: what the page needs before anyone presses play.
-async fn resolve(
+/// What a visitor's page needs before anyone presses play.
+///
+/// Public and cacheable: an edge may reuse the answer for 15 seconds and serve it stale for 45
+/// more while it fetches a fresh one, so the origin hears about a link about four times a minute
+/// however many people open it. A cached answer never lets anyone watch after a revoke: playing
+/// asks the database again.
+#[utoipa::path(
+    get,
+    path = "/v1/s/{code}",
+    operation_id = "share_resolve",
+    tag = "share",
+    params(
+        ("code" = String, Path, description = "The 22 characters after `/s/` in the link."),
+        ("If-None-Match" = Option<String>, Header, description = "The `ETag` of an answer already held."),
+    ),
+    responses(
+        (status = 200, description = "What the page needs.", body = ShareEnvelope, headers(
+            ("Cache-Control" = String, description = "`public, max-age=15, stale-while-revalidate=45`"),
+            ("ETag" = String, description = "A weak validator over the body."),
+        )),
+        (status = 304, description = "The caller already holds this exact answer.", headers(
+            ("Cache-Control" = String, description = "As for `200`."),
+            ("ETag" = String, description = "The validator the caller sent."),
+        )),
+        (status = 404, description = "`not_found`: no such link (a code of the wrong shape never reaches the database).", body = ErrorBody),
+        (status = 410, description = "`link_unavailable`: the link was good and has closed (revoked, expired, switched off, or its recording deleted).", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn resolve(
     State(state): State<AppState>,
     request: HeaderMap,
     Path(code): Path<String>,
@@ -163,8 +191,27 @@ async fn resolve(
     ))
 }
 
-/// `POST /v1/s/:code/play`: start watching. Needs the password if the link has one.
-async fn play(
+/// Starts watching through a link: checks the password if there is one, then opens a session.
+///
+/// `playback.playlist_url` is relative to this origin and is handed to the HLS player as it is.
+/// There is no heartbeat and no resume point: there is no account to remember either for.
+#[utoipa::path(
+    post,
+    path = "/v1/s/{code}/play",
+    operation_id = "share_play",
+    tag = "share",
+    params(("code" = String, Path, description = "The 22 characters after `/s/` in the link.")),
+    request_body = PlayRequest,
+    responses(
+        (status = 201, description = "A viewing started.", body = SharedPlaybackEnvelope),
+        (status = 403, description = "`password_required`, `wrong_password` (a guess costs a password hash, so guesses are limited per link and address), or `forbidden_origin`.", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 409, description = "`not_ready`: the video is still being prepared.", body = ErrorBody),
+        (status = 410, description = "`link_unavailable`: the link has closed, including a moment ago.", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: too many viewings started from this address, or too many password guesses.", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn play(
     State(state): State<AppState>,
     Client(ctx): Client,
     Path(code): Path<String>,

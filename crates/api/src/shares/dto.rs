@@ -77,9 +77,11 @@ impl CreateLinkRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlayRequest {
+    /// Needed when the page said `requires_password`.
+    #[schema(value_type = Option<String>, format = Password, max_length = 128)]
     pub password: Option<String>,
 }
 
@@ -137,21 +139,24 @@ pub struct LinkListEnvelope {
 
 /// What a visitor's page needs before anyone presses play. A password-protected link reveals
 /// nothing but that it needs one: not even the title.
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, PartialEq, ToSchema)]
 pub struct ShareView {
     pub code: String,
+    /// When true, nothing else about the recording is revealed until the password is given.
     pub requires_password: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Where the video is in its life; only `ready` can be played.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<i32>,
+    /// When the link stops working, if it does.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ShareEnvelope {
     pub share: ShareView,
 }
@@ -174,7 +179,7 @@ impl ShareView {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SharedWatermark {
     pub text: String,
     pub session_code: String,
@@ -182,7 +187,7 @@ pub struct SharedWatermark {
 
 /// A viewing started through a link. No heartbeat and no resume point: there is no account to
 /// remember either for.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SharedPlayback {
     pub session_id: Uuid,
     /// Relative to the API's origin; hand it to the HLS player as is.
@@ -191,7 +196,7 @@ pub struct SharedPlayback {
     pub watermark: SharedWatermark,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SharedPlaybackEnvelope {
     pub playback: SharedPlayback,
 }
