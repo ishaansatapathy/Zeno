@@ -1,32 +1,9 @@
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
+import { PASSWORD, alertOf, confirmedAccount, sharedAccount, signIn, unique } from "./helpers";
 import { mailedCount, mailedLink } from "./mail";
 
-const PASSWORD = "correct horse battery staple";
 const NEW_PASSWORD = "a different long passphrase";
-
-let counter = 0;
-const unique = (name: string) => `${name}.${Date.now().toString(36)}${counter++}@example.com`;
-
-/** An account that is already confirmed, made through the API: for tests about what comes after. */
-async function confirmedAccount(request: APIRequestContext, name = "Asha Rao") {
-  const email = unique("asha");
-  const registered = await request.post("/v1/auth/register", { data: { name, email, password: PASSWORD, role: "creator" } });
-  expect(registered.status()).toBe(202);
-  const link = await mailedLink(email, "verify-email");
-  const verified = await request.post("/v1/auth/verify-email", { data: { token: link.split("/").pop() } });
-  expect(verified.status()).toBe(200);
-  return email;
-}
-
-/** The app's own alerts. Next adds one more (`#__next-route-announcer__`) that reads out page changes. */
-const alertOf = (page: Page) => page.locator('[role="alert"]:not(#__next-route-announcer__)');
-
-async function signIn(page: Page, email: string, password = PASSWORD) {
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-}
 
 test("a new person registers, confirms their email, signs out and signs back in", async ({ page }) => {
   const email = unique("asha");
@@ -174,8 +151,8 @@ test("an emailed reset link works once", async ({ page, request }) => {
   await expect(page.getByRole("link", { name: "Ask for a new link" })).toBeVisible();
 });
 
-test("the library asks for a sign-in and brings the person back to it; a link to another site is ignored", async ({ page, request }) => {
-  const email = await confirmedAccount(request);
+test("the library asks for a sign-in and brings the person back to it; a link to another site is ignored", async ({ page, playwright }) => {
+  const email = await sharedAccount(playwright);
 
   await page.goto("/library");
   await expect(page).toHaveURL(/\/login\?next=%2Flibrary$/);
@@ -190,8 +167,8 @@ test("the library asks for a sign-in and brings the person back to it; a link to
   await expect(page).toHaveURL(/localhost:3000\/library$/);
 });
 
-test("a session that lapses is renewed without the person noticing", async ({ page, context, request }) => {
-  const email = await confirmedAccount(request);
+test("a session that lapses is renewed without the person noticing", async ({ page, context, playwright }) => {
+  const email = await sharedAccount(playwright);
   await page.goto("/login");
   await signIn(page, email);
   await expect(page).toHaveURL(/\/library$/);
@@ -207,8 +184,8 @@ test("a session that lapses is renewed without the person noticing", async ({ pa
   expect(refreshes).toHaveLength(1);
 });
 
-test("a person whose session cannot be renewed is sent to sign in", async ({ page, context, request }) => {
-  const email = await confirmedAccount(request);
+test("a person whose session cannot be renewed is sent to sign in", async ({ page, context, playwright }) => {
+  const email = await sharedAccount(playwright);
   await page.goto("/login");
   await signIn(page, email);
   await expect(page).toHaveURL(/\/library$/);
@@ -254,8 +231,8 @@ test.describe("accessibility", () => {
     });
   }
 
-  test("the signed-in library passes axe", async ({ page, request }) => {
-    const email = await confirmedAccount(request);
+  test("the signed-in library passes axe", async ({ page, playwright }) => {
+    const email = await sharedAccount(playwright);
     await page.goto("/login");
     await signIn(page, email);
     await expect(page).toHaveURL(/\/library$/);
