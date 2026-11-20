@@ -34,7 +34,12 @@ const mono = localFont({
   display: "swap",
 });
 
+// Link previews need absolute addresses for their images. Where the site lives is `SITE_URL` (the
+// same address the API calls `CLIENT_URL`); without it, a preview's image would point at localhost.
+const siteUrl = process.env.SITE_URL ?? "http://localhost:3000";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "Zeno: teach what you know, keep what you earn",
   description:
     "Video courses and live classes for independent educators. Every lesson locked segment by segment, every sale counted once, every payout to your bank.",

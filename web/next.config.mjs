@@ -28,9 +28,18 @@ const nextConfig = {
       { key: "Referrer-Policy", value: "no-referrer" },
       { key: "Cache-Control", value: "no-store" },
     ];
+    // A share link is a capability: whoever holds the address may watch. It is kept out of the
+    // Referer of anything the page loads, and out of search results. (Rendered pages are reused for
+    // 15 seconds by Next itself, so no Cache-Control is set here.)
+    const capability = [
+      { key: "Referrer-Policy", value: "no-referrer" },
+      { key: "X-Robots-Tag", value: "noindex, nofollow" },
+    ];
     return [
       { source: "/verify-email/:token", headers: private_ },
       { source: "/reset-password/:token", headers: private_ },
+      { source: "/s/:code", headers: capability },
+      { source: "/s/:code/:path*", headers: capability },
     ];
   },
 };
