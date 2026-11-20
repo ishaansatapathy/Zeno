@@ -113,7 +113,9 @@ jobs:
   # silent session renewal. The API's development mail transport prints each email to its log,
   # which is where the tests read the link a person would have clicked.
   e2e:
-    runs-on: ubuntu-latest
+    # Pinned: Playwright's browser installer supports specific Ubuntu releases, and `latest` moves on
+    # (it is 26.04 now, which Playwright 1.56 does not support).
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     services:
       postgres:
