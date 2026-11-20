@@ -13,7 +13,7 @@ name = "api"
 path = "src/main.rs"
 
 [dependencies]
-zeno-core = { path = "../core" }
+zeno-core = { path = "../core", features = ["openapi"] }
 tokio.workspace = true
 axum.workspace = true
 axum-extra.workspace = true
@@ -41,8 +41,10 @@ thiserror.workspace = true
 anyhow.workspace = true
 dotenvy.workspace = true
 image.workspace = true
+utoipa.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 tower.workspace = true
 http-body-util.workspace = true
 reqwest.workspace = true

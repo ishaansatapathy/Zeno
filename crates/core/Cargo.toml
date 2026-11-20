@@ -26,6 +26,11 @@ futures-util.workspace = true
 ring.workspace = true
 base64.workspace = true
 redis.workspace = true
+utoipa = { workspace = true, optional = true }
+
+[features]
+# Lets the API describe core types (the role) in its OpenAPI document.
+openapi = ["dep:utoipa"]
 
 [dev-dependencies]
 tokio.workspace = true

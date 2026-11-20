@@ -16,6 +16,7 @@ pub mod invoices;
 pub mod ledger;
 pub mod mail;
 pub mod net;
+pub mod openapi;
 pub mod orders;
 pub mod outbox;
 pub mod payments;

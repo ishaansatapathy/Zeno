@@ -15,7 +15,7 @@ use crate::auth::extractor::{ApiJson, AuthUser, Client};
 use crate::auth::limits::{self, HOUR};
 use crate::auth::service::{self, Authenticated, RefreshFailure};
 use crate::auth::validation;
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::net::limit_bucket;
 use crate::state::AppState;
 
@@ -56,7 +56,23 @@ fn accepted(message: &'static str) -> (StatusCode, Json<MessageResponse>) {
     (StatusCode::ACCEPTED, Json(MessageResponse { message }))
 }
 
-async fn register(
+/// Creates an account and emails a link to verify it.
+///
+/// The answer is the same whether or not the email was already registered, so this cannot be used
+/// to find out who has an account.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/register",
+    tag = "auth",
+    request_body = RegisterRequest,
+    responses(
+        (status = 202, description = "Accepted. A link is on its way if the address can be used.", body = MessageResponse),
+        (status = 422, description = "`validation_failed` (every invalid field at once, in `fields`) or `invalid_request` (the JSON has the wrong shape or an unknown field).", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`; wait `Retry-After` seconds.", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+        (status = 503, description = "`unavailable`: the limiter is down, and this route fails closed.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn register(
     State(state): State<AppState>,
     Client(ctx): Client,
     ApiJson(body): ApiJson<RegisterRequest>,
@@ -73,7 +89,18 @@ async fn register(
     Ok(accepted(REGISTER_MESSAGE))
 }
 
-async fn verify_email(
+/// Confirms an email address with the one-time token from the link, and signs the person in.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/verify-email",
+    tag = "auth",
+    request_body = TokenRequest,
+    responses(
+        (status = 200, description = "Verified and signed in.", body = UserEnvelope, headers(("Set-Cookie" = String, description = "`zeno_at` and `zeno_rt`; HttpOnly, SameSite=Lax."))),
+        (status = 400, description = "`invalid_token` (the link is wrong, used or expired) or `invalid_request` (a malformed body).", body = ErrorBody),
+    )
+)]
+pub(crate) async fn verify_email(
     State(state): State<AppState>,
     Client(ctx): Client,
     jar: CookieJar,
@@ -83,7 +110,20 @@ async fn verify_email(
     Ok(session_response(&state, jar, &auth))
 }
 
-async fn resend_verification(
+/// Sends a new verification link, if the account exists and still needs one.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/resend-verification",
+    tag = "auth",
+    request_body = EmailRequest,
+    responses(
+        (status = 202, description = "Accepted. Always the same answer.", body = MessageResponse),
+        (status = 422, description = "`validation_failed` (see `fields`) or `invalid_request` (the JSON has the wrong shape or an unknown field).", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+        (status = 503, description = "`unavailable`: fails closed.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn resend_verification(
     State(state): State<AppState>,
     Client(ctx): Client,
     ApiJson(body): ApiJson<EmailRequest>,
@@ -109,7 +149,21 @@ async fn resend_verification(
     Ok(accepted(VERIFICATION_MESSAGE))
 }
 
-async fn login(
+/// Signs in with an email and password.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/login",
+    tag = "auth",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Signed in.", body = UserEnvelope, headers(("Set-Cookie" = String, description = "`zeno_at` and `zeno_rt`; HttpOnly, SameSite=Lax."))),
+        (status = 401, description = "`invalid_credentials`: the same answer for an unknown email and a wrong password.", body = ErrorBody),
+        (status = 403, description = "`email_not_verified` (the password was right but the address is not confirmed) or `forbidden_origin`.", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`: too many failures for this email or address.", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+        (status = 503, description = "`unavailable`: fails closed.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn login(
     State(state): State<AppState>,
     Client(ctx): Client,
     jar: CookieJar,
@@ -119,7 +173,24 @@ async fn login(
     Ok(session_response(&state, jar, &auth))
 }
 
-async fn refresh(State(state): State<AppState>, Client(ctx): Client, jar: CookieJar) -> Response {
+/// Rotates the session. Reads the refresh cookie; sends no body and returns none.
+///
+/// A refresh token is single-use. If two tabs refresh at once, one gets `401 refresh_conflict`
+/// and should simply retry.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/refresh",
+    tag = "auth",
+    responses(
+        (status = 204, description = "A new pair of cookies was set.", headers(("Set-Cookie" = String, description = "New `zeno_at` and `zeno_rt`."))),
+        (status = 401, description = "`unauthenticated` (no cookie), `refresh_conflict` (retry shortly) or `session_expired` (the cookies are cleared; sign in again).", body = ErrorBody),
+    )
+)]
+pub(crate) async fn refresh(
+    State(state): State<AppState>,
+    Client(ctx): Client,
+    jar: CookieJar,
+) -> Response {
     let Some(raw) = jar.get(REFRESH_COOKIE).map(|c| c.value().to_owned()) else {
         return ApiError::unauthorized("unauthenticated", "Sign in to continue.").into_response();
     };
@@ -143,7 +214,16 @@ async fn refresh(State(state): State<AppState>, Client(ctx): Client, jar: Cookie
     }
 }
 
-async fn logout(
+/// Ends this session and clears the cookies. Safe to repeat.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/logout",
+    tag = "auth",
+    responses(
+        (status = 204, description = "Signed out.", headers(("Set-Cookie" = String, description = "Both cookies, expired."))),
+    )
+)]
+pub(crate) async fn logout(
     State(state): State<AppState>,
     Client(ctx): Client,
     jar: CookieJar,
@@ -159,7 +239,20 @@ async fn logout(
     ))
 }
 
-async fn forgot_password(
+/// Emails a password reset link, if the account exists.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/forgot-password",
+    tag = "auth",
+    request_body = EmailRequest,
+    responses(
+        (status = 202, description = "Accepted. Always the same answer.", body = MessageResponse),
+        (status = 422, description = "`validation_failed` (see `fields`) or `invalid_request` (the JSON has the wrong shape or an unknown field).", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+        (status = 503, description = "`unavailable`: fails closed.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn forgot_password(
     State(state): State<AppState>,
     Client(ctx): Client,
     ApiJson(body): ApiJson<EmailRequest>,
@@ -183,7 +276,19 @@ async fn forgot_password(
     Ok(accepted(RECOVERY_MESSAGE))
 }
 
-async fn reset_password(
+/// Sets a new password with the one-time token from the reset link, and ends every other session.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/reset-password",
+    tag = "auth",
+    request_body = ResetPasswordRequest,
+    responses(
+        (status = 200, description = "Password updated. The person signs in again.", body = MessageResponse),
+        (status = 400, description = "`invalid_token` (the link is wrong, used or expired) or `invalid_request` (a malformed body).", body = ErrorBody),
+        (status = 422, description = "`validation_failed` (the new password is not allowed) or `invalid_request` (the JSON has the wrong shape).", body = ErrorBody),
+    )
+)]
+pub(crate) async fn reset_password(
     State(state): State<AppState>,
     Client(ctx): Client,
     ApiJson(body): ApiJson<ResetPasswordRequest>,
@@ -202,7 +307,21 @@ async fn reset_password(
     }))
 }
 
-async fn me(State(state): State<AppState>, user: AuthUser) -> Result<Json<UserEnvelope>, ApiError> {
+/// Who is signed in.
+#[utoipa::path(
+    get,
+    path = "/v1/auth/me",
+    tag = "auth",
+    security(("session" = [])),
+    responses(
+        (status = 200, description = "The signed-in account.", body = UserEnvelope),
+        (status = 401, description = "`unauthenticated`: no session, or it expired. Refresh and retry once.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn me(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<UserEnvelope>, ApiError> {
     let row = service::me(&state, user.id).await?;
     Ok(Json(UserEnvelope {
         user: UserResponse::from(&row),
@@ -210,7 +329,17 @@ async fn me(State(state): State<AppState>, user: AuthUser) -> Result<Json<UserEn
 }
 
 /// The signed-in user's own recent security activity, newest first.
-async fn activity(
+#[utoipa::path(
+    get,
+    path = "/v1/auth/activity",
+    tag = "auth",
+    security(("session" = [])),
+    responses(
+        (status = 200, description = "Up to 20 events, newest first.", body = ActivityResponse),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+    )
+)]
+pub(crate) async fn activity(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<ActivityResponse>, ApiError> {

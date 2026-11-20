@@ -2,9 +2,12 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 
-#[derive(Debug, Clone, Serialize)]
+/// One invalid field in a request.
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct FieldError {
+    /// The request field, as the client sent it.
     pub field: &'static str,
     pub message: String,
 }
@@ -76,17 +79,23 @@ where
     }
 }
 
-#[derive(Serialize)]
-struct ErrorBody<'a> {
-    error: ErrorDetail<'a>,
+/// Every error the API returns has this shape.
+#[derive(Serialize, ToSchema)]
+#[schema(as = ErrorResponse)]
+pub struct ErrorBody<'a> {
+    pub error: ErrorDetail<'a>,
 }
 
-#[derive(Serialize)]
-struct ErrorDetail<'a> {
-    code: &'a str,
-    message: &'a str,
+#[derive(Serialize, ToSchema)]
+pub struct ErrorDetail<'a> {
+    /// Stable and machine-readable; branch on this, not on the message.
+    pub code: &'a str,
+    /// For people. Safe to show.
+    pub message: &'a str,
+    /// Present on `422 validation_failed`: every invalid field at once.
     #[serde(skip_serializing_if = "Option::is_none")]
-    fields: Option<&'a [FieldError]>,
+    #[schema(value_type = Option<Vec<FieldError>>)]
+    pub fields: Option<&'a [FieldError]>,
 }
 
 fn respond(

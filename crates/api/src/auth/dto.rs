@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 use zeno_core::model::Role;
 
@@ -9,7 +10,8 @@ use crate::auth::validation;
 use crate::error::{ApiError, FieldError};
 use crate::secret::Secret;
 
-#[derive(Debug, Deserialize)]
+/// Who a new account is for. Admins are never self-service.
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SignupRole {
     Student,
@@ -25,12 +27,18 @@ impl From<SignupRole> for Role {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterRequest {
+    /// Shown to others.
+    #[schema(min_length = 2, max_length = 80)]
     pub name: String,
+    #[schema(format = "email")]
     pub email: String,
+    /// Not a common password, and not made from the email address.
+    #[schema(value_type = String, format = Password, min_length = 10, max_length = 128)]
     pub password: Secret,
+    /// Defaults to `student`.
     #[serde(default)]
     pub role: Option<SignupRole>,
 }
@@ -66,38 +74,47 @@ impl RegisterRequest {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
+    #[schema(format = "email")]
     pub email: String,
+    #[schema(value_type = String, format = Password)]
     pub password: Secret,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailRequest {
+    #[schema(format = "email")]
     pub email: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TokenRequest {
+    /// The one-time token from the emailed link.
+    #[schema(value_type = String)]
     pub token: Secret,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ResetPasswordRequest {
+    /// The one-time token from the emailed link.
+    #[schema(value_type = String)]
     pub token: Secret,
+    /// Not a common password, and not made from the account's email address.
+    #[schema(value_type = String, format = Password, min_length = 10, max_length = 128)]
     pub new_password: Secret,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MessageResponse {
     pub message: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UserResponse {
     pub id: Uuid,
     pub name: String,
@@ -118,7 +135,7 @@ impl From<&UserRow> for UserResponse {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ActivityItem {
     pub kind: String,
     pub at: DateTime<Utc>,
@@ -126,12 +143,12 @@ pub struct ActivityItem {
     pub user_agent: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ActivityResponse {
     pub events: Vec<ActivityItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UserEnvelope {
     pub user: UserResponse,
 }
