@@ -104,7 +104,7 @@ read someone else's; a moderation takedown is planned).
 | `GET /v1/recordings/:id` | One recording. Someone else's, a deleted one and a malformed id all answer `404` |
 | `PATCH /v1/recordings/:id` | Change `title` and/or `visibility` (`private`, `link`, `public`). Needs the current `version` in `If-Match` or the body: `428` without it, `409 version_conflict` if it moved on |
 | `PUT /v1/recordings/:id/video` | Give a recording its video (`{"video_id": ...}`). Repeating it is safe; a different second video is `409 video_already_attached`; a video already in another recording is `409 video_in_use`; someone else's is `404 video_not_found` |
-| `DELETE /v1/recordings/:id` | Deletes the recording and, unless a course still uses it, its video |
+| `DELETE /v1/recordings/:id` | Deletes the recording and, unless a course still uses it, its video. The row itself is removed for good 30 days later by the hourly sweep, with its links, view counts and link viewings (`recordings_deleted_idx` keeps the sweep to the deleted rows: 500 of them in under a millisecond on 200,000) |
 
 A recording's `status` is read from its video, never stored: `capturing` (no video yet),
 `uploading`, `processing`, `ready` or `failed`. `duration_seconds` comes from the same place.
@@ -186,6 +186,20 @@ check) runs about 780 a second across 16 clients with real commits, none failing
 viewing is a session row; link sessions that ended are forgotten after 7 days (account sessions
 after 90). If one link's traffic ever outgrows that, the next step is stateless link tokens with
 the link's status cached for a few seconds, trading instant revocation for fewer writes.
+
+**Under concurrency.** Closing a link (revoking it, making the recording private, deleting it)
+ends the viewings it can see. A viewing that was starting at that moment could slip in after the
+sweep and stay open on a closed link; nobody could watch through it (every playlist and key asks
+again), but it would lie about being open. So starting a viewing is one statement that checks the
+link and its recording and inserts the session while holding a shared lock on both rows
+(`playback::repo::insert_for_link`): either the closer committed first and the visitor is told the
+link is gone (`410`), or the visitor's session exists before the closer's sweep runs and is ended by
+it. The cap of 10 live links is the same kind of promise: the count and the insert happen under the
+recording's row lock, so 20 requests at once make exactly as many links as there is room for. The
+shared lock costs about 10 to 25% of start throughput in a micro-benchmark (16 connections, real
+commits: roughly 250 to 270 starts a second locked against 280 to 380 unlocked, on a laptop with
+Postgres in Docker); `tests/share_chaos.rs` holds each of these races open on purpose and checks
+the outcome.
 
 **Rolling deploys.** Until every API and key-server instance runs this version, an instance that
 meets an anonymous session cannot read its null user and refuses it. Roll both services out before
