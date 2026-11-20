@@ -81,8 +81,6 @@ const ROUTERS: &[(&str, &[(&str, &str)])] = &[
 const NOT_DESCRIBED_YET: &[&str] = &[
     "put /v1/recordings/{id}/video",
     "get /v1/recordings/{id}/views",
-    "get /v1/s/{code}",
-    "post /v1/s/{code}/play",
 ];
 
 /// The routes the routers declare, read from their source: `.route("/:id/links", post(create))`
@@ -569,6 +567,125 @@ db_test! {
             .await;
 
         let unseen = contract.unseen("/v1/recordings");
+        assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+    }
+}
+
+db_test! {
+    async fn the_visitors_api_keeps_its_promises(pool: PgPool) {
+        use common::media::ready_video;
+
+        let app = app(pool.clone());
+        let contract = Contract::new();
+        let owner = signup_creator(&app, "teacher@example.com").await;
+        let nobody = uuid::Uuid::new_v4();
+
+        // A recording whose video is ready, with an open link, a password link and a closed one.
+        let video = ready_video(&app, &owner, &pool).await;
+        let made = app.post("/v1/recordings").jar(&owner).json(json!({"source": "extension", "title": "Week 3", "video_id": video})).send().await;
+        let ready = made.body["recording"]["id"].as_str().unwrap().to_owned();
+        let link = |recording: String, body: Value| {
+            let app = &app;
+            let owner = &owner;
+            async move {
+                let res = app.post(&format!("/v1/recordings/{recording}/links")).jar(owner).json(body).send().await;
+                assert_eq!(res.status, StatusCode::CREATED, "{:?}", res.body);
+                (res.body["link"]["code"].as_str().unwrap().to_owned(), res.body["link"]["id"].as_str().unwrap().to_owned())
+            }
+        };
+        let (open, _) = link(ready.clone(), json!({})).await;
+        let (locked, _) = link(ready.clone(), json!({"password": "open sesame"})).await;
+        let (closed, closed_id) = link(ready.clone(), json!({})).await;
+        let revoked = app.req(axum::http::Method::DELETE, &format!("/v1/recordings/{ready}/links/{closed_id}")).jar(&owner).send().await;
+        assert_eq!(revoked.status, StatusCode::NO_CONTENT);
+
+        // A recording whose video is still being prepared.
+        let second = ready_video(&app, &owner, &pool).await;
+        sqlx::query("update videos set status = 'processing' where id = $1").bind(second).execute(&pool).await.unwrap();
+        let made = app.post("/v1/recordings").jar(&owner).json(json!({"source": "upload", "title": "Week 4", "video_id": second})).send().await;
+        let (preparing, _) = link(made.body["recording"]["id"].as_str().unwrap().to_owned(), json!({})).await;
+
+        let page = "/v1/s/{code}";
+        let play = "/v1/s/{code}/play";
+        let get = |code: String| app.get(&format!("/v1/s/{code}")).send();
+        let press = |code: String, body: Value| app.post(&format!("/v1/s/{code}/play")).json(body).send();
+
+        // The page: what it says for each kind of link, and that it can be reused.
+        let shown = get(open.clone()).await;
+        assert_eq!(shown.status, StatusCode::OK, "{:?}", shown.body);
+        assert_eq!(shown.body["share"]["status"], "ready");
+        contract.check("get", page, &shown);
+        let etag = shown.headers["etag"].to_str().unwrap().to_owned();
+        let again = app.get(&format!("/v1/s/{open}")).header("if-none-match", &etag).send().await;
+        assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+        contract.check("get", page, &again);
+        let protected = get(locked.clone()).await;
+        assert_eq!(protected.body["share"]["requires_password"], true);
+        assert!(protected.body["share"].get("title").is_none(), "a protected link shows no title");
+        contract.check("get", page, &protected);
+        let waiting = get(preparing.clone()).await;
+        assert_eq!(waiting.body["share"]["status"], "processing");
+        contract.check("get", page, &waiting);
+        contract.check("get", page, &get("A".repeat(22)).await);
+        contract.check("get", page, &get("short".into()).await);
+        let gone = get(closed.clone()).await;
+        assert_eq!(gone.status, StatusCode::GONE);
+        contract.check("get", page, &gone);
+
+        // Pressing play.
+        let started = press(open.clone(), json!({})).await;
+        assert_eq!(started.status, StatusCode::CREATED, "{:?}", started.body);
+        assert!(started.body["playback"]["playlist_url"].as_str().unwrap().starts_with("/v1/play/"));
+        contract.check("post", play, &started);
+        let missing_password = press(locked.clone(), json!({})).await;
+        assert_eq!(missing_password.code(), "password_required");
+        contract.check("post", play, &missing_password);
+        let wrong_password = press(locked.clone(), json!({"password": "open sesamE"})).await;
+        assert_eq!(wrong_password.code(), "wrong_password");
+        contract.check("post", play, &wrong_password);
+        let unlocked = press(locked.clone(), json!({"password": "open sesame"})).await;
+        assert_eq!(unlocked.status, StatusCode::CREATED);
+        contract.check("post", play, &unlocked);
+        let not_ready = press(preparing.clone(), json!({})).await;
+        assert_eq!(not_ready.code(), "not_ready");
+        contract.check("post", play, &not_ready);
+        contract.check("post", play, &press("A".repeat(22), json!({})).await);
+        contract.check("post", play, &press(closed.clone(), json!({})).await);
+
+        // What can go wrong on any route.
+        contract.provoke_common_errors(&app, "/v1/s", None, &[("code", &open)]).await;
+
+        // Running out of budget: password guesses on one link, starting viewings, and opening pages.
+        let mut limited = None;
+        for n in 0..12 {
+            let res = press(locked.clone(), json!({"password": format!("guess number {n}")})).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("post", play, &limited.expect("password guesses run out"));
+        let mut limited = None;
+        for _ in 0..40 {
+            let res = press(open.clone(), json!({})).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("post", play, &limited.expect("starting viewings runs out"));
+        let mut limited = None;
+        for _ in 0..320 {
+            let res = get(open.clone()).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("get", page, &limited.expect("opening pages runs out"));
+        let _ = nobody;
+
+        let unseen = contract.unseen("/v1/s");
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }
