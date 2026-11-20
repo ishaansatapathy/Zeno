@@ -88,3 +88,39 @@ export async function seedRecording(page: Page, title: string, source = "extensi
   const { recording } = await response.json();
   return { id: recording.id, version: recording.version, title: recording.title };
 }
+
+/** Makes a share link for a recording of the signed-in person's. */
+export async function shareLink(page: Page, recording: string, body: Record<string, unknown> = {}) {
+  const response = await page.request.post(`/v1/recordings/${recording}/links`, { data: body });
+  expect(response.status(), await response.text()).toBe(201);
+  const { link } = await response.json();
+  return { id: link.id as string, code: link.code as string };
+}
+
+/** Closes a link for good. */
+export async function revokeLink(page: Page, recording: string, link: string) {
+  const response = await page.request.delete(`/v1/recordings/${recording}/links/${link}`);
+  expect(response.status()).toBe(204);
+}
+
+/**
+ * A video that has been uploaded and handed to the worker. No worker runs in these tests, so it
+ * stays `processing`: exactly the state a share page has to be able to show.
+ */
+export async function processingVideo(page: Page): Promise<string> {
+  const size = 1024 * 1024;
+  const created = await page.request.post("/v1/videos", { data: { filename: "Lecture.mp4", size_bytes: size, content_type: "video/mp4" } });
+  expect(created.status(), await created.text()).toBe(201);
+  const body = await created.json();
+  const put = await page.request.put(body.upload.parts[0].url, { data: Buffer.alloc(size, 1) });
+  expect(put.ok()).toBe(true);
+  const done = await page.request.post(`/v1/videos/${body.video.id}/complete`);
+  expect(done.status(), await done.text()).toBe(200);
+  return body.video.id as string;
+}
+
+/** Gives a recording its video. */
+export async function attachVideo(page: Page, recording: string, video: string) {
+  const response = await page.request.put(`/v1/recordings/${recording}/video`, { data: { video_id: video } });
+  expect(response.status(), await response.text()).toBe(200);
+}
