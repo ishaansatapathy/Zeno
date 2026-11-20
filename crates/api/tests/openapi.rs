@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use axum::http::StatusCode;
+use common::contract::Contract;
 use common::*;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -54,19 +55,69 @@ fn the_committed_document_is_what_the_code_produces() {
     );
 }
 
-/// The routes the auth router declares, read from its source: `.route("/login", post(login))`.
-fn declared_auth_routes() -> BTreeSet<String> {
-    let source = std::fs::read_to_string(repo_file("crates/api/src/auth/routes.rs")).unwrap();
+/// Where routers are declared, and where each is mounted.
+const ROUTERS: &[(&str, &[(&str, &str)])] = &[
+    ("crates/api/src/auth/routes.rs", &[("router", "/v1/auth")]),
+    (
+        "crates/api/src/recordings/routes.rs",
+        &[("router", "/v1/recordings")],
+    ),
+    (
+        "crates/api/src/shares/routes.rs",
+        &[
+            ("recording_router", "/v1/recordings"),
+            ("public_router", "/v1/s"),
+        ],
+    ),
+    (
+        "crates/api/src/views/routes.rs",
+        &[("recording_router", "/v1/recordings")],
+    ),
+];
+
+/// Routes that exist and are not in the document yet. The list is explicit so that a new route
+/// cannot be forgotten silently, and it can only shrink: a route here that is documented, or that
+/// no longer exists, fails the test below.
+const NOT_DESCRIBED_YET: &[&str] = &[
+    "put /v1/recordings/{id}/video",
+    "get /v1/recordings/{id}/views",
+    "get /v1/s/{code}",
+    "post /v1/s/{code}/play",
+];
+
+/// The routes the routers declare, read from their source: `.route("/:id/links", post(create))`
+/// becomes `post /v1/recordings/{id}/links`.
+fn declared_routes() -> BTreeSet<String> {
     let mut found = BTreeSet::new();
-    for line in source
-        .lines()
-        .filter(|l| l.trim_start().starts_with(".route(\""))
-    {
-        let rest = line.trim_start().trim_start_matches(".route(\"");
-        let path = rest.split('"').next().unwrap();
-        for method in ["get", "post", "put", "patch", "delete"] {
-            if rest.contains(&format!("{method}(")) {
-                found.insert(format!("{method} /v1/auth{path}"));
+    for (file, mounts) in ROUTERS {
+        let source = std::fs::read_to_string(repo_file(file)).unwrap();
+        let mut prefix: Option<&str> = None;
+        for line in source.lines() {
+            let line = line.trim_start();
+            if let Some(rest) = line.strip_prefix("pub fn ") {
+                let name = rest.split('(').next().unwrap();
+                prefix = mounts.iter().find(|(n, _)| *n == name).map(|(_, p)| *p);
+            }
+            let (Some(prefix), Some((_, rest))) = (prefix, line.split_once(".route(\"")) else {
+                continue;
+            };
+            let path = rest.split('"').next().unwrap();
+            let path = if path == "/" {
+                String::new()
+            } else {
+                path.to_owned()
+            };
+            let template: Vec<String> = path
+                .split('/')
+                .map(|segment| match segment.strip_prefix(':') {
+                    Some(name) => format!("{{{name}}}"),
+                    None => segment.to_owned(),
+                })
+                .collect();
+            for method in ["get", "post", "put", "patch", "delete"] {
+                if rest.contains(&format!("{method}(")) {
+                    found.insert(format!("{method} {prefix}{}", template.join("/")));
+                }
             }
         }
     }
@@ -74,24 +125,31 @@ fn declared_auth_routes() -> BTreeSet<String> {
 }
 
 #[test]
-fn every_auth_route_is_documented_and_every_documented_route_exists() {
+fn every_route_is_documented_and_every_documented_route_exists() {
     let doc = document();
     let mut documented = BTreeSet::new();
     for (path, item) in doc["paths"].as_object().unwrap() {
-        if !path.starts_with("/v1/auth/") {
-            continue;
-        }
         for method in ["get", "post", "put", "patch", "delete"] {
             if item.get(method).is_some() {
                 documented.insert(format!("{method} {path}"));
             }
         }
     }
-    let declared = declared_auth_routes();
-    assert!(declared.len() >= 10, "the source scan found {declared:?}");
+    let declared = declared_routes();
+    assert!(declared.len() >= 20, "the source scan found {declared:?}");
+
+    let waiting: BTreeSet<String> = NOT_DESCRIBED_YET.iter().map(|r| (*r).to_owned()).collect();
+    for route in &waiting {
+        assert!(declared.contains(route), "{route} is listed as not described yet, but no such route exists: remove it from the list");
+        assert!(
+            !documented.contains(route),
+            "{route} is documented now: remove it from the list of routes not described yet"
+        );
+    }
+    let expected: BTreeSet<String> = declared.difference(&waiting).cloned().collect();
     assert_eq!(
-        declared, documented,
-        "routes and the OpenAPI document disagree (left: declared in the router, right: documented)"
+        expected, documented,
+        "routes and the OpenAPI document disagree (left: declared and not listed as waiting, right: documented). Describe the new route, or add it to NOT_DESCRIBED_YET."
     );
 }
 
@@ -141,93 +199,6 @@ fn secrets_are_marked_as_passwords_and_the_role_is_an_enum() {
         doc["components"]["securitySchemes"]["session"]["in"],
         "cookie"
     );
-}
-
-/// Checks real responses against the document and remembers which ones it has seen.
-struct Contract {
-    doc: Value,
-    seen: std::sync::Mutex<BTreeSet<String>>,
-}
-
-impl Contract {
-    fn new() -> Self {
-        Self {
-            doc: document(),
-            seen: Default::default(),
-        }
-    }
-
-    fn check(&self, method: &str, path: &str, res: &Res) {
-        let who = format!("{} {path} -> {}", method.to_uppercase(), res.status);
-        let operation = &self.doc["paths"][path][method];
-        assert!(operation.is_object(), "{who}: not in the document");
-        let status = res.status.as_u16().to_string();
-        let response = &operation["responses"][&status];
-        assert!(
-            response.is_object(),
-            "{who}: the document does not list this status ({:?})",
-            res.body
-        );
-        for name in response["headers"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .map(|(n, _)| n)
-        {
-            assert!(
-                res.headers.contains_key(name.as_str()),
-                "{who}: missing header {name}"
-            );
-        }
-        match response["content"]["application/json"].get("schema") {
-            Some(schema) => self.validate(&who, schema, &res.body),
-            None => assert!(
-                res.body.is_null(),
-                "{who}: the document lists no body, got {:?}",
-                res.body
-            ),
-        }
-        self.seen
-            .lock()
-            .unwrap()
-            .insert(format!("{method} {path} {status}"));
-    }
-
-    fn validate(&self, who: &str, schema: &Value, body: &Value) {
-        // A schema that points into `components` needs `components` beside it to resolve.
-        let mut root = schema.clone();
-        root["components"] = self.doc["components"].clone();
-        let validator = jsonschema::validator_for(&root).expect("the schema compiles");
-        let problems: Vec<String> = validator.iter_errors(body).map(|e| e.to_string()).collect();
-        assert!(
-            problems.is_empty(),
-            "{who}: the body does not match its schema: {problems:?}\n{body}"
-        );
-    }
-
-    /// The responses the document lists that no test provoked.
-    fn unseen(&self) -> Vec<String> {
-        let seen = self.seen.lock().unwrap();
-        let mut missing = Vec::new();
-        for (path, item) in self.doc["paths"].as_object().unwrap() {
-            for method in ["get", "post", "put", "patch", "delete"] {
-                let Some(operation) = item.get(method) else {
-                    continue;
-                };
-                for status in operation["responses"].as_object().unwrap().keys() {
-                    // Our own bug, and the limiter being down: not things a test can ask for.
-                    if status == "500" || status == "503" {
-                        continue;
-                    }
-                    let key = format!("{method} {path} {status}");
-                    if !seen.contains(&key) {
-                        missing.push(key);
-                    }
-                }
-            }
-        }
-        missing
-    }
 }
 
 db_test! {
@@ -373,55 +344,231 @@ db_test! {
             }
         }
 
-        // What can go wrong on any route is documented once, so it is provoked on every route.
-        let operations: Vec<(String, String, bool)> = contract.doc["paths"]
-            .as_object()
-            .unwrap()
+        contract.provoke_common_errors(&app, "/v1/auth/", None, &[]).await;
+
+        let unseen = contract.unseen("/v1/auth/");
+        assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+    }
+}
+
+#[test]
+fn the_words_the_api_chooses_from_are_listed_in_the_document() {
+    use zeno_api::recordings::dto::{SOURCES, STATUSES, VISIBILITIES};
+    use zeno_api::shares::dto::LINK_STATES;
+    let doc = document();
+    let schemas = &doc["components"]["schemas"];
+    let listed = |schema: &str, field: &str| -> Vec<String> {
+        schemas[schema]["properties"][field]["enum"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{schema}.{field} lists no values"))
             .iter()
-            .flat_map(|(path, item)| {
-                ["get", "post", "put", "patch", "delete"]
-                    .into_iter()
-                    .filter_map(|method| {
-                        item.get(method)
-                            .map(|op| (method.to_owned(), path.clone(), op.get("requestBody").is_some()))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        for (method, path, has_body) in operations {
-            let send = |body: Option<(Vec<u8>, &'static str)>, origin: Option<&'static str>| {
-                let mut req = app.req(method.to_uppercase().parse().unwrap(), &path);
-                if let Some((bytes, content_type)) = body {
-                    req = req.raw_body(bytes, Some(content_type));
-                }
-                if let Some(origin) = origin {
-                    req = req.origin(origin);
-                }
-                req.send()
-            };
-            if method != "get" {
-                let res = send(None, Some("https://evil.example")).await;
-                assert_eq!(res.status, StatusCode::FORBIDDEN, "{method} {path}");
-                assert_eq!(res.code(), "forbidden_origin");
-                contract.check(&method, &path, &res);
+            .filter_map(|word| word.as_str().map(str::to_owned))
+            .collect()
+    };
+    let own = |words: &[&str]| -> Vec<String> { words.iter().map(|w| (*w).to_owned()).collect() };
+    assert_eq!(listed("RecordingResponse", "source"), own(SOURCES));
+    assert_eq!(listed("CreateRecordingRequest", "source"), own(SOURCES));
+    assert_eq!(listed("RecordingResponse", "visibility"), own(VISIBILITIES));
+    assert_eq!(
+        listed("UpdateRecordingRequest", "visibility"),
+        own(VISIBILITIES)
+    );
+    assert_eq!(listed("RecordingResponse", "status"), own(STATUSES));
+    assert_eq!(listed("LinkResponse", "state"), own(LINK_STATES));
+    // A field that may be absent may be null, and the list must say so.
+    let optional = &schemas["UpdateRecordingRequest"]["properties"]["visibility"]["enum"];
+    assert!(optional.as_array().unwrap().contains(&Value::Null));
+}
+
+db_test! {
+    async fn the_library_api_keeps_its_promises(pool: PgPool) {
+        let app = app(pool);
+        let contract = Contract::new();
+        let owner = signup_creator(&app, "teacher@example.com").await;
+        let student = signup_verified_as(&app, "pupil@example.com", "student").await;
+        let nobody = uuid::Uuid::new_v4();
+        let nobody_s = nobody.to_string();
+        let patch = axum::http::Method::PATCH;
+        let delete = axum::http::Method::DELETE;
+
+        // What each route accepts, for asking it things without knowing anything about it.
+        let sample = |method: &str, path: &str| -> Option<Value> {
+            match (method, path) {
+                ("post", "/v1/recordings") => Some(json!({"source": "upload"})),
+                ("patch", "/v1/recordings/{id}") => Some(json!({"version": 1, "title": "x"})),
+                ("post", "/v1/recordings/{id}/links") => Some(json!({})),
+                _ => None,
             }
-            if has_body {
-                for (body, content_type, expected) in [
-                    (b"{".to_vec(), "application/json", StatusCode::BAD_REQUEST),
-                    (b"[]".to_vec(), "application/json", StatusCode::UNPROCESSABLE_ENTITY),
-                    (b"x".to_vec(), "text/plain", StatusCode::UNSUPPORTED_MEDIA_TYPE),
-                    (vec![b' '; 3_000_000], "application/json", StatusCode::PAYLOAD_TOO_LARGE),
-                ] {
-                    let res = send(Some((body, content_type)), None).await;
-                    assert_eq!(res.status, expected, "{method} {path}");
-                    contract.check(&method, &path, &res);
+        };
+
+        // Signed out, and signed in without a library: every route says so.
+        for (method, path, _) in contract.operations("/v1/recordings") {
+            let uri = path.replace("{id}", &nobody_s).replace("{link}", &nobody_s);
+            for (jar, status, code) in [(None, 401, "unauthenticated"), (Some(&student), 403, "forbidden")] {
+                let mut req = app.req(method.to_uppercase().parse().unwrap(), &uri);
+                if let Some(jar) = jar {
+                    req = req.jar(jar);
                 }
-                // A well-shaped body with invalid values is a `validation_failed` where the route
-                // validates fields; that, and the other documented outcomes, are covered above.
+                if let Some(body) = sample(&method, &path) {
+                    req = req.json(body);
+                }
+                let res = req.send().await;
+                assert_eq!(res.status.as_u16(), status, "{method} {path}: {:?}", res.body);
+                assert_eq!(res.code(), code, "{method} {path}");
+                contract.check(&method, &path, &res);
             }
         }
 
-        let unseen = contract.unseen();
+        // Making recordings, and every way that can go wrong.
+        let id = uuid::Uuid::new_v4();
+        let made = app.post("/v1/recordings").jar(&owner).json(json!({"id": id, "source": "extension", "title": "Week 3"})).send().await;
+        assert_eq!(made.status, StatusCode::CREATED, "{:?}", made.body);
+        contract.check("post", "/v1/recordings", &made);
+        let again = app.post("/v1/recordings").jar(&owner).json(json!({"id": id, "source": "extension"})).send().await;
+        assert_eq!(again.status, StatusCode::OK);
+        contract.check("post", "/v1/recordings", &again);
+        let clash = app.post("/v1/recordings").jar(&owner).json(json!({"id": id, "source": "studio"})).send().await;
+        assert_eq!(clash.code(), "id_conflict");
+        contract.check("post", "/v1/recordings", &clash);
+        let ghost = app.post("/v1/recordings").jar(&owner).json(json!({"source": "upload", "video_id": nobody})).send().await;
+        assert_eq!(ghost.code(), "video_not_found");
+        contract.check("post", "/v1/recordings", &ghost);
+        let invalid = app.post("/v1/recordings").jar(&owner).json(json!({"source": "telepathy", "title": ""})).send().await;
+        assert_eq!(invalid.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("post", "/v1/recordings", &invalid);
+        let second = app.post("/v1/recordings").jar(&owner).json(json!({"source": "upload", "title": "Second"})).send().await;
+        assert_eq!(second.status, StatusCode::CREATED);
+        let second_id = second.body["recording"]["id"].as_str().unwrap().to_owned();
+
+        // Reading the library, a page at a time.
+        let list = "/v1/recordings";
+        let page = app.get("/v1/recordings?limit=1").jar(&owner).send().await;
+        assert_eq!(page.status, StatusCode::OK);
+        let cursor = page.body["next_cursor"].as_str().expect("a second page").to_owned();
+        contract.check("get", list, &page);
+        let next = app.get(&format!("/v1/recordings?limit=1&cursor={cursor}")).jar(&owner).send().await;
+        assert_eq!(next.status, StatusCode::OK);
+        contract.check("get", list, &next);
+        contract.check("get", list, &app.get("/v1/recordings?source=upload").jar(&owner).send().await);
+        let bad_cursor = app.get("/v1/recordings?cursor=garbage").jar(&owner).send().await;
+        assert_eq!(bad_cursor.code(), "invalid_cursor");
+        contract.check("get", list, &bad_cursor);
+        let bad_source = app.get("/v1/recordings?source=telepathy").jar(&owner).send().await;
+        assert_eq!(bad_source.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("get", list, &bad_source);
+
+        // One recording.
+        let one = "/v1/recordings/{id}";
+        let got = app.get(&format!("/v1/recordings/{id}")).jar(&owner).send().await;
+        assert_eq!(got.body["recording"]["status"], "capturing");
+        assert_eq!(got.body["recording"]["view_count"], 0);
+        contract.check("get", one, &got);
+        contract.check("get", one, &app.get(&format!("/v1/recordings/{nobody}")).jar(&owner).send().await);
+        contract.check("get", one, &app.get("/v1/recordings/nope").jar(&owner).send().await);
+
+        // Renaming: the version says which copy was read.
+        let uri = format!("/v1/recordings/{id}");
+        let renamed = app.req(patch.clone(), &uri).jar(&owner).json(json!({"version": 1, "title": "Renamed"})).send().await;
+        assert_eq!(renamed.status, StatusCode::OK, "{:?}", renamed.body);
+        assert_eq!(renamed.body["recording"]["version"], 2);
+        contract.check("patch", one, &renamed);
+        let by_header = app.req(patch.clone(), &uri).jar(&owner).header("if-match", "\"2\"").json(json!({"title": "Renamed again"})).send().await;
+        assert_eq!(by_header.status, StatusCode::OK, "{:?}", by_header.body);
+        contract.check("patch", one, &by_header);
+        let stale = app.req(patch.clone(), &uri).jar(&owner).json(json!({"version": 1, "title": "Too late"})).send().await;
+        assert_eq!(stale.code(), "version_conflict");
+        contract.check("patch", one, &stale);
+        let unversioned = app.req(patch.clone(), &uri).jar(&owner).json(json!({"title": "No version"})).send().await;
+        assert_eq!(unversioned.status, StatusCode::PRECONDITION_REQUIRED);
+        contract.check("patch", one, &unversioned);
+        let junk = app.req(patch.clone(), &uri).jar(&owner).header("if-match", "abc").json(json!({"title": "x"})).send().await;
+        assert_eq!(junk.status, StatusCode::BAD_REQUEST);
+        contract.check("patch", one, &junk);
+        let nothing = app.req(patch.clone(), &uri).jar(&owner).json(json!({"version": 3})).send().await;
+        assert_eq!(nothing.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("patch", one, &nothing);
+        let missing = app.req(patch, &format!("/v1/recordings/{nobody}")).jar(&owner).json(json!({"version": 1, "title": "x"})).send().await;
+        assert_eq!(missing.status, StatusCode::NOT_FOUND);
+        contract.check("patch", one, &missing);
+
+        // Share links.
+        let links = "/v1/recordings/{id}/links";
+        let link = "/v1/recordings/{id}/links/{link}";
+        let links_uri = format!("/v1/recordings/{id}/links");
+        let weak = app.post(&links_uri).jar(&owner).json(json!({"password": "abc"})).send().await;
+        assert_eq!(weak.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("post", links, &weak);
+        let first = app.post(&links_uri).jar(&owner).json(json!({})).send().await;
+        assert_eq!(first.status, StatusCode::CREATED, "{:?}", first.body);
+        assert_eq!(first.body["link"]["state"], "active");
+        contract.check("post", links, &first);
+        let first_id = first.body["link"]["id"].as_str().unwrap().to_owned();
+        let listed = app.get(&links_uri).jar(&owner).send().await;
+        assert_eq!(listed.body["links"].as_array().unwrap().len(), 1);
+        contract.check("get", links, &listed);
+        contract.check("get", links, &app.get(&format!("/v1/recordings/{nobody}/links")).jar(&owner).send().await);
+        contract.check("post", links, &app.post(&format!("/v1/recordings/{nobody}/links")).jar(&owner).json(json!({})).send().await);
+        let revoke = |recording: String, link_id: String| {
+            app.req(delete.clone(), &format!("/v1/recordings/{recording}/links/{link_id}")).jar(&owner).send()
+        };
+        let revoked = revoke(id.to_string(), first_id.clone()).await;
+        assert_eq!(revoked.status, StatusCode::NO_CONTENT);
+        contract.check("delete", link, &revoked);
+        contract.check("delete", link, &revoke(id.to_string(), first_id.clone()).await);
+        contract.check("delete", link, &revoke(id.to_string(), nobody_s.clone()).await);
+        let relisted = app.get(&links_uri).jar(&owner).send().await;
+        assert_eq!(relisted.body["links"][0]["state"], "revoked");
+        contract.check("get", links, &relisted);
+
+        // Ten live links is the most a recording may have.
+        let mut refused = None;
+        for _ in 0..11 {
+            let res = app.post(&links_uri).jar(&owner).json(json!({})).send().await;
+            if res.status == StatusCode::CONFLICT {
+                refused = Some(res);
+                break;
+            }
+            assert_eq!(res.status, StatusCode::CREATED);
+        }
+        let refused = refused.expect("the eleventh live link is refused");
+        assert_eq!(refused.code(), "too_many_links");
+        contract.check("post", links, &refused);
+
+        // Deleting.
+        let gone = app.req(delete.clone(), &format!("/v1/recordings/{second_id}")).jar(&owner).send().await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT);
+        contract.check("delete", one, &gone);
+        contract.check("delete", one, &app.req(delete.clone(), &format!("/v1/recordings/{second_id}")).jar(&owner).send().await);
+
+        // Running out of budget: for links (and then revoking them), and for recordings.
+        let mut limited = None;
+        for _ in 0..40 {
+            let res = app.post(&format!("/v1/recordings/{nobody}/links")).jar(&owner).json(json!({})).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("post", links, &limited.expect("the link budget runs out"));
+        let blocked = revoke(id.to_string(), nobody_s.clone()).await;
+        assert_eq!(blocked.status, StatusCode::TOO_MANY_REQUESTS);
+        contract.check("delete", link, &blocked);
+        let mut limited = None;
+        for _ in 0..70 {
+            let res = app.post("/v1/recordings").jar(&owner).json(json!({"source": "upload"})).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("post", "/v1/recordings", &limited.expect("the recording budget runs out"));
+
+        // What can go wrong on any route.
+        contract
+            .provoke_common_errors(&app, "/v1/recordings", Some(&owner), &[("id", &id.to_string()), ("link", &nobody_s)])
+            .await;
+
+        let unseen = contract.unseen("/v1/recordings");
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }

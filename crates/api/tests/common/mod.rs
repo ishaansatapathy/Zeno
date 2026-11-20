@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+pub mod contract;
 pub mod media;
 pub mod shop;
 
