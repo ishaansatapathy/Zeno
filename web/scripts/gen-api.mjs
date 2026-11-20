@@ -39,6 +39,7 @@ const limits =
   passwordMax: ${limit("RegisterRequest", "password", "maxLength")},
   nameMin: ${limit("RegisterRequest", "name", "minLength")},
   nameMax: ${limit("RegisterRequest", "name", "maxLength")},
+  titleMax: ${limit("CreateRecordingRequest", "title", "maxLength")},
 } as const;
 `;
 

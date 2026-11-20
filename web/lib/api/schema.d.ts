@@ -180,6 +180,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/recordings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The caller's library, newest first, a page at a time. */
+        get: operations["recordings_list"];
+        put?: never;
+        /**
+         * Makes a recording in the caller's library.
+         * @description `201` when this call made it; `200` when it found the one an earlier attempt with the same `id`
+         *     made, so a retry after a dropped connection never makes a duplicate.
+         */
+        post: operations["recordings_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recordings/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One recording. Someone else's, a deleted one and a malformed id all answer `404`. */
+        get: operations["recordings_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Deletes a recording, and its video unless a course still uses it. Every link to it stops
+         *     working at once.
+         */
+        delete: operations["recordings_delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Renames a recording or changes who may watch it.
+         * @description Optimistic: say which `version` you read, in the body or in `If-Match`. If it has moved on, the
+         *     answer is `409 version_conflict` and nothing changes.
+         */
+        patch: operations["recordings_update"];
+        trace?: never;
+    };
+    "/v1/recordings/{id}/links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The recording's links, newest first, whether they still work or not. Never carries a password. */
+        get: operations["links_list"];
+        put?: never;
+        /**
+         * Makes a share link for a recording. A private recording is switched to `link` in the same
+         *     call: a link to something nobody may see would be a trap.
+         */
+        post: operations["links_create"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recordings/{id}/links/{link}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revokes a link and ends every viewing under way through it. Safe to repeat. */
+        delete: operations["links_revoke"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -193,6 +279,38 @@ export interface components {
         };
         ActivityResponse: {
             events: components["schemas"]["ActivityItem"][];
+        };
+        CreateLinkRequest: {
+            /**
+             * Format: date-time
+             * @description From a minute to ten years from now. Without one the link never expires.
+             */
+            expires_at?: string | null;
+            /**
+             * Format: password
+             * @description A speed bump for casual sharing, not an account. Checked before a viewing starts.
+             */
+            password?: string | null;
+        };
+        CreateRecordingRequest: {
+            /**
+             * Format: uuid
+             * @description A client-chosen id (a random UUID). Sending the same one again returns the recording the
+             *     first attempt made, so a retry after a dropped connection never makes a duplicate.
+             */
+            id?: string | null;
+            /**
+             * @description What produces the recording. Fixed for its life.
+             * @enum {string}
+             */
+            source: "upload" | "extension" | "studio" | "stream" | "meeting";
+            /** @description Defaults to "Untitled recording". */
+            title?: string | null;
+            /**
+             * Format: uuid
+             * @description An upload of the caller's own to attach straight away.
+             */
+            video_id?: string | null;
         };
         EmailRequest: {
             /** Format: email */
@@ -216,6 +334,33 @@ export interface components {
             field: string;
             message: string;
         };
+        LinkEnvelope: {
+            link: components["schemas"]["LinkResponse"];
+            /**
+             * @description The recording's visibility after the call: making a link switches a private recording to
+             *     `link`, so the client can show it.
+             */
+            recording_visibility: string;
+        };
+        LinkListEnvelope: {
+            links: components["schemas"]["LinkResponse"][];
+        };
+        LinkResponse: {
+            code: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            has_password: boolean;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            revoked_at?: string | null;
+            /** @enum {string} */
+            state: "active" | "expired" | "revoked";
+            /** @description The address to hand out. */
+            url: string;
+        };
         LoginRequest: {
             /** Format: email */
             email: string;
@@ -224,6 +369,48 @@ export interface components {
         };
         MessageResponse: {
             message: string;
+        };
+        RecordingEnvelope: {
+            recording: components["schemas"]["RecordingResponse"];
+        };
+        RecordingListEnvelope: {
+            /** @description Pass as `cursor` for the next page; absent on the last. */
+            next_cursor?: string | null;
+            recordings: components["schemas"]["RecordingResponse"][];
+        };
+        RecordingResponse: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            duration_seconds?: number | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            owner_id: string;
+            /** @enum {string} */
+            source: "upload" | "extension" | "studio" | "stream" | "meeting";
+            /**
+             * @description Read from the video underneath; never stored.
+             * @enum {string}
+             */
+            status: "capturing" | "uploading" | "processing" | "ready" | "failed";
+            title: string;
+            /** Format: date-time */
+            updated_at: string;
+            /**
+             * Format: int32
+             * @description Changes on every edit; send it back to edit.
+             */
+            version: number;
+            /** Format: uuid */
+            video_id?: string | null;
+            /**
+             * Format: int64
+             * @description All-time views, as of the last flush (see `GET /v1/recordings/{id}/views`).
+             */
+            view_count: number;
+            /** @enum {string} */
+            visibility: "private" | "link" | "public";
         };
         RegisterRequest: {
             /** Format: email */
@@ -256,6 +443,19 @@ export interface components {
         TokenRequest: {
             /** @description The one-time token from the emailed link. */
             token: string;
+        };
+        UpdateRecordingRequest: {
+            title?: string | null;
+            /**
+             * Format: int32
+             * @description The version you read. Required, here or in `If-Match`.
+             */
+            version?: number | null;
+            /**
+             * @description Who may watch. Changing it to `private` ends every viewing under way through a link.
+             * @enum {string|null}
+             */
+            visibility?: "private" | "link" | "public" | null;
         };
         UserEnvelope: {
             user: components["schemas"]["UserResponse"];
@@ -982,6 +1182,687 @@ export interface operations {
             /** @description `invalid_request`: valid JSON, but not the shape this route takes (or an unknown field). */
             422: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    recordings_list: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the previous page. */
+                cursor?: string;
+                /** @description 1 to 50; default 20. */
+                limit?: number;
+                /** @description Only recordings made this way. */
+                source?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingListEnvelope"];
+                };
+            };
+            /** @description `invalid_cursor` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden`: only creator and admin accounts keep a library. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed`: `source` is not one the API knows. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    recordings_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRecordingRequest"];
+            };
+        };
+        responses: {
+            /** @description Already made by an earlier attempt with this `id`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingEnvelope"];
+                };
+            };
+            /** @description Made. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingEnvelope"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` (only creator and admin accounts keep a library) or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `video_not_found`: `video_id` is not one of your uploads. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `id_conflict` (the id is taken by something else) or `video_in_use` (that video already belongs to another recording). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (see `fields`) or `invalid_request`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    recordings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The recording. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The recording. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingEnvelope"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden`: only creator and admin accounts keep a library. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    recordings_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The recording. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    recordings_update: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The version you read, instead of `version` in the body. */
+                "If-Match"?: string | null;
+            };
+            path: {
+                /** @description The recording. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRecordingRequest"];
+            };
+        };
+        responses: {
+            /** @description Changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordingEnvelope"];
+                };
+            };
+            /** @description `invalid_version`, `version_mismatch` or `invalid_request`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `version_conflict`: it changed since you read it. Reload and try again. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (see `fields`) or `invalid_request`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `version_required`: say which version you read. */
+            428: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    links_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The recording. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Up to 100 links. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkListEnvelope"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    links_create: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The recording. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Made. `link.url` is what to hand out. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LinkEnvelope"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_links`: a recording may have 10 live links; revoke one first. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (the password or the expiry) or `invalid_request`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    links_revoke: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The recording. */
+                id: string;
+                /** @description The link. */
+                link: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

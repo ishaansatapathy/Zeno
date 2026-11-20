@@ -153,6 +153,21 @@ export function createApi(options: ClientOptions = {}) {
         call(() => client.POST("/v1/auth/reset-password", { body: { token, new_password: newPassword } })),
       me: () => call(() => client.GET("/v1/auth/me")),
     },
+    recordings: {
+      list: (query: { cursor?: string; limit?: number; source?: string } = {}) => call(() => client.GET("/v1/recordings", { params: { query } })),
+      get: (id: string) => call(() => client.GET("/v1/recordings/{id}", { params: { path: { id } } })),
+      /** `version` is the one the caller read: if the recording has moved on, this fails with `version_conflict`. */
+      rename: (id: string, version: number, title: string) =>
+        call(() => client.PATCH("/v1/recordings/{id}", { params: { path: { id } }, body: { version, title } })),
+      remove: (id: string) => call(() => client.DELETE("/v1/recordings/{id}", { params: { path: { id } } })),
+    },
+    links: {
+      list: (recording: string) => call(() => client.GET("/v1/recordings/{id}/links", { params: { path: { id: recording } } })),
+      create: (recording: string, body: Schemas["CreateLinkRequest"] = {}) =>
+        call(() => client.POST("/v1/recordings/{id}/links", { params: { path: { id: recording } }, body })),
+      revoke: (recording: string, link: string) =>
+        call(() => client.DELETE("/v1/recordings/{id}/links/{link}", { params: { path: { id: recording, link } } })),
+    },
   };
 }
 

@@ -6,4 +6,5 @@ export const limits = {
   passwordMax: 128,
   nameMin: 2,
   nameMax: 80,
+  titleMax: 120,
 } as const;

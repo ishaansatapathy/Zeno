@@ -6,7 +6,7 @@ import { checkEmail, checkLogin, checkName, checkNewPassword, checkRegister, che
 
 describe("limits come from the API's own document", () => {
   it("are the ones the server enforces", () => {
-    expect(limits).toEqual({ passwordMin: 10, passwordMax: 128, nameMin: 2, nameMax: 80 });
+    expect(limits).toEqual({ passwordMin: 10, passwordMax: 128, nameMin: 2, nameMax: 80, titleMax: 120 });
   });
 });
 
