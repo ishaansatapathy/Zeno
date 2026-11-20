@@ -451,3 +451,105 @@ db_test! {
         assert_eq!(app.get("/v1/recordings").jar(&jar).send().await.status, StatusCode::OK);
     }
 }
+
+db_test! {
+    async fn recordings_deleted_long_ago_are_removed_for_good_with_everything_that_hung_off_them(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "teacher@x.in").await;
+        let mut ids = Vec::new();
+        for title in ["Old", "Recent", "Kept"] {
+            let made = make(&app, &jar, json!({"source": "extension", "title": title})).await;
+            assert_eq!(made.status, StatusCode::CREATED, "{:?}", made.body);
+            ids.push(rid(&made));
+        }
+        let (old, recent, kept) = (ids[0], ids[1], ids[2]);
+
+        // The old one has a link, a day of views, and someone watching through the link.
+        let link = app
+            .post(&format!("/v1/recordings/{old}/links"))
+            .jar(&jar)
+            .json(json!({}))
+            .send()
+            .await;
+        assert_eq!(link.status, StatusCode::CREATED, "{:?}", link.body);
+        sqlx::query("insert into recording_views (recording_id, day, views, viewers) values ($1, current_date, 5, 4)")
+            .bind(old)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(remove(&app, &jar, old).await.status, StatusCode::NO_CONTENT);
+        assert_eq!(remove(&app, &jar, recent).await.status, StatusCode::NO_CONTENT);
+
+        // Deleted yesterday and deleted a month and a day ago.
+        sqlx::query("update recordings set deleted_at = now() - interval '1 day' where id = $1")
+            .bind(recent)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("update recordings set deleted_at = now() - make_interval(days => $2) where id = $1")
+            .bind(old)
+            .bind(zeno_api::recordings::service::KEEP_DELETED_DAYS + 1)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let removed = zeno_api::recordings::service::purge_deleted(&app.state).await.unwrap();
+        assert_eq!(removed, 1);
+
+        let rows = |table: &'static str, id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(&format!("select count(*) from {table} where recording_id = $1"))
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        let exists = |id: Uuid| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>("select count(*) from recordings where id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        assert_eq!(exists(old).await, 0, "the old one is gone");
+        assert_eq!(rows("share_links", old).await, 0, "and so are its links");
+        assert_eq!(rows("recording_views", old).await, 0, "and its view counts");
+        assert_eq!(exists(recent).await, 1, "one deleted yesterday is still there");
+        assert_eq!(exists(kept).await, 1, "a live one is untouched");
+        assert_eq!(show(&app, &jar, kept).await.status, StatusCode::OK);
+
+        // Nothing left to do the second time.
+        assert_eq!(zeno_api::recordings::service::purge_deleted(&app.state).await.unwrap(), 0);
+    }
+}
+
+db_test! {
+    async fn a_backlog_of_deleted_recordings_is_worked_off_across_sweeps(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "teacher@x.in").await;
+        let owner = user_id(&pool, "teacher@x.in").await;
+        // 1,100 recordings deleted long ago: more than one batch of 500, fewer than the sweep's ceiling.
+        sqlx::query(
+            "insert into recordings (id, owner_id, source, title, deleted_at) \
+             select gen_random_uuid(), $1, 'upload', 'old', now() - interval '90 days' from generate_series(1, 1100)",
+        )
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let _ = jar;
+        let removed = zeno_api::recordings::service::purge_deleted(&app.state).await.unwrap();
+        assert_eq!(removed, 1100);
+        let left: i64 = sqlx::query_scalar("select count(*) from recordings where deleted_at is not null")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+}

@@ -28,6 +28,11 @@ pub fn spawn_periodic(state: AppState) {
                 Ok(purged) => tracing::info!(purged, "removed source uploads past retention"),
                 Err(err) => tracing::error!(error = ?err, "source retention sweep failed"),
             }
+            match crate::recordings::service::purge_deleted(&state).await {
+                Ok(0) => {}
+                Ok(purged) => tracing::info!(purged, "removed long-deleted recordings"),
+                Err(err) => tracing::error!(error = ?err, "deleted-recording purge failed"),
+            }
             match crate::playback::repo::sweep(&state.db, crate::playback::service::KEEP_ENDED_DAYS)
                 .await
             {

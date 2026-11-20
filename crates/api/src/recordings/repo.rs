@@ -29,6 +29,20 @@ const SELECT: &str = "select r.id, r.owner_id, r.video_id, r.source, r.title, r.
     v.duration_seconds \
     from recordings r left join videos v on v.id = r.video_id";
 
+/// Takes the recording's row lock until the transaction ends, so that whatever is decided about
+/// the recording (how many links it has) cannot be decided twice at once. `false`: it is gone.
+/// `no key update` is enough to exclude other writers and does not block anything that merely
+/// points at the recording.
+pub async fn lock(db: &mut PgConnection, id: Uuid) -> Result<bool, sqlx::Error> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "select id from recordings where id = $1 and deleted_at is null for no key update",
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.is_some())
+}
+
 /// What a retried create needs to know about the row that already has its id.
 #[derive(Debug, sqlx::FromRow)]
 pub struct Existing {
@@ -196,6 +210,27 @@ pub async fn soft_delete_for_video<'e>(
          where video_id = $1 and deleted_at is null",
     )
     .bind(video_id)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
+/// Removes up to `limit` recordings that were deleted more than `keep_days` days ago, oldest
+/// first. Their links, view counts and link viewings go with them (`on delete cascade`). Returns how
+/// many went. Rows another instance is already removing are skipped, so every instance can run this.
+pub async fn purge_deleted<'e>(
+    db: impl PgExecutor<'e>,
+    keep_days: i32,
+    limit: i64,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "delete from recordings where id in ( \
+             select id from recordings \
+             where deleted_at is not null and deleted_at < now() - make_interval(days => $1) \
+             order by deleted_at limit $2 for update skip locked)",
+    )
+    .bind(keep_days)
+    .bind(limit)
     .execute(db)
     .await?;
     Ok(result.rows_affected())

@@ -11,6 +11,15 @@ use crate::recordings::repo::{self, RecordingRow};
 use crate::state::AppState;
 use crate::videos;
 
+/// How long a deleted recording's row is kept before the hourly sweep removes it for good. The
+/// person's own view of it ended at once; this is the window in which support can still explain
+/// what happened to it.
+pub const KEEP_DELETED_DAYS: i32 = 30;
+/// Rows removed per statement, and statements per sweep: a backlog is worked off over several
+/// sweeps instead of in one long transaction.
+const PURGE_BATCH: i64 = 500;
+const PURGE_BATCHES: usize = 20;
+
 /// Who may keep a library: the same people who may upload.
 const ROLES: &[Role] = &[Role::Creator, Role::Admin];
 
@@ -200,6 +209,19 @@ pub async fn attach_video(
     }
     tx.commit().await?;
     load(state, user, id).await
+}
+
+/// Removes recordings deleted more than [`KEEP_DELETED_DAYS`] ago. Returns how many.
+pub async fn purge_deleted(state: &AppState) -> Result<u64, ApiError> {
+    let mut total = 0;
+    for _ in 0..PURGE_BATCHES {
+        let removed = repo::purge_deleted(&state.db, KEEP_DELETED_DAYS, PURGE_BATCH).await?;
+        total += removed;
+        if removed < PURGE_BATCH as u64 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 /// Deletes a recording and, unless a course still uses it, the video it was made of.
