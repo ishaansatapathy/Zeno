@@ -158,10 +158,12 @@ test("a page that many people open costs the API one request, not one each", asy
 
 test.describe("the player, with the API's answers played back", () => {
   /** A page for a ready video, reached the way a real one is: preparing, then ready. */
-  async function readyPage(page: Page, browser: Browser, playwright: Parameters<typeof sharedAccount>[0]) {
+  async function readyPage(page: Page, browser: Browser, playwright: Parameters<typeof sharedAccount>[0], options: { fakeClock?: boolean } = {}) {
     await owner(page, playwright);
     const s = await shared(page, "Week 3", { video: "processing" });
     const seen = await visitor(browser);
+    // Time that can be moved forward on purpose: for a page that checks something every 30 seconds.
+    if (options.fakeClock) await seen.page.clock.install();
     await seen.page.route(`**/v1/s/${s.code}`, (route) => route.fulfill({ json: SHARE_JSON(s.code) }));
     await seen.page.goto(`/s/${s.code}`);
     await expect(seen.page.getByRole("button", { name: "Play Week 3" })).toBeVisible({ timeout: 20_000 });
@@ -233,6 +235,28 @@ test.describe("the player, with the API's answers played back", () => {
       await seen.context.close();
     });
   }
+
+  test("a link revoked while someone is watching stops their viewing within half a minute", async ({ page, browser, playwright }) => {
+    test.setTimeout(90_000);
+    const seen = await readyPage(page, browser, playwright, { fakeClock: true });
+    await seen.page.route(`**/v1/s/${seen.code}/play`, (route) =>
+      route.fulfill({
+        status: 201,
+        json: { playback: { session_id: "33333333-3333-4333-8333-333333333333", playlist_url: "/v1/play/held/master.m3u8?t=abc", expires_at: new Date(Date.now() + 3_600_000).toISOString(), watermark: { text: "Shared view · HELD0000", session_code: "HELD0000" } } },
+      }),
+    );
+    // The playlist never arrives, so the viewing stays on screen: all that is being tested is the check.
+    await seen.page.route("**/v1/play/held/**", () => new Promise(() => undefined));
+    await seen.page.getByRole("button", { name: "Play Week 3" }).click();
+    await expect(seen.page.getByText("Shared view · HELD0000")).toBeVisible();
+
+    // The owner revokes the link. A player that already holds everything it needs would never find out.
+    await seen.page.unroute(`**/v1/s/${seen.code}`);
+    await seen.page.route(`**/v1/s/${seen.code}`, (route) => route.fulfill({ status: 410, json: { error: { code: "link_unavailable", message: "m" } } }));
+    await seen.page.clock.fastForward(31_000);
+    await expect(seen.page.getByRole("heading", { level: 1 })).toContainText("no longer available");
+    await seen.context.close();
+  });
 
   test("a link that closes while someone is on the page turns the page into the closed notice", async ({ page, browser, playwright }) => {
     const seen = await readyPage(page, browser, playwright);
