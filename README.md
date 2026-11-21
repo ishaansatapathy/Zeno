@@ -8,7 +8,7 @@ payments underneath. Built for teachers and creators everywhere. (Zeno is a work
 | --- | --- | --- |
 | **Hosting** | Upload once; encoded to five qualities (144p to 720p), encrypted segment by segment, played behind short-lived signed tokens. Courses, enrollment, checkout, refunds and a double-entry earnings ledger. A library of recordings on top (named, retry-safe to create, deleted together with their video), and share links: anyone with a link watches with no account, optionally behind a password or an expiry, and revoking one ends every viewing at once. | Built |
 | **Web app** | Public site; account screens (sign-up, sign-in, email confirmation, password reset) and the library (list, rename, delete, copy link). Share pages and the player next. | Site, account screens and library built |
-| **Extension** | Record screen, camera and mic in Chrome, Edge or Brave; a share link exists before you stop recording. | Planned |
+| **Extension** | Record screen, camera and mic in Chrome, Edge or Brave; a share link exists before you stop recording. Records now, as separate crash-safe tracks, to the person's disk; uploading while recording and the link come next ([docs/extension.md](docs/extension.md)). | Records locally |
 | **Studio** (desktop) | Windows first, then macOS. Record and stream; go live to only the platforms you tick for that stream (YouTube, Twitch, Instagram, X, any RTMP key), wide and tall at once, one merged chat. Pick any camera, including a phone. | Planned |
 | **Editor** | Trim, cut, captions, and vertical clips for Shorts and Reels, from any recording or stream. | Planned |
 | **Meetings** | Async: record, send a link, get comments. Live: video calls that record straight into the library. | Planned |
@@ -146,6 +146,7 @@ crates/
   keyserver/   token validation and AES-128 key delivery
 deploy/        docker-compose, SQL migrations
 web/           Next.js site and app (web/e2e: Playwright end-to-end suites)
+extension/     Chrome extension (Manifest V3, TypeScript): the recorder
 docs/          backend and web references, the OpenAPI document, runbooks
 ```
 

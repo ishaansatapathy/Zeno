@@ -195,6 +195,49 @@ jobs:
             web/e2e/.logs
           retention-days: 7
 
+  # The browser extension: built, typed, and driven in a real Chromium with fake camera and microphone,
+  # then its recordings are read back and checked with ffprobe.
+  extension:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      # ffprobe reads back what the extension recorded. The package mirror sometimes stalls, so each
+      # attempt is killed after 3 minutes and retried.
+      - run: |
+          for attempt in 1 2 3; do
+            if sudo timeout 180 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 update \
+              && sudo timeout 180 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install -y --no-install-recommends ffmpeg; then
+              exit 0
+            fi
+            echo "apt attempt $attempt failed or stalled; retrying"
+            sleep 5
+          done
+          exit 1
+        working-directory: .
+        timeout-minutes: 12
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: extension-e2e-report
+          path: |
+            extension/playwright-report
+            extension/test-results
+          retention-days: 7
+
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
