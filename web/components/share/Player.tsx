@@ -7,7 +7,7 @@ import { describeFailure } from "@/components/auth/messages";
 import { clock } from "@/components/library/rows";
 import { api } from "@/lib/api/client";
 
-import { initialPlayerState, nextPlayerState, preparingText } from "./state";
+import { LINK_CHECK_SECONDS, initialPlayerState, nextPlayerState, preparingText } from "./state";
 
 const ENDED = "This viewing has ended. Press play to start again.";
 
@@ -28,14 +28,18 @@ function Watermark({ text }: { text: string }) {
 }
 
 /**
- * The video, once a viewing has started. Safari plays HLS itself; everywhere else hls.js does, and
- * is only downloaded now, so a page that nobody plays costs no player code. A viewing that is
+ * The video, once a viewing has started. hls.js plays it wherever the browser has Media Source
+ * Extensions (even where the browser can play HLS itself: Chrome now can, and hls.js is the one
+ * whose errors we can read and act on), and is only downloaded now, so a page that nobody plays costs
+ * no player code. Only a browser without them (an iPhone before iOS 17.1) uses its own HLS. A viewing that is
  * refused (closed, expired) or fails for good hands control back with a sentence to show.
  */
-function Viewing({ playlistUrl, expiresAt, watermark, title, onEnded }: { playlistUrl: string; expiresAt: number; watermark: string; title: string; onEnded: (notice: string) => void }) {
+function Viewing({ code, playlistUrl, expiresAt, watermark, title, onEnded, onClosed }: { code: string; playlistUrl: string; expiresAt: number; watermark: string; title: string; onEnded: (notice: string) => void; onClosed: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const ended = useRef(onEnded);
   ended.current = onEnded;
+  const closed = useRef(onClosed);
+  closed.current = onClosed;
 
   useEffect(() => {
     const element = video.current;
@@ -44,21 +48,30 @@ function Viewing({ playlistUrl, expiresAt, watermark, title, onEnded }: { playli
     let hls: { destroy: () => void } | null = null;
 
     void (async () => {
-      if (element.canPlayType("application/vnd.apple.mpegurl")) {
-        // The browser plays it itself. It reports a refusal (a closed link, a spent viewing) as a
-        // media error, with no status to tell it from a bad connection: either way, start over.
-        element.addEventListener("error", () => ended.current("Playback stopped. Press play to try again."));
-        element.src = playlistUrl;
-        void element.play().catch(() => undefined);
-        return;
-      }
       const { default: Hls } = await import("hls.js");
       if (cancelled) return;
       if (!Hls.isSupported()) {
-        ended.current("This browser can't play this video. Try a recent Chrome, Edge, Firefox or Safari.");
+        // No Media Source Extensions (an iPhone before iOS 17.1): the browser's own HLS is all there is.
+        if (element.canPlayType("application/vnd.apple.mpegurl")) {
+          element.addEventListener("error", () => ended.current("Playback stopped. Press play to try again."));
+          element.src = playlistUrl;
+          void element.play().catch(() => undefined);
+        } else {
+          ended.current("This browser can't play this video. Try a recent Chrome, Edge, Firefox or Safari.");
+        }
         return;
       }
-      const player = new Hls();
+      const player = new Hls({
+        // hls.js starts at the lowest rendition and assumes a slow connection until it has measured
+        // one, which at the speed a clip downloads means the whole thing arrives in 144p. Assume a
+        // decent connection to start (it corrects itself after the first segment, and steps down if
+        // it was wrong), do not fetch more picture than the player can show, and do not run
+        // minutes ahead of the viewer, so a better rendition can still be chosen for what is to come.
+        abrEwmaDefaultEstimate: 4_000_000,
+        capLevelToPlayerSize: true,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+      });
       hls = player;
       let recoveries = 0;
       player.on(Hls.Events.ERROR, (_event, data) => {
@@ -89,6 +102,17 @@ function Viewing({ playlistUrl, expiresAt, watermark, title, onEnded }: { playli
       hls?.destroy();
     };
   }, [playlistUrl]);
+
+  // Revoking a link stops new viewings and new keys at once, but a player that already holds the key
+  // and the playlist would carry on to the end of the video without asking anyone anything. So the
+  // viewing asks, now and then, whether its link is still open, and stops when it is not.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      const result = await api.share.resolve(code);
+      if (!result.ok && (result.error.status === 404 || result.error.status === 410)) closed.current();
+    }, LINK_CHECK_SECONDS * 1000);
+    return () => clearInterval(timer);
+  }, [code]);
 
   // A viewing has a length. When it is up the server stops giving keys, so say so rather than stall.
   useEffect(() => {
@@ -157,11 +181,13 @@ export function Player({
   if (state.phase === "playing") {
     return (
       <Viewing
+        code={code}
         playlistUrl={state.playlistUrl}
         expiresAt={state.expiresAt}
         watermark={state.watermark}
         title={title}
         onEnded={(notice) => dispatch({ type: "ended", notice })}
+        onClosed={onClosed}
       />
     );
   }

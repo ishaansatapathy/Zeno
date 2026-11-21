@@ -37,6 +37,9 @@ export function viewOf(share: ShareInfo): View {
   }
 }
 
+/** How often a viewing asks whether its link is still open. The answer is cached for 15 seconds by the API and the page, so this costs the origin almost nothing. */
+export const LINK_CHECK_SECONDS = 30;
+
 /** Seconds to wait before asking again whether a video is ready: 6, 9, 13, ... up to 30. */
 export function pollDelaySeconds(attempt: number): number {
   return Math.min(30, Math.round(6 * 1.5 ** Math.max(0, attempt)));
