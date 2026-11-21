@@ -149,6 +149,7 @@ pub fn make_state_with(
             bind_addr: "127.0.0.1:0".parse().unwrap(),
         },
         client_origin: ORIGIN.into(),
+        extension_origins: Vec::new(),
         jwt_access_secret: SECRET.into(),
         cookie_secure,
         trusted_proxy_hops,

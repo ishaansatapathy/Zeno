@@ -94,6 +94,40 @@ db_test! {
 }
 
 db_test! {
+    async fn only_extensions_on_the_list_may_act_as_the_signed_in_person(pool: PgPool) {
+        const MINE: &str = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+        const OTHER: &str = "chrome-extension://ponmlkjihgfedcbaponmlkjihgfedcba";
+        let (app, _) = app_with_config(pool, |config| config.extension_origins = vec![MINE.to_owned()]);
+        let body = json!({"email": "nobody@x.in", "password": "wrong password 123"});
+
+        // An allowed extension gets past the origin check (and is then refused for the password).
+        let allowed = app.post("/v1/auth/login").origin(MINE).json(body.clone()).send().await;
+        assert_eq!(allowed.code(), "invalid_credentials", "{:?}", allowed.body);
+        // Another extension, and a page pretending to be one, do not.
+        for origin in [OTHER, "https://abcdefghijklmnopabcdefghijklmnop", "chrome-extension://abcdefghijklmnopabcdefghijklmnoq"] {
+            let res = app.post("/v1/auth/login").origin(origin).json(body.clone()).send().await;
+            assert_eq!(res.code(), "forbidden_origin", "{origin}");
+        }
+
+        // The browser's preflight is answered for it, with credentials, and not for the other.
+        let preflight = |origin: &'static str| {
+            app.req(axum::http::Method::OPTIONS, "/v1/videos/streaming")
+                .header("origin", origin)
+                .header("access-control-request-method", "POST")
+                .header("access-control-request-headers", "content-type")
+                .send()
+        };
+        let ok = preflight(MINE).await;
+        assert_eq!(ok.headers.get("access-control-allow-origin").unwrap(), MINE);
+        assert_eq!(ok.headers.get("access-control-allow-credentials").unwrap(), "true");
+        let other = preflight(OTHER).await;
+        assert!(other.headers.get("access-control-allow-origin").is_none());
+        // The web app is still allowed beside it.
+        assert_eq!(preflight(ORIGIN).await.headers.get("access-control-allow-origin").unwrap(), ORIGIN);
+    }
+}
+
+db_test! {
     async fn oversized_bodies_are_rejected_before_parsing(pool: PgPool) {
         let app = app(pool.clone());
         let res = app.post("/v1/auth/register")

@@ -55,7 +55,7 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 const REQUEST_ID_HEADER: &str = "x-request-id";
 
 pub fn build_app(state: AppState) -> Router {
-    let cors = security::cors(&state.config.client_origin);
+    let cors = security::cors(&state.config.client_origin, &state.config.extension_origins);
     let request_id = HeaderName::from_static(REQUEST_ID_HEADER);
 
     // One span per request carrying the request id, so every log line from handling it can be

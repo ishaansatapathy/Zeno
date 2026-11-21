@@ -11,6 +11,9 @@ pub struct ApiConfig {
     pub core: Config,
     /// Origin (scheme + host + port) of the web app, without a trailing slash.
     pub client_origin: String,
+    /// Browser extensions allowed to call the API as the person using them, each as
+    /// `chrome-extension://<id>`. Empty by default: nothing but the web app is.
+    pub extension_origins: Vec<String>,
     pub jwt_access_secret: String,
     pub cookie_secure: bool,
     pub trusted_proxy_hops: usize,
@@ -49,6 +52,10 @@ impl ApiConfig {
     pub fn from_env() -> Result<Self, ConfigError> {
         let core = Config::from_env("0.0.0.0:8080")?;
         let client_origin = parse_client_origin(&required("CLIENT_URL")?)?;
+        let extension_origins = match std::env::var("EXTENSION_ORIGINS") {
+            Ok(raw) => parse_extension_origins(&raw)?,
+            Err(_) => Vec::new(),
+        };
         let jwt_access_secret = required("JWT_ACCESS_SECRET")?;
         let cookie_secure = parse_or("COOKIE_SECURE", false)?;
         let trusted_proxy_hops = parse_or("TRUSTED_PROXY_HOPS", 0usize)?;
@@ -132,6 +139,7 @@ impl ApiConfig {
         Ok(Self {
             core,
             client_origin,
+            extension_origins,
             jwt_access_secret,
             cookie_secure,
             trusted_proxy_hops,
@@ -168,6 +176,33 @@ pub fn parse_public_url(name: &'static str, raw: &str) -> Result<String, ConfigE
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
+/// A comma-separated list of `chrome-extension://<id>`, where an id is 32 letters from a to p. Anything
+/// else is refused rather than skipped: a typo here would silently lock an extension out.
+pub fn parse_extension_origins(raw: &str) -> Result<Vec<String>, ConfigError> {
+    let mut origins = Vec::new();
+    for item in raw
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+    {
+        let id = item.strip_prefix("chrome-extension://");
+        let valid =
+            id.is_some_and(|id| id.len() == 32 && id.bytes().all(|b| (b'a'..=b'p').contains(&b)));
+        if !valid {
+            return Err(ConfigError::Invalid {
+                name: "EXTENSION_ORIGINS",
+                reason: format!(
+                    "`{item}` is not chrome-extension:// followed by a 32-letter extension id"
+                ),
+            });
+        }
+        if !origins.iter().any(|known| known == item) {
+            origins.push(item.to_owned());
+        }
+    }
+    Ok(origins)
+}
+
 pub fn parse_client_origin(raw: &str) -> Result<String, ConfigError> {
     let invalid = |reason: &str| ConfigError::Invalid {
         name: "CLIENT_URL",
@@ -198,6 +233,28 @@ mod tests {
             parse_client_origin("https://zeno.in/app/login?x=1").unwrap(),
             "https://zeno.in"
         );
+    }
+
+    const ID: &str = "abcdefghijklmnopabcdefghijklmnop";
+
+    #[test]
+    fn extension_origins_are_a_list_of_exact_ids() {
+        assert_eq!(parse_extension_origins("").unwrap(), Vec::<String>::new());
+        let one = format!("chrome-extension://{ID}");
+        assert_eq!(
+            parse_extension_origins(&format!(" {one} , {one},")).unwrap(),
+            vec![one.clone()]
+        );
+        for bad in [
+            "chrome-extension://short",
+            &format!("chrome-extension://{ID}/"),
+            &format!("chrome-extension://{}", ID.to_uppercase()),
+            &format!("chrome-extension://{}z", &ID[..31]),
+            &format!("https://{ID}"),
+            ID,
+        ] {
+            assert!(parse_extension_origins(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

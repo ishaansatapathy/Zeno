@@ -2,7 +2,7 @@ use axum::extract::{Request, State};
 use axum::http::{header, HeaderName, HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::error::ApiError;
 use crate::state::AppState;
@@ -23,7 +23,14 @@ pub async fn require_same_origin(
     if !safe_method {
         let headers = request.headers();
         let origin_ok = match headers.get(header::ORIGIN) {
-            Some(origin) => origin.as_bytes() == state.config.client_origin.as_bytes(),
+            Some(origin) => {
+                origin.as_bytes() == state.config.client_origin.as_bytes()
+                    || state
+                        .config
+                        .extension_origins
+                        .iter()
+                        .any(|allowed| allowed.as_bytes() == origin.as_bytes())
+            }
             None => headers
                 .get("sec-fetch-site")
                 .is_none_or(|site| site.as_bytes() != b"cross-site"),
@@ -36,7 +43,7 @@ pub async fn require_same_origin(
     next.run(request).await
 }
 
-pub fn cors(client_origin: &str) -> CorsLayer {
+pub fn cors(client_origin: &str, extension_origins: &[String]) -> CorsLayer {
     let layer = CorsLayer::new()
         .allow_methods([
             Method::GET,
@@ -51,8 +58,9 @@ pub fn cors(client_origin: &str) -> CorsLayer {
         ])
         .allow_credentials(true)
         .max_age(std::time::Duration::from_secs(600));
-    match HeaderValue::from_str(client_origin) {
-        Ok(origin) => layer.allow_origin(origin),
-        Err(_) => layer,
-    }
+    let allowed: Vec<HeaderValue> = std::iter::once(client_origin)
+        .chain(extension_origins.iter().map(String::as_str))
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect();
+    layer.allow_origin(AllowOrigin::list(allowed))
 }
