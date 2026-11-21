@@ -2071,6 +2071,428 @@
           }
         }
       }
+    },
+    "/v1/videos/streaming": {
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Starts the upload of a recording that is still being made.",
+        "description": "There is no size to give. Parts are asked for one at a time as they fill (`POST /v1/videos/{id}/parts`),\neach URL signed for exactly the length said, and the size is stated at the end\n(`POST /v1/videos/{id}/complete`). Nothing the client sends reaches this API: the bytes go to storage.",
+        "operationId": "videos_create_streaming",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStreamingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Started. `upload.parts` is empty: ask for each part as it fills.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateVideoResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (only creator and admin accounts upload) or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed` (see `fields`) or `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_uploads` (ten are unfinished: finish or abort one) or `too_many_requests` (which carries `Retry-After`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/videos/{id}/complete": {
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "Finishes an upload. A recording's upload says how big the recording came to; a file's has nothing to say\n(its size was given at the start), so its request has no body.",
+        "description": "Storage is asked what it holds before anything is assembled: if a part is missing the answer is\n`409 upload_incomplete` and nothing is queued. Completing twice is not an error.",
+        "operationId": "videos_complete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The video.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Required for a recording's upload; not sent for a file's.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CompleteRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Assembled, and queued for processing (or already was).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VideoEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`upload_incomplete` (the message says which parts are missing), `upload_expired`, `not_uploading`, `video_failed` or `size_mismatch`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed`: `size_bytes` is missing, zero, over the limit, or not the size a file's upload was started with.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/videos/{id}/parts": {
+      "post": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "The URL for one more part of a recording's upload, signed for exactly its length.",
+        "description": "Asking again for a part gives a fresh URL: a client that lost the answer, or whose URL expired,\njust asks. Every part but the last is exactly the part size; the last is 1 up to the part size.",
+        "operationId": "videos_part",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The video made by `POST /v1/videos/streaming`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where to `PUT` the part.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PartEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_streaming`: this upload is finished, or was started with a size.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed` (see `fields`: the number or the size) or `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2116,6 +2538,21 @@
             }
           }
         }
+      },
+      "CompleteRequest": {
+        "type": "object",
+        "description": "How a streaming upload ends: the size the recording came to.",
+        "required": [
+          "size_bytes"
+        ],
+        "properties": {
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "CreateLinkRequest": {
         "type": "object",
@@ -2185,6 +2622,54 @@
           }
         },
         "additionalProperties": false
+      },
+      "CreateStreamingRequest": {
+        "type": "object",
+        "description": "An upload of a recording that is still being made. There is no size to give: it is stated at the end.",
+        "required": [
+          "filename",
+          "content_type"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "part_size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How big each part is, from 5 to 64 MiB (default 16). Smaller means less to lose to one failed\nrequest, larger means fewer requests.",
+            "maximum": 67108864,
+            "minimum": 5242880
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateVideoResponse": {
+        "type": "object",
+        "required": [
+          "video",
+          "upload"
+        ],
+        "properties": {
+          "upload": {
+            "$ref": "#/components/schemas/UploadResponse"
+          },
+          "video": {
+            "$ref": "#/components/schemas/VideoResponse"
+          }
+        }
       },
       "EmailRequest": {
         "type": "object",
@@ -2363,6 +2848,71 @@
         ],
         "properties": {
           "message": {
+            "type": "string"
+          }
+        }
+      },
+      "PartEnvelope": {
+        "type": "object",
+        "required": [
+          "part",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "part": {
+            "$ref": "#/components/schemas/PartUrl"
+          }
+        }
+      },
+      "PartRequest": {
+        "type": "object",
+        "description": "One more part of a streaming upload: which, how long, and whether it is the last.",
+        "required": [
+          "number",
+          "size"
+        ],
+        "properties": {
+          "last": {
+            "type": "boolean"
+          },
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "From 1.",
+            "minimum": 1
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Exactly the part size, unless this is the last part (then 1 up to the part size).",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "PartUrl": {
+        "type": "object",
+        "required": [
+          "number",
+          "size",
+          "url"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "url": {
             "type": "string"
           }
         }
@@ -2744,6 +3294,48 @@
         },
         "additionalProperties": false
       },
+      "UploadResponse": {
+        "type": "object",
+        "required": [
+          "part_size",
+          "total_parts",
+          "uploaded",
+          "parts",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "part_size": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartUrl"
+            },
+            "description": "Parts still to upload, each with a ready-to-use URL."
+          },
+          "total_parts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "uploaded": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Parts storage already holds in full, so a resuming client can skip them."
+          }
+        }
+      },
       "UserEnvelope": {
         "type": "object",
         "required": [
@@ -2784,6 +3376,98 @@
             "$ref": "#/components/schemas/Role"
           }
         }
+      },
+      "VideoEnvelope": {
+        "type": "object",
+        "required": [
+          "video"
+        ],
+        "properties": {
+          "video": {
+            "$ref": "#/components/schemas/VideoResponse"
+          }
+        }
+      },
+      "VideoResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "status",
+          "original_filename",
+          "size_bytes",
+          "renditions",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "height": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "original_filename": {
+            "type": "string"
+          },
+          "ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "renditions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "uploading",
+              "processing",
+              "ready",
+              "failed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "width": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -2803,6 +3487,10 @@
     {
       "name": "recordings",
       "description": "A person's library, and the links that share its recordings."
+    },
+    {
+      "name": "videos",
+      "description": "Uploading video. A recording is uploaded while it is made: parts go straight to storage, never through the API."
     },
     {
       "name": "share",

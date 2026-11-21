@@ -13,6 +13,8 @@ pub struct VideoRow {
     pub content_type: String,
     pub size_bytes: i64,
     pub part_size: i64,
+    /// Uploaded while it was being recorded: `size_bytes` is 0 until it ends.
+    pub streaming: bool,
     pub source_key: String,
     pub upload_id: Option<String>,
     pub status: VideoStatus,
@@ -27,7 +29,7 @@ pub struct VideoRow {
 }
 
 const COLUMNS: &str =
-    "id, owner_id, title, original_filename, content_type, size_bytes, part_size, \
+    "id, owner_id, title, original_filename, content_type, size_bytes, part_size, streaming, \
     source_key, upload_id, status, error_code, duration_seconds, width, height, renditions, \
     created_at, uploaded_at, ready_at";
 
@@ -39,6 +41,7 @@ pub struct NewVideoRow<'a> {
     pub content_type: &'a str,
     pub size_bytes: i64,
     pub part_size: i64,
+    pub streaming: bool,
     pub source_key: &'a str,
     pub upload_id: &'a str,
 }
@@ -48,8 +51,8 @@ pub async fn insert<'e>(
     video: &NewVideoRow<'_>,
 ) -> Result<VideoRow, sqlx::Error> {
     sqlx::query_as(&format!(
-        "insert into videos (id, owner_id, title, original_filename, content_type, size_bytes, part_size, source_key, upload_id) \
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning {COLUMNS}"
+        "insert into videos (id, owner_id, title, original_filename, content_type, size_bytes, part_size, source_key, upload_id, streaming) \
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning {COLUMNS}"
     ))
     .bind(video.id)
     .bind(video.owner_id)
@@ -60,6 +63,7 @@ pub async fn insert<'e>(
     .bind(video.part_size)
     .bind(video.source_key)
     .bind(video.upload_id)
+    .bind(video.streaming)
     .fetch_one(db)
     .await
 }
@@ -88,12 +92,15 @@ pub async fn count_uploading<'e>(
 pub async fn mark_processing<'e>(
     db: impl PgExecutor<'e>,
     id: Uuid,
+    size_bytes: i64,
 ) -> Result<Option<VideoRow>, sqlx::Error> {
     sqlx::query_as(&format!(
-        "update videos set status = 'processing', uploaded_at = now(), upload_id = null, updated_at = now() \
+        "update videos set status = 'processing', uploaded_at = now(), upload_id = null, updated_at = now(), \
+                size_bytes = $2 \
          where id = $1 and status = 'uploading' returning {COLUMNS}"
     ))
     .bind(id)
+    .bind(size_bytes)
     .fetch_optional(db)
     .await
 }

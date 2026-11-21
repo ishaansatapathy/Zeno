@@ -9,8 +9,8 @@
 //! The web app generates its types from the committed file (`npm run api:types`), so a change to
 //! the API that the web app has not caught up with is a type error, not a surprise in production.
 //!
-//! Covered so far: authentication, the recordings library, and share links (the owner's side and
-//! the visitor's). Other areas are added as the web app starts to use them; `tests/openapi.rs` lists the routes
+//! Covered so far: authentication, the recordings library, share links (the owner's side and
+//! the visitor's), and the upload of a recording while it is made. Other areas are added as the web app starts to use them; `tests/openapi.rs` lists the routes
 //! that exist but are not described yet, so none is forgotten.
 
 use serde_json::{json, Value};
@@ -53,6 +53,9 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::shares::routes::revoke,
         crate::shares::routes::resolve,
         crate::shares::routes::play,
+        crate::videos::routes::create_streaming,
+        crate::videos::routes::part,
+        crate::videos::routes::complete,
     ),
     components(schemas(
         crate::auth::dto::RegisterRequest,
@@ -85,11 +88,21 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::shares::dto::SharedWatermark,
         crate::shares::dto::SharedPlayback,
         crate::shares::dto::SharedPlaybackEnvelope,
+        crate::videos::dto::CreateStreamingRequest,
+        crate::videos::dto::PartRequest,
+        crate::videos::dto::CompleteRequest,
+        crate::videos::dto::VideoResponse,
+        crate::videos::dto::VideoEnvelope,
+        crate::videos::dto::PartUrl,
+        crate::videos::dto::PartEnvelope,
+        crate::videos::dto::UploadResponse,
+        crate::videos::dto::CreateVideoResponse,
     )),
     modifiers(&SessionCookie, &CommonErrors, &Enums),
     tags(
         (name = "auth", description = "Accounts and sessions."),
         (name = "recordings", description = "A person's library, and the links that share its recordings."),
+        (name = "videos", description = "Uploading video. A recording is uploaded while it is made: parts go straight to storage, never through the API."),
         (name = "share", description = "What anyone holding a share link can do. No account, no cookie."),
     )
 )]
@@ -232,6 +245,13 @@ impl Modify for Enums {
         restrict(openapi, "RecordingResponse", "status", STATUSES, false);
         restrict(openapi, "LinkResponse", "state", LINK_STATES, false);
         restrict(openapi, "ShareView", "status", STATUSES, false);
+        restrict(
+            openapi,
+            "VideoResponse",
+            "status",
+            crate::videos::dto::VIDEO_STATUSES,
+            false,
+        );
     }
 }
 

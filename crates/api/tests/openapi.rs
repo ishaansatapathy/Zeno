@@ -73,6 +73,10 @@ const ROUTERS: &[(&str, &[(&str, &str)])] = &[
         "crates/api/src/views/routes.rs",
         &[("recording_router", "/v1/recordings")],
     ),
+    (
+        "crates/api/src/videos/routes.rs",
+        &[("router", "/v1/videos")],
+    ),
 ];
 
 /// Routes that exist and are not in the document yet. The list is explicit so that a new route
@@ -81,6 +85,12 @@ const ROUTERS: &[(&str, &[(&str, &str)])] = &[
 const NOT_DESCRIBED_YET: &[&str] = &[
     "put /v1/recordings/{id}/video",
     "get /v1/recordings/{id}/views",
+    "post /v1/videos",
+    "get /v1/videos/{id}",
+    "delete /v1/videos/{id}",
+    "get /v1/videos/{id}/upload",
+    "post /v1/videos/{id}/abort",
+    "post /v1/videos/{id}/play",
 ];
 
 /// The routes the routers declare, read from their source: `.route("/:id/links", post(create))`
@@ -686,6 +696,130 @@ db_test! {
         let _ = nobody;
 
         let unseen = contract.unseen("/v1/s");
+        assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+    }
+}
+
+db_test! {
+    async fn the_upload_api_keeps_its_promises(pool: PgPool) {
+        const MIB: usize = 1024 * 1024;
+        let app = app(pool);
+        let contract = Contract::new();
+        let owner = signup_creator(&app, "maker@example.com").await;
+        let student = signup_verified_as(&app, "pupil@example.com", "student").await;
+        let nobody = uuid::Uuid::new_v4();
+        let start = "/v1/videos/streaming";
+        let parts = "/v1/videos/{id}/parts";
+        let complete = "/v1/videos/{id}/complete";
+        let started = json!({"filename": "Zeno.webm", "content_type": "video/webm", "part_size_bytes": 5 * MIB});
+
+        // Signed out, and signed in without the right to upload: every route says so.
+        for (method, path, _) in contract.operations("/v1/videos") {
+            let uri = path.replace("{id}", &nobody.to_string());
+            for (jar, status, code) in [(None, 401, "unauthenticated"), (Some(&student), 403, "forbidden")] {
+                let mut req = app.req(method.to_uppercase().parse().unwrap(), &uri);
+                if let Some(jar) = jar {
+                    req = req.jar(jar);
+                }
+                let body = match path.as_str() {
+                    "/v1/videos/streaming" => Some(started.clone()),
+                    "/v1/videos/{id}/parts" => Some(json!({"number": 1, "size": 5 * MIB})),
+                    _ => None,
+                };
+                let res = match body {
+                    Some(body) => req.json(body).send().await,
+                    None => req.send().await,
+                };
+                assert_eq!(res.status.as_u16(), status, "{method} {path}: {:?}", res.body);
+                assert_eq!(res.code(), code, "{method} {path}");
+                contract.check(&method, &path, &res);
+            }
+        }
+
+        // Starting, and every way that can go wrong.
+        let made = app.post(start).jar(&owner).json(started.clone()).send().await;
+        assert_eq!(made.status, StatusCode::CREATED, "{:?}", made.body);
+        contract.check("post", start, &made);
+        let id = made.body["video"]["id"].as_str().unwrap().to_owned();
+        let tiny = app.post(start).jar(&owner).json(json!({"filename": "a.webm", "content_type": "video/webm", "part_size_bytes": 10})).send().await;
+        assert_eq!(tiny.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("post", start, &tiny);
+
+        // Asking for parts.
+        let uri = format!("/v1/videos/{id}/parts");
+        let first = app.post(&uri).jar(&owner).json(json!({"number": 1, "size": 5 * MIB})).send().await;
+        assert_eq!(first.status, StatusCode::OK, "{:?}", first.body);
+        contract.check("post", parts, &first);
+        let last = app.post(&uri).jar(&owner).json(json!({"number": 2, "size": MIB, "last": true})).send().await;
+        assert_eq!(last.status, StatusCode::OK);
+        contract.check("post", parts, &last);
+        let wrong = app.post(&uri).jar(&owner).json(json!({"number": 1, "size": 7})).send().await;
+        assert_eq!(wrong.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("post", parts, &wrong);
+        let ghost = app.post(&format!("/v1/videos/{nobody}/parts")).jar(&owner).json(json!({"number": 1, "size": 5 * MIB})).send().await;
+        assert_eq!(ghost.status, StatusCode::NOT_FOUND);
+        contract.check("post", parts, &ghost);
+        let classic = app.post("/v1/videos").jar(&owner).json(json!({"filename": "a.mp4", "size_bytes": MIB, "content_type": "video/mp4"})).send().await;
+        let classic_id = classic.body["video"]["id"].as_str().unwrap().to_owned();
+        let refused = app.post(&format!("/v1/videos/{classic_id}/parts")).jar(&owner).json(json!({"number": 1, "size": MIB, "last": true})).send().await;
+        assert_eq!(refused.code(), "not_streaming");
+        contract.check("post", parts, &refused);
+
+        // Finishing.
+        let finish = format!("/v1/videos/{id}/complete");
+        let early = app.post(&finish).jar(&owner).json(json!({"size_bytes": 6 * MIB})).send().await;
+        assert_eq!(early.code(), "upload_incomplete");
+        contract.check("post", complete, &early);
+        let unsized_ = app.post(&finish).jar(&owner).send().await;
+        assert_eq!(unsized_.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("post", complete, &unsized_);
+        contract.check("post", complete, &app.post(&format!("/v1/videos/{nobody}/complete")).jar(&owner).json(json!({"size_bytes": 1})).send().await);
+        for (number, size, last) in [(1u16, 5 * MIB, false), (2, MIB, true)] {
+            let res = app.post(&uri).jar(&owner).json(json!({"number": number, "size": size, "last": last})).send().await;
+            let url = res.body["part"]["url"].as_str().unwrap().to_owned();
+            assert!(browser_put(&url, vec![7; size]).await.is_success());
+        }
+        let done = app.post(&finish).jar(&owner).json(json!({"size_bytes": 6 * MIB})).send().await;
+        assert_eq!(done.status, StatusCode::OK, "{:?}", done.body);
+        assert_eq!(done.body["video"]["status"], "processing");
+        contract.check("post", complete, &done);
+        // Completing a finished upload is not an error, and the part routes then refuse.
+        contract.check("post", complete, &app.post(&finish).jar(&owner).json(json!({"size_bytes": 6 * MIB})).send().await);
+        let after = app.post(&uri).jar(&owner).json(json!({"number": 1, "size": 5 * MIB})).send().await;
+        assert_eq!(after.code(), "not_streaming");
+        contract.check("post", parts, &after);
+
+        // Running out of budget: ten unfinished uploads, then the parts one person may ask for in an hour.
+        let mut open_ids = Vec::new();
+        let mut capped = None;
+        for _ in 0..12 {
+            let res = app.post(start).jar(&owner).json(started.clone()).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                capped = Some(res);
+                break;
+            }
+            open_ids.push(res.body["video"]["id"].as_str().unwrap().to_owned());
+        }
+        let capped = capped.expect("unfinished uploads are capped");
+        assert_eq!(capped.code(), "too_many_uploads");
+        contract.check("post", start, &capped);
+        let still_open = format!("/v1/videos/{}/parts", open_ids[0]);
+        let mut limited = None;
+        for _ in 0..2100 {
+            let res = app.post(&still_open).jar(&owner).json(json!({"number": 1, "size": 5 * MIB})).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("post", parts, &limited.expect("asking for parts runs out"));
+
+        // What can go wrong on any route.
+        contract
+            .provoke_common_errors(&app, "/v1/videos", Some(&owner), &[("id", &nobody.to_string())])
+            .await;
+
+        let unseen = contract.unseen("/v1/videos");
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }

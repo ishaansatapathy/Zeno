@@ -310,6 +310,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/videos/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finishes an upload. A recording's upload says how big the recording came to; a file's has nothing to say
+         *     (its size was given at the start), so its request has no body.
+         * @description Storage is asked what it holds before anything is assembled: if a part is missing the answer is
+         *     `409 upload_incomplete` and nothing is queued. Completing twice is not an error.
+         */
+        post: operations["videos_complete"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/videos/{id}/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The URL for one more part of a recording's upload, signed for exactly its length.
+         * @description Asking again for a part gives a fresh URL: a client that lost the answer, or whose URL expired,
+         *     just asks. Every part but the last is exactly the part size; the last is 1 up to the part size.
+         */
+        post: operations["videos_part"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/videos/streaming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts the upload of a recording that is still being made.
+         * @description There is no size to give. Parts are asked for one at a time as they fill (`POST /v1/videos/{id}/parts`),
+         *     each URL signed for exactly the length said, and the size is stated at the end
+         *     (`POST /v1/videos/{id}/complete`). Nothing the client sends reaches this API: the bytes go to storage.
+         */
+        post: operations["videos_create_streaming"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -323,6 +388,11 @@ export interface components {
         };
         ActivityResponse: {
             events: components["schemas"]["ActivityItem"][];
+        };
+        /** @description How a streaming upload ends: the size the recording came to. */
+        CompleteRequest: {
+            /** Format: int64 */
+            size_bytes: number;
         };
         CreateLinkRequest: {
             /**
@@ -355,6 +425,22 @@ export interface components {
              * @description An upload of the caller's own to attach straight away.
              */
             video_id?: string | null;
+        };
+        /** @description An upload of a recording that is still being made. There is no size to give: it is stated at the end. */
+        CreateStreamingRequest: {
+            content_type: string;
+            filename: string;
+            /**
+             * Format: int64
+             * @description How big each part is, from 5 to 64 MiB (default 16). Smaller means less to lose to one failed
+             *     request, larger means fewer requests.
+             */
+            part_size_bytes?: number | null;
+            title?: string | null;
+        };
+        CreateVideoResponse: {
+            upload: components["schemas"]["UploadResponse"];
+            video: components["schemas"]["VideoResponse"];
         };
         EmailRequest: {
             /** Format: email */
@@ -413,6 +499,32 @@ export interface components {
         };
         MessageResponse: {
             message: string;
+        };
+        PartEnvelope: {
+            /** Format: date-time */
+            expires_at: string;
+            part: components["schemas"]["PartUrl"];
+        };
+        /** @description One more part of a streaming upload: which, how long, and whether it is the last. */
+        PartRequest: {
+            last?: boolean;
+            /**
+             * Format: int32
+             * @description From 1.
+             */
+            number: number;
+            /**
+             * Format: int64
+             * @description Exactly the part size, unless this is the last part (then 1 up to the part size).
+             */
+            size: number;
+        };
+        PartUrl: {
+            /** Format: int32 */
+            number: number;
+            /** Format: int64 */
+            size: number;
+            url: string;
         };
         PlayRequest: {
             /**
@@ -553,6 +665,18 @@ export interface components {
              */
             visibility?: "private" | "link" | "public" | null;
         };
+        UploadResponse: {
+            /** Format: date-time */
+            expires_at: string;
+            /** Format: int64 */
+            part_size: number;
+            /** @description Parts still to upload, each with a ready-to-use URL. */
+            parts: components["schemas"]["PartUrl"][];
+            /** Format: int32 */
+            total_parts: number;
+            /** @description Parts storage already holds in full, so a resuming client can skip them. */
+            uploaded: number[];
+        };
         UserEnvelope: {
             user: components["schemas"]["UserResponse"];
         };
@@ -563,6 +687,31 @@ export interface components {
             id: string;
             name: string;
             role: components["schemas"]["Role"];
+        };
+        VideoEnvelope: {
+            video: components["schemas"]["VideoResponse"];
+        };
+        VideoResponse: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            duration_seconds?: number | null;
+            error_code?: string | null;
+            /** Format: int32 */
+            height?: number | null;
+            /** Format: uuid */
+            id: string;
+            original_filename: string;
+            /** Format: date-time */
+            ready_at?: string | null;
+            renditions: Record<string, never>[];
+            /** Format: int64 */
+            size_bytes: number;
+            /** @enum {string} */
+            status: "uploading" | "processing" | "ready" | "failed";
+            title: string;
+            /** Format: int32 */
+            width?: number | null;
         };
     };
     responses: never;
@@ -2157,6 +2306,330 @@ export interface operations {
                 headers: {
                     /** @description Seconds until the budget is available again. */
                     "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    videos_complete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Required for a recording's upload; not sent for a file's. */
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["CompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Assembled, and queued for processing (or already was). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VideoEnvelope"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `upload_incomplete` (the message says which parts are missing), `upload_expired`, `not_uploading`, `video_failed` or `size_mismatch`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed`: `size_bytes` is missing, zero, over the limit, or not the size a file's upload was started with. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    videos_part: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video made by `POST /v1/videos/streaming`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PartRequest"];
+            };
+        };
+        responses: {
+            /** @description Where to `PUT` the part. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PartEnvelope"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_streaming`: this upload is finished, or was started with a size. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (see `fields`: the number or the size) or `invalid_request`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    videos_create_streaming: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStreamingRequest"];
+            };
+        };
+        responses: {
+            /** @description Started. `upload.parts` is empty: ask for each part as it fills. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateVideoResponse"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` (only creator and admin accounts upload) or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (see `fields`) or `invalid_request`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_uploads` (ten are unfinished: finish or abort one) or `too_many_requests` (which carries `Retry-After`). */
+            429: {
+                headers: {
                     [name: string]: unknown;
                 };
                 content: {

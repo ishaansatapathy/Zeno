@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 use zeno_core::model::VideoStatus;
 
@@ -18,6 +19,97 @@ pub struct CreateVideoRequest {
     pub content_type: String,
     #[serde(default)]
     pub title: Option<String>,
+}
+
+/// An upload of a recording that is still being made. There is no size to give: it is stated at the end.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateStreamingRequest {
+    pub filename: String,
+    pub content_type: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// How big each part is, from 5 to 64 MiB (default 16). Smaller means less to lose to one failed
+    /// request, larger means fewer requests.
+    #[serde(default)]
+    #[schema(minimum = 5242880, maximum = 67108864)]
+    pub part_size_bytes: Option<u64>,
+}
+
+/// The words `VideoResponse.status` is one of.
+pub const VIDEO_STATUSES: &[&str] = &["uploading", "processing", "ready", "failed"];
+
+pub const MIN_PART_BYTES: u64 = 5 * 1024 * 1024;
+pub const MAX_PART_BYTES: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_PART_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug)]
+pub struct NewStreaming {
+    pub filename: String,
+    pub title: String,
+    pub content_type: String,
+    pub part_size: u64,
+}
+
+impl CreateStreamingRequest {
+    pub fn validate(self) -> Result<NewStreaming, ApiError> {
+        let part_size = self.part_size_bytes.unwrap_or(DEFAULT_PART_BYTES);
+        // The rest is the same rules as for a file with a size, so they are reused with a size that passes.
+        let checked = CreateVideoRequest {
+            filename: self.filename,
+            size_bytes: 1,
+            content_type: self.content_type,
+            title: self.title,
+        }
+        .validate(u64::MAX);
+        let mut errors = match &checked {
+            Ok(_) => Vec::new(),
+            Err(ApiError::Validation(errors)) => errors.clone(),
+            Err(_) => Vec::new(),
+        };
+        if !(MIN_PART_BYTES..=MAX_PART_BYTES).contains(&part_size) {
+            errors.push(FieldError::new(
+                "part_size_bytes",
+                "Must be between 5 and 64 MiB.",
+            ));
+        }
+        if !errors.is_empty() {
+            return Err(ApiError::validation(errors));
+        }
+        let ok = checked?;
+        Ok(NewStreaming {
+            filename: ok.filename,
+            title: ok.title,
+            content_type: ok.content_type,
+            part_size,
+        })
+    }
+}
+
+/// One more part of a streaming upload: which, how long, and whether it is the last.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PartRequest {
+    /// From 1.
+    #[schema(minimum = 1)]
+    pub number: u16,
+    /// Exactly the part size, unless this is the last part (then 1 up to the part size).
+    pub size: u64,
+    #[serde(default)]
+    pub last: bool,
+}
+
+/// How a streaming upload ends: the size the recording came to.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CompleteRequest {
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PartEnvelope {
+    pub part: PartUrl,
+    pub expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug)]
@@ -115,10 +207,11 @@ fn title_from(filename: &str) -> String {
     stem.chars().take(MAX_TITLE_CHARS).collect()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct VideoResponse {
     pub id: Uuid,
     pub title: String,
+    #[schema(value_type = String)]
     pub status: VideoStatus,
     pub original_filename: String,
     pub size_bytes: i64,
@@ -126,6 +219,7 @@ pub struct VideoResponse {
     pub duration_seconds: Option<i32>,
     pub width: Option<i32>,
     pub height: Option<i32>,
+    #[schema(value_type = Vec<Object>)]
     pub renditions: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub ready_at: Option<DateTime<Utc>>,
@@ -163,14 +257,14 @@ pub fn public_error_code(code: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct PartUrl {
     pub number: u16,
     pub size: u64,
     pub url: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UploadResponse {
     pub part_size: u64,
     pub total_parts: u16,
@@ -181,13 +275,13 @@ pub struct UploadResponse {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct CreateVideoResponse {
     pub video: VideoResponse,
     pub upload: UploadResponse,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct VideoEnvelope {
     pub video: VideoResponse,
 }
@@ -291,6 +385,42 @@ mod tests {
             r#"{"filename":"a","size_bytes":1,"content_type":"video/mp4","owner_id":"x"}"#,
         );
         assert!(parsed.is_err());
+    }
+
+    fn streaming(part: Option<u64>, content_type: &str) -> CreateStreamingRequest {
+        CreateStreamingRequest {
+            filename: "Zeno 2026.webm".into(),
+            content_type: content_type.into(),
+            title: None,
+            part_size_bytes: part,
+        }
+    }
+
+    #[test]
+    fn a_recording_needs_no_size_and_defaults_to_16_mib_parts() {
+        let ok = streaming(None, "video/webm").validate().unwrap();
+        assert_eq!(ok.part_size, 16 * 1024 * 1024);
+        assert_eq!(ok.title, "Zeno 2026");
+        assert!(streaming(Some(MIN_PART_BYTES), "video/webm")
+            .validate()
+            .is_ok());
+        assert!(streaming(Some(MAX_PART_BYTES), "video/webm")
+            .validate()
+            .is_ok());
+    }
+
+    #[test]
+    fn part_sizes_outside_s3s_limits_and_non_video_types_are_refused_together() {
+        for part in [0, MIN_PART_BYTES - 1, MAX_PART_BYTES + 1] {
+            assert!(streaming(Some(part), "video/webm").validate().is_err());
+        }
+        match streaming(Some(1), "text/html").validate().unwrap_err() {
+            ApiError::Validation(fields) => {
+                let names: Vec<_> = fields.iter().map(|f| f.field).collect();
+                assert_eq!(names, ["content_type", "part_size_bytes"]);
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

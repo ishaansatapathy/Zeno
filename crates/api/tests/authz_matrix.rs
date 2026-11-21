@@ -632,8 +632,13 @@ fn rows() -> Vec<Row> {
         // Videos
         row(post.clone(), "/v1/videos", Creator)
             .json(|_, _| json!({"filename": "m.mp4", "size_bytes": 1_048_576, "content_type": "video/mp4"})),
+        row(post.clone(), "/v1/videos/streaming", Creator)
+            .json(|_, _| json!({"filename": "m.webm", "content_type": "video/webm"})),
         row(get.clone(), "/v1/videos/{video}", VideoRead),
         row(delete.clone(), "/v1/videos/{video}", OwnerOnly),
+        row(post.clone(), "/v1/videos/{upload}/parts", OwnerOnly)
+            .json(|_, _| json!({"number": 1, "size": 1_048_576, "last": true}))
+            .upload(),
         row(get.clone(), "/v1/videos/{upload}/upload", OwnerOnly).upload(),
         row(post.clone(), "/v1/videos/{upload}/complete", OwnerOnly).upload(),
         row(post.clone(), "/v1/videos/{upload}/abort", OwnerOnly).upload(),

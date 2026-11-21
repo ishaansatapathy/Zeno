@@ -12,7 +12,7 @@ use crate::auth::extractor::AuthUser;
 use crate::auth::limits::{self, HOUR};
 use crate::error::ApiError;
 use crate::state::AppState;
-use crate::videos::dto::{NewVideo, PartUrl, UploadResponse};
+use crate::videos::dto::{NewStreaming, NewVideo, PartUrl, UploadResponse};
 use crate::videos::plan::PartPlan;
 use crate::videos::repo::{self, NewVideoRow, VideoRow};
 
@@ -20,6 +20,10 @@ use crate::videos::repo::{self, NewVideoRow, VideoRow};
 const URL_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_UPLOADS_PER_HOUR: u64 = 30;
 const MAX_UNFINISHED_UPLOADS: i64 = 10;
+/// Parts a person may ask for in an hour: a recording of several hours at the largest rate needs hundreds.
+const MAX_PARTS_PER_HOUR: u64 = 2000;
+/// S3's own ceiling on the parts of one object.
+const MAX_STREAMING_PARTS: u64 = 10_000;
 /// An upload nobody finished within this long is abandoned and cleaned up.
 pub const STALE_UPLOAD_HOURS: i32 = 24;
 /// Source objects are never served, so they carry a type no browser will render.
@@ -147,6 +151,7 @@ pub async fn create(
         content_type: &input.content_type,
         size_bytes: input.size_bytes as i64,
         part_size: plan.part_size as i64,
+        streaming: false,
         source_key: &key,
         upload_id: &upload_id,
     };
@@ -163,6 +168,136 @@ pub async fn create(
     let numbers: Vec<u16> = plan.numbers().collect();
     let upload = upload_response(state, &video, &upload_id, Vec::new(), &numbers);
     Ok((video, upload))
+}
+
+/// Starts an upload for a recording that is still being made. There is no size yet and so no plan:
+/// parts are asked for one at a time (`part_url`), and the size is stated at the end (`complete`).
+pub async fn create_streaming(
+    state: &AppState,
+    user: &AuthUser,
+    input: NewStreaming,
+) -> Result<(VideoRow, UploadResponse), ApiError> {
+    user.require_role(CREATOR_ROLES)?;
+    limits::enforce(
+        &*state.counters,
+        &format!("video:create:{}", user.id),
+        MAX_UPLOADS_PER_HOUR,
+        HOUR,
+    )
+    .await?;
+    if repo::count_uploading(&state.db, user.id).await? >= MAX_UNFINISHED_UPLOADS {
+        return Err(ApiError::Http {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "too_many_uploads",
+            message: "Finish or cancel your unfinished uploads before starting another.".into(),
+        });
+    }
+    let id = Uuid::new_v4();
+    let key = source_key(id);
+    let upload_id = state
+        .store
+        .create_multipart(&key, SOURCE_CONTENT_TYPE)
+        .await
+        .map_err(storage_error)?;
+    let row = NewVideoRow {
+        id,
+        owner_id: user.id,
+        title: &input.title,
+        original_filename: &input.filename,
+        content_type: &input.content_type,
+        size_bytes: 0,
+        part_size: input.part_size as i64,
+        streaming: true,
+        source_key: &key,
+        upload_id: &upload_id,
+    };
+    let video = match repo::insert(&state.db, &row).await {
+        Ok(video) => video,
+        Err(err) => {
+            if let Err(abort_err) = state.store.abort_multipart(&key, &upload_id).await {
+                tracing::error!(error = ?abort_err, "could not abort orphaned upload");
+            }
+            return Err(err.into());
+        }
+    };
+    let upload = UploadResponse {
+        part_size: input.part_size,
+        total_parts: 0,
+        uploaded: Vec::new(),
+        parts: Vec::new(),
+        expires_at: Utc::now() + chrono::Duration::from_std(URL_TTL).unwrap_or_default(),
+    };
+    Ok((video, upload))
+}
+
+/// The URL for one more part of a streaming upload, signed for exactly its length. Asking again for
+/// the same part gives a fresh URL: a client that lost its answer, or whose URL expired, just asks.
+pub async fn part_url(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    number: u16,
+    size: u64,
+    last: bool,
+) -> Result<(PartUrl, chrono::DateTime<Utc>), ApiError> {
+    let video = load_owned(state, user, id).await?;
+    let (Some(upload_id), VideoStatus::Uploading, true) =
+        (video.upload_id.clone(), video.status, video.streaming)
+    else {
+        return Err(conflict(
+            "not_streaming",
+            "Only an upload still in progress, started as a recording, takes parts one at a time.",
+        ));
+    };
+    limits::enforce(
+        &*state.counters,
+        &format!("video:part:{}", user.id),
+        MAX_PARTS_PER_HOUR,
+        HOUR,
+    )
+    .await?;
+    let part_size = video.part_size as u64;
+    let most = state
+        .config
+        .max_upload_bytes
+        .div_ceil(part_size)
+        .min(MAX_STREAMING_PARTS);
+    let mut problems = Vec::new();
+    if number == 0 || u64::from(number) > most {
+        problems.push(crate::error::FieldError::new(
+            "number",
+            format!("Parts are numbered from 1 to {most}."),
+        ));
+    }
+    let right_size = if last {
+        (1..=part_size).contains(&size)
+    } else {
+        size == part_size
+    };
+    if !right_size {
+        problems.push(crate::error::FieldError::new(
+            "size",
+            if last {
+                format!("The last part is from 1 to {part_size} bytes.")
+            } else {
+                format!("A part that is not the last is exactly {part_size} bytes.")
+            },
+        ));
+    }
+    if !problems.is_empty() {
+        return Err(ApiError::validation(problems));
+    }
+    let url = state
+        .store
+        .presign_part(&video.source_key, &upload_id, number, size, URL_TTL);
+    Ok((
+        PartUrl {
+            number,
+            size,
+            url: url.to_string(),
+        },
+        Utc::now() + chrono::Duration::from_std(URL_TTL).unwrap_or_default(),
+    ))
 }
 
 pub async fn get(state: &AppState, user: &AuthUser, id: Uuid) -> Result<VideoRow, ApiError> {
@@ -187,12 +322,30 @@ pub async fn resume(
             "This video is no longer accepting uploads.",
         ));
     };
-    let plan = plan_of(&video);
     let held = match state.store.list_parts(&video.source_key, &upload_id).await {
         Ok(parts) => parts,
         Err(StorageError::NotFound) => Vec::new(),
         Err(err) => return Err(storage_error(err)),
     };
+    if video.streaming {
+        // No plan yet, so no list of what is missing: say which full parts storage holds, and the
+        // client, which knows what it has, carries on from there.
+        let part_size = video.part_size as u64;
+        let uploaded = held
+            .iter()
+            .filter(|part| part.size == part_size)
+            .map(|part| part.number)
+            .collect();
+        let response = UploadResponse {
+            part_size,
+            total_parts: 0,
+            uploaded,
+            parts: Vec::new(),
+            expires_at: Utc::now() + chrono::Duration::from_std(URL_TTL).unwrap_or_default(),
+        };
+        return Ok((video, response));
+    }
+    let plan = plan_of(&video);
     let (uploaded, missing) = split_parts(&plan, &held);
     let response = upload_response(state, &video, &upload_id, uploaded, &missing);
     Ok((video, response))
@@ -218,7 +371,12 @@ fn split_parts(plan: &PartPlan, held: &[zeno_core::storage::PartInfo]) -> (Vec<u
 /// Verifies against storage (never the client) that every part is present with exactly the
 /// planned length, stitches them together, then queues transcoding in the same transaction
 /// that marks the video as processing. Safe to call repeatedly.
-pub async fn complete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<VideoRow, ApiError> {
+pub async fn complete(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    declared: Option<u64>,
+) -> Result<VideoRow, ApiError> {
     let video = load_owned(state, user, id).await?;
     match video.status {
         VideoStatus::Processing | VideoStatus::Ready => return Ok(video),
@@ -236,7 +394,28 @@ pub async fn complete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<Vid
             "This video is no longer accepting uploads.",
         )
     })?;
-    let plan = plan_of(&video);
+    // The size the finished object must have. For a file picked from disk it was declared at the start; for
+    // a recording it is stated now, and the part plan follows from it as it would have at the start.
+    let size = if video.streaming {
+        match declared {
+            Some(size) if size > 0 && size <= state.config.max_upload_bytes => size,
+            _ => {
+                return Err(ApiError::validation(vec![crate::error::FieldError::new(
+                    "size_bytes",
+                    "Say how big the recording ended up (more than 0, and within the limit).",
+                )]))
+            }
+        }
+    } else {
+        if declared.is_some_and(|said| said != video.size_bytes as u64) {
+            return Err(ApiError::validation(vec![crate::error::FieldError::new(
+                "size_bytes",
+                "That is not the size this upload was started with.",
+            )]));
+        }
+        video.size_bytes as u64
+    };
+    let plan = PartPlan::from_parts(size, video.part_size as u64);
 
     let held = match state.store.list_parts(&video.source_key, &upload_id).await {
         Ok(parts) => parts,
@@ -279,8 +458,8 @@ pub async fn complete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<Vid
         .head(&video.source_key)
         .await
         .map_err(storage_error)?;
-    if stored != Some(video.size_bytes as u64) {
-        tracing::error!(video_id = %id, expected = video.size_bytes, ?stored, "assembled object has the wrong size");
+    if stored != Some(size) {
+        tracing::error!(video_id = %id, expected = size, ?stored, "assembled object has the wrong size");
         repo::mark_failed(&state.db, id, "size_mismatch").await?;
         if let Err(err) = state.store.delete(&video.source_key).await {
             tracing::error!(error = ?err, "could not delete mismatched upload");
@@ -292,7 +471,7 @@ pub async fn complete(state: &AppState, user: &AuthUser, id: Uuid) -> Result<Vid
     }
 
     let mut tx = state.db.begin().await?;
-    let updated = repo::mark_processing(&mut *tx, id).await?;
+    let updated = repo::mark_processing(&mut *tx, id, size as i64).await?;
     if updated.is_some() {
         jobs::enqueue(&mut *tx, "transcode", &json!({ "video_id": id })).await?;
     }
