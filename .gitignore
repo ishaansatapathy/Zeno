@@ -24,3 +24,8 @@ docs/Zeno_Product_and_Technical_Plan.pdf
 web/e2e/.logs/
 web/test-results/
 web/playwright-report/
+
+# Extension build and test output
+extension/dist/
+extension/test-results/
+extension/playwright-report/

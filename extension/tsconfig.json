@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "types": ["chrome", "node"]
+  },
+  "include": ["src/**/*.ts", "scripts/**/*.mjs", "e2e/**/*.ts", "playwright.config.ts", "vitest.config.ts"]
+}
