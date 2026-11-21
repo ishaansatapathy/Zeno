@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Zeno camera</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+        cursor: grab;
+        user-select: none;
+      }
+      video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1);
+        pointer-events: none;
+      }
+      p {
+        margin: 0;
+        padding: 24px;
+        color: #8e939a;
+        font: 12px/1.4 system-ui, sans-serif;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <video id="camera" autoplay muted playsinline></video>
+    <script src="bubble.js"></script>
+  </body>
+</html>

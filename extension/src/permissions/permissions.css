@@ -1,0 +1,64 @@
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("fonts/instrument-serif-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("fonts/instrument-serif-italic.woff2") format("woff2");
+  font-style: italic;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("fonts/instrument-sans.woff2") format("woff2");
+  font-weight: 400 700;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: #f2f3f5;
+  color-scheme: dark;
+  font: 400 16px/1.5 "Instrument Sans", system-ui, sans-serif;
+}
+main {
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 18vh 24px 0;
+}
+h1 {
+  margin: 0 0 20px;
+  font: 400 clamp(2.4rem, 8vw, 3.4rem) / 1 "Instrument Serif", Georgia, serif;
+}
+h1 em {
+  background-image: linear-gradient(180deg, #fff 10%, #e6e9ed 48%, #aab2bc 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  padding-right: 0.08em;
+}
+p {
+  color: #8e939a;
+  margin: 0 0 28px;
+}
+button {
+  height: 48px;
+  padding: 0 32px;
+  border: 0;
+  background: #e4e7eb;
+  color: #000;
+  font: 600 11px/1 "Instrument Sans", system-ui, sans-serif;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+button:hover {
+  background: #fff;
+}
+:focus-visible {
+  outline: 2px solid #e4e7eb;
+  outline-offset: 2px;
+}
+.problem {
+  color: #e3a3a3;
+}
