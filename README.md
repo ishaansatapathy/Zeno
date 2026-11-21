@@ -185,6 +185,6 @@ capped at what was paid, coupons, invoices (off until tax advice), the earnings 
 and the public site. CI runs the Rust suite, the web build and tests, and a dependency audit on
 every push.
 
-Also built: the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows), share links (22-character unguessable codes, passwords checked behind a per-link guess limit, instant revocation; about 780 visitor starts a second on a laptop), view counts (counted in Redis, written to Postgres in batches: 10,000 views became 5 rows written, with exact totals), and, in the web app, the account screens and the library (list, rename with conflict handling, delete, copy link), typed from the API's OpenAPI document and covered by browser tests.
+Also built: the recordings library (idempotent creation, keyset-paginated, measured at 0.15 ms a page on 200,000 rows), share links (22-character unguessable codes, passwords checked behind a per-link guess limit, revocation that refuses new viewings and keys at once and stops a playing viewer within 30 seconds; about 780 visitor starts a second on a laptop), view counts (counted in Redis, written to Postgres in batches: 10,000 views became 5 rows written, with exact totals), and, in the web app, the account screens and the library (list, rename with conflict handling, delete, copy link), typed from the API's OpenAPI document and covered by browser tests.
 
 Next: the share page and player, then the extension.

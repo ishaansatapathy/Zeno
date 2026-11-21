@@ -91,6 +91,63 @@ says so in words instead of showing an error. The list's logic (merging pages, r
 rows, choosing the link to hand out, wording) is plain functions in `components/library/rows.ts`,
 unit-tested apart from React.
 
+## The share page
+
+`/s/<code>` is what a share link opens: public, no account, no cookie. It is the page that will be
+opened most, by people who have never heard of Zeno, so it is built to cost the API almost nothing.
+
+**One API request per link per 15 seconds.** The server renders the page (`app/s/[code]/page.tsx`)
+with `revalidate = 15` and fetches the link's state with the same 15 seconds (`lib/api/server.ts`),
+so however many people open a link, the API hears about it about four times a minute, and an edge in
+front of Next can keep the page for the same time (`Cache-Control: s-maxage=15, stale-while-revalidate`
+is what Next sends). The page, its metadata and its preview image ask for the link in one render and
+share one fetch. A test holds this to account: 25 page views of one link are at most one request in the
+API's log (it only runs against `next start`, since `next dev` renders every request). An API that
+cannot be reached is an error, not an answer, so Next keeps serving the last good page rather than
+caching one that says the link is gone.
+
+**What it says.** A code of the wrong shape is a 404 without any call. Otherwise, from what the API said:
+a video that is ready shows a cover with a play button; one that is not (being recorded, uploading,
+processing) says so and asks again by itself, 6 seconds apart and slowing to 30, and not while the tab is
+hidden; a failed one says so; a closed link says it is no longer available. A link with a password shows
+a password box and nothing else: not the title, not in the page, not in the preview.
+A page reused after a revoke shows a player that is refused when played, never a video that plays,
+because playing asks the database again. (A closed link is a 200 page that says so, not a 410: Next
+cannot choose the status of a page it caches.)
+
+**The player** (`components/share/Player.tsx`, with its rules in `state.ts`). Pressing play starts a
+viewing (`POST /v1/s/:code/play`) and hands the playlist to Safari's own HLS, or to hls.js, which is
+only downloaded at that moment, so a page that nobody plays costs no player code. Playback carries a
+watermark that moves every 25 seconds. If the server refuses anything on the way (the link closed, the
+viewing ran out, a key was refused) the viewing ends at the first refusal, because hls.js reports each
+refusal as a non-fatal error and keeps asking; the page says "This viewing has ended" and offers to
+start again. Every other way playing can fail (a wrong password, a limit, the server failing, a browser
+that cannot play HLS) is a sentence, never a dead end.
+
+**Link previews.** The page sets a title, description and `og:` and `twitter:` tags, and
+`opengraph-image.tsx` draws a card (the wordmark, the title in the site's serif; a protected or closed
+link's says nothing about the video). `SITE_URL` makes the image address absolute. The page is
+`noindex` and sent with `Referrer-Policy: no-referrer`: the address is a capability.
+
+**Real playback, and why the browser tests do not cover the picture.** Playwright's Chromium cannot
+decode H.264, so the suite checks the whole way up to the segment (the page, the viewing, the playlists,
+the watermark, every way the server can refuse) against recorded answers. The picture itself is checked
+by `npm run check:playback -- --api-log <file>` (`scripts/real-playback.mjs`), which needs the whole stack
+running and an installed Chrome: it makes a video with ffmpeg, uploads it through the API, lets the real
+worker encode it, opens its share link in Chrome, presses play, and then revokes the link while it plays.
+What it found, on a laptop: a 60 second 640x360 clip was ready 9 seconds after upload; the first frame
+was on screen 2.6 seconds after pressing play, at the full 640x360 (hls.js is told to assume a decent
+connection and to fetch no more picture than the player can show, because by default it started at
+144p and, at the speed a clip downloads, the whole clip arrived in 144p); the watermark showed; and a
+link revoked mid-play stops the viewing within 30 seconds. Without that last check, a viewer who had
+the key played the whole video to the end (see *What revoking does not do* in backend.md).
+Recent Chrome plays HLS by itself (`canPlayType` says "maybe"), but its own player failed on our key
+flow, so hls.js is used wherever it runs, and the browser's own HLS only where it does not (an iPhone
+before iOS 17.1). The cause of Chrome's failure was not chased down.
+
+**A viewing keeps checking its link.** Every 30 seconds a viewing asks `GET /v1/s/:code` (cached by the
+API and the edge for 15 seconds); a `404` or `410` turns the page into the closed notice.
+
 ## Tests
 
 * `npm test`: unit tests (the client's renewal and error mapping against a fake server, the

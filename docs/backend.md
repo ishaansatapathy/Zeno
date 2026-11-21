@@ -143,7 +143,7 @@ manage someone else's links); the visitor endpoints are open to anyone holding t
 | --- | --- | --- |
 | `POST /v1/recordings/:id/links` | owner | Make a link: optional `password` (4 to 128 characters) and `expires_at` (a minute to ten years away). `201` with the link and its `url`. A private recording is switched to `link` in the same transaction. At most 10 live links per recording (`409 too_many_links`) |
 | `GET /v1/recordings/:id/links` | owner | The recording's links, newest first, each `active`, `expired` or `revoked`. Never carries the password hash |
-| `DELETE /v1/recordings/:id/links/:link` | owner | Revoke. Ends every viewing under way through it at once. Safe to repeat |
+| `DELETE /v1/recordings/:id/links/:link` | owner | Revoke. Ends the link's sessions at once, so no new playlist or key is given; a web player that already holds them stops within 30 seconds (see *What revoking does not do*). Safe to repeat |
 | `GET /v1/s/:code` | anyone | What the page needs: `{share: {code, requires_password, title, status, duration_seconds, expires_at}}`. A password-protected link reveals only `requires_password: true`: not even the title. Cacheable: `Cache-Control: public, max-age=15, stale-while-revalidate=45` and an `ETag` (`304` on a repeat) |
 | `POST /v1/s/:code/play` | anyone | Start watching: body `{}` or `{"password": ...}`. `201` with `{playback: {session_id, playlist_url, expires_at, watermark}}`. No heartbeat and no resume point: there is no account to remember either for. `403 password_required` / `403 wrong_password`, `409 not_ready` while the video is still processing |
 
@@ -163,7 +163,7 @@ must be live, the recording still exist and still be shared, and still be made o
 revoking a link, making the recording private, letting the link expire or deleting the recording
 ends the viewing at its next playlist or key request (and revoking, going private and deleting also
 end open sessions immediately). Segments already fetched keep playing, as for any viewer, but no
-new key is released. A token for a link session does not work with a user's session, or the other
+new key is released (see *What revoking does not do*, below, for what that means in practice). A token for a link session does not work with a user's session, or the other
 way round, or for another video.
 
 **Passwords.** Argon2id, checked before a session starts. Each guess costs a password hash, so it
@@ -186,6 +186,22 @@ check) runs about 780 a second across 16 clients with real commits, none failing
 viewing is a session row; link sessions that ended are forgotten after 7 days (account sessions
 after 90). If one link's traffic ever outgrows that, the next step is stateless link tokens with
 the link's status cached for a few seconds, trading instant revocation for fewer writes.
+
+**What revoking does not do.** It closes the door; it does not reach into a room someone is already
+in. A player that holds the playlist and the content key never has to ask the API or the key server
+for anything again, and fetches the segments from storage, whose addresses stay valid (presigned for
+an hour, unless `S3_PUBLIC_ENDPOINT` points at a CDN). Measured in real Chrome against the real worker
+and key server (`npm run check:playback` in `web/`): a 180 second video, the link revoked 5 seconds into
+playing. A new request for the playlist was refused at once (`403`), but the unmodified player carried
+on to the end of the video, 176 seconds later, with 19 segment requests answered `200` and none to the
+playlist or key server. So the web player asks, every 30 seconds, whether its link is still open (the
+answer is cached for 15 seconds, so this is almost no load on the origin) and stops when it is not:
+measured, the viewing ended 26 seconds after the revoke. That protects against an honest player
+and removes the feeling that revoking did nothing; it does not stop someone who has taken the key and
+the playlist and fetches the segments with their own tool, which is also true of anything a viewer
+could have downloaded before the revoke. Closing that properly means keys the player must keep
+asking for (a new key every minute or so, so a revoke cuts within one key period) and short-lived
+segment addresses; it is planned work, not done.
 
 **Under concurrency.** Closing a link (revoking it, making the recording private, deleting it)
 ends the viewings it can see. A viewing that was starting at that moment could slip in after the
