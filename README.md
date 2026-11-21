@@ -13,7 +13,7 @@ payments underneath. Built for teachers and creators everywhere. (Zeno is a work
 | **Editor** | Trim, cut, captions, and vertical clips for Shorts and Reels, from any recording or stream. | Planned |
 | **Meetings** | Async: record, send a link, get comments. Live: video calls that record straight into the library. | Planned |
 
-The backend reference (every endpoint, limit and guarantee) is in [docs/backend.md](docs/backend.md).
+The backend reference (every endpoint, limit and guarantee) is in [docs/backend.md](docs/backend.md). How the desktop studio and the editor are built so the user's machine does the work, what that costs us and what it does not, and how the parts scale, is in [docs/studio-design.md](docs/studio-design.md).
 
 ---
 
@@ -33,7 +33,7 @@ handful of stateless servers serve very large audiences, and it is how the parts
 | Encode | Completion enqueues a job (Postgres `SKIP LOCKED`) | Worker ↔ object storage | Yes |
 | Watch | `POST /v1/lessons/:id/play` → signed playlist + token | Player ← CDN (segments); a tiny key server checks each key request | Yes |
 | Share link | `GET /v1/s/:code` (one indexed lookup, edge-cacheable), then `POST /v1/s/:code/play` | Viewer ← CDN (segments); the key server re-checks the link on every key | Yes |
-| Go live to many platforms | `POST /v1/streams` → credentials for each ticked destination | Studio → YouTube, Twitch, Instagram, X directly. **Our egress: zero** | Planned |
+| Go live to many platforms | `POST /v1/streams` → credentials for each ticked destination | Studio → YouTube, Twitch, Instagram, X directly. **Our egress: zero** (the user's uplink carries every copy; see [docs/studio-design.md](docs/studio-design.md)) | Planned |
 | Live on Zeno | Stream key check | Studio → media server → CDN (rolling HLS) | Partly |
 | Meeting | Mint a room token | Participants ↔ SFU (LiveKit) | Planned |
 
