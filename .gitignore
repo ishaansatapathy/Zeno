@@ -22,6 +22,7 @@ docs/Zeno_Product_and_Technical_Plan.pdf
 
 # Playwright output
 web/e2e/.logs/
+extension/e2e/.logs/
 web/test-results/
 web/playwright-report/
 
