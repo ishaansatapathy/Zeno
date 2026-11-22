@@ -17,6 +17,18 @@ pub struct LinkRow {
 const LINK_COLUMNS: &str =
     "id, code, recording_id, password_hash, expires_at, revoked_at, created_at";
 
+pub async fn find_by_id<'e>(
+    db: impl PgExecutor<'e>,
+    id: Uuid,
+) -> Result<Option<LinkRow>, sqlx::Error> {
+    sqlx::query_as(&format!(
+        "select {LINK_COLUMNS} from share_links where id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(db)
+    .await
+}
+
 /// Makes a link. A unique violation means the code is taken (a one-in-2^128 event, but the caller
 /// retries with a new one rather than assume).
 pub async fn insert(

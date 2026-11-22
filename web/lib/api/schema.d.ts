@@ -402,6 +402,11 @@ export interface components {
              */
             expires_at?: string | null;
             /**
+             * Format: uuid
+             * @description Client-generated id for retrying a link creation whose response was lost.
+             */
+            id?: string | null;
+            /**
              * Format: password
              * @description A speed bump for casual sharing, not an account. Checked before a viewing starts.
              */
@@ -431,6 +436,12 @@ export interface components {
         CreateStreamingRequest: {
             content_type: string;
             filename: string;
+            /**
+             * Format: uuid
+             * @description Client-generated id for retrying a start whose response was lost. Reuse it only for the
+             *     same recording; an existing id with different details is refused.
+             */
+            id?: string | null;
             /**
              * Format: int64
              * @description How big each part is, from 5 to 64 MiB (default 16). Smaller means less to lose to one failed
@@ -1953,7 +1964,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Made. `link.url` is what to hand out. */
+            /** @description Made, or returned the same open link for a repeated client `id` and the same details. `link.url` is what to hand out. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -1998,7 +2009,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `too_many_links`: a recording may have 10 live links; revoke one first. */
+            /** @description `too_many_links` or `link_id_conflict`: a recording may have 10 live links, and an id cannot be reused for another or closed link. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2565,7 +2576,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Started. `upload.parts` is empty: ask for each part as it fills. */
+            /** @description Started, or returned the same still-open upload for a repeated client `id`. `upload.parts` is empty: ask for each part as it fills. */
             201: {
                 headers: {
                     [name: string]: unknown;
@@ -2594,6 +2605,15 @@ export interface operations {
             };
             /** @description `forbidden` (only creator and admin accounts upload) or `forbidden_origin`. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `streaming_id_conflict`: that client id belongs to a different or finished upload. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

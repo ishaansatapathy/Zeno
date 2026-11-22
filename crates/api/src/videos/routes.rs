@@ -64,9 +64,10 @@ async fn create(
     security(("session" = [])),
     request_body = CreateStreamingRequest,
     responses(
-        (status = 201, description = "Started. `upload.parts` is empty: ask for each part as it fills.", body = CreateVideoResponse),
+        (status = 201, description = "Started, or returned the same still-open upload for a repeated client `id`. `upload.parts` is empty: ask for each part as it fills.", body = CreateVideoResponse),
         (status = 401, description = "`unauthenticated`", body = ErrorBody),
         (status = 403, description = "`forbidden` (only creator and admin accounts upload) or `forbidden_origin`.", body = ErrorBody),
+        (status = 409, description = "`streaming_id_conflict`: that client id belongs to a different or finished upload.", body = ErrorBody),
         (status = 422, description = "`validation_failed` (see `fields`) or `invalid_request`.", body = ErrorBody),
         (status = 429, description = "`too_many_uploads` (ten are unfinished: finish or abort one) or `too_many_requests` (which carries `Retry-After`).", body = ErrorBody),
     )

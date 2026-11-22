@@ -71,6 +71,51 @@ async fn finish(app: &App, jar: &Jar, id: Uuid, size: usize) -> Res {
 }
 
 db_test! {
+    async fn a_lost_start_response_reuses_the_same_upload(pool: PgPool) {
+        let app = app(pool.clone());
+        let owner = signup_creator(&app, "owner@streaming.in").await;
+        let other = signup_creator(&app, "other@streaming.in").await;
+        let id = Uuid::new_v4();
+        let body = json!({"id": id, "filename": "Zeno recording.webm", "content_type": "video/webm", "part_size_bytes": PART});
+        let first = app.post("/v1/videos/streaming").jar(&owner).json(body.clone()).send().await;
+        assert_eq!(first.status, StatusCode::CREATED, "{:?}", first.body);
+        let again = app.post("/v1/videos/streaming").jar(&owner).json(body.clone()).send().await;
+        assert_eq!(again.status, StatusCode::CREATED, "{:?}", again.body);
+        assert_eq!(first.body["video"]["id"], again.body["video"]["id"]);
+        assert_eq!(first.body["video"]["id"], id.to_string());
+        let count: i64 = sqlx::query_scalar("select count(*) from videos where id = $1")
+            .bind(id).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+
+        let changed = app.post("/v1/videos/streaming").jar(&owner)
+            .json(json!({"id": id, "filename": "another.webm", "content_type": "video/webm", "part_size_bytes": PART}))
+            .send().await;
+        assert_eq!(changed.status, StatusCode::CONFLICT);
+        assert_eq!(changed.code(), "streaming_id_conflict");
+        let stranger = app.post("/v1/videos/streaming").jar(&other).json(body).send().await;
+        assert_eq!(stranger.status, StatusCode::CONFLICT);
+        assert_eq!(stranger.code(), "streaming_id_conflict");
+
+        let racing_id = Uuid::new_v4();
+        let racing = json!({"id": racing_id, "filename": "race.webm", "content_type": "video/webm", "part_size_bytes": PART});
+        let (left, right) = tokio::join!(
+            app.post("/v1/videos/streaming").jar(&owner).json(racing.clone()).send(),
+            app.post("/v1/videos/streaming").jar(&owner).json(racing).send(),
+        );
+        assert_eq!(left.status, StatusCode::CREATED, "{:?}", left.body);
+        assert_eq!(right.status, StatusCode::CREATED, "{:?}", right.body);
+        assert_eq!(left.body["video"]["id"], right.body["video"]["id"]);
+        let count: i64 = sqlx::query_scalar("select count(*) from videos where id = $1")
+            .bind(racing_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+        // The losing request aborted only its own multipart upload, not the winner's.
+        put_part(&app, &owner, racing_id, 1, bytes(PART, 31), true).await;
+        let completed = finish(&app, &owner, racing_id, PART).await;
+        assert_eq!(completed.status, StatusCode::OK, "{:?}", completed.body);
+    }
+}
+
+db_test! {
     async fn a_recording_uploads_part_by_part_and_its_size_is_stated_at_the_end(pool: PgPool) {
         let app = app(pool.clone());
         let jar = signup_creator(&app, "t@x.in").await;

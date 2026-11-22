@@ -90,7 +90,7 @@ OpenAPI document; the other video routes are on `NOT_DESCRIBED_YET`):
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /v1/videos/streaming` | Start with no size: `filename`, `content_type`, optional `title` and `part_size_bytes` (5 to 64 MiB, default 16). The video is marked `streaming`; `upload.parts` is empty |
+| `POST /v1/videos/streaming` | Start with no size: `filename`, `content_type`, optional `title`, `part_size_bytes` (5 to 64 MiB, default 16), and a client-generated UUID `id`. A retry with that id and identical details returns the same open upload; changed details or a finished upload return `409 streaming_id_conflict`. The video is marked `streaming`; `upload.parts` is empty |
 | `POST /v1/videos/:id/parts` | `{number, size, last}`: a URL for one more part, signed for exactly `size` bytes. Every part but the last must be exactly the part size; the last is 1 up to it. Asking again for the same part gives a fresh URL, so a lost answer or an expired URL is just asked again. `409 not_streaming` for a finished upload or one started with a size. 2000 a person an hour |
 | `POST /v1/videos/:id/complete` | Now takes `{"size_bytes": n}` for a recording (required, within `MAX_UPLOAD_BYTES`); a file's upload sends no body, and a size sent anyway must match the one it started with |
 
@@ -179,7 +179,7 @@ manage someone else's links); the visitor endpoints are open to anyone holding t
 
 | Endpoint | Who | Purpose |
 | --- | --- | --- |
-| `POST /v1/recordings/:id/links` | owner | Make a link: optional `password` (4 to 128 characters) and `expires_at` (a minute to ten years away). `201` with the link and its `url`. A private recording is switched to `link` in the same transaction. At most 10 live links per recording (`409 too_many_links`) |
+| `POST /v1/recordings/:id/links` | owner | Make a link: optional client UUID `id`, `password` (4 to 128 characters) and `expires_at` (a minute to ten years away). Repeating an id with the same details returns the same open link; a changed or closed link returns `409 link_id_conflict`. `201` includes the link and its `url`. A private recording is switched to `link` in the same transaction. At most 10 live links per recording (`409 too_many_links`) |
 | `GET /v1/recordings/:id/links` | owner | The recording's links, newest first, each `active`, `expired` or `revoked`. Never carries the password hash |
 | `DELETE /v1/recordings/:id/links/:link` | owner | Revoke. Ends the link's sessions at once, so no new playlist or key is given; a web player that already holds them stops within 30 seconds (see *What revoking does not do*). Safe to repeat |
 | `GET /v1/s/:code` | anyone | What the page needs: `{share: {code, requires_password, title, status, duration_seconds, expires_at}}`. A password-protected link reveals only `requires_password: true`: not even the title. Cacheable: `Cache-Control: public, max-age=15, stale-while-revalidate=45` and an `ETag` (`304` on a repeat) |

@@ -741,6 +741,12 @@ db_test! {
         assert_eq!(made.status, StatusCode::CREATED, "{:?}", made.body);
         contract.check("post", start, &made);
         let id = made.body["video"]["id"].as_str().unwrap().to_owned();
+        let stable = uuid::Uuid::new_v4();
+        let seeded = app.post(start).jar(&owner).json(json!({"id": stable, "filename": "stable.webm", "content_type": "video/webm", "part_size_bytes": 5 * MIB})).send().await;
+        assert_eq!(seeded.status, StatusCode::CREATED);
+        let conflict = app.post(start).jar(&owner).json(json!({"id": stable, "filename": "changed.webm", "content_type": "video/webm", "part_size_bytes": 5 * MIB})).send().await;
+        assert_eq!(conflict.code(), "streaming_id_conflict");
+        contract.check("post", start, &conflict);
         let tiny = app.post(start).jar(&owner).json(json!({"filename": "a.webm", "content_type": "video/webm", "part_size_bytes": 10})).send().await;
         assert_eq!(tiny.status, StatusCode::UNPROCESSABLE_ENTITY);
         contract.check("post", start, &tiny);

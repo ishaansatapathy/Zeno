@@ -134,6 +134,61 @@ async fn open_sessions(pool: &PgPool) -> i64 {
 }
 
 db_test! {
+    async fn a_lost_link_response_returns_the_same_link_once(pool: PgPool) {
+        let app = app(pool.clone());
+        let owner = signup_creator(&app, "retry@links.in").await;
+        let rec = recording(&app, &owner, None).await;
+        let id = Uuid::new_v4();
+        let body = json!({"id": id});
+        let first = make_link(&app, &owner, rec, body.clone()).await;
+        let again = make_link(&app, &owner, rec, body).await;
+        assert_eq!(first.status, StatusCode::CREATED, "{:?}", first.body);
+        assert_eq!(again.status, StatusCode::CREATED, "{:?}", again.body);
+        assert_eq!(link_id(&first), id);
+        assert_eq!(first.body["link"]["code"], again.body["link"]["code"]);
+        assert_eq!(again.body["recording_visibility"], "link");
+        let count: i64 = sqlx::query_scalar("select count(*) from share_links where recording_id = $1")
+            .bind(rec).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+
+        let another = recording(&app, &owner, None).await;
+        let conflict = make_link(&app, &owner, another, json!({"id": id})).await;
+        assert_eq!(conflict.status, StatusCode::CONFLICT);
+        assert_eq!(conflict.code(), "link_id_conflict");
+        let changed = make_link(&app, &owner, rec, json!({"id": id, "password": "other-password"})).await;
+        assert_eq!(changed.status, StatusCode::CONFLICT);
+        assert_eq!(changed.code(), "link_id_conflict");
+
+        let racing = Uuid::new_v4();
+        let (left, right) = tokio::join!(
+            make_link(&app, &owner, rec, json!({"id": racing})),
+            make_link(&app, &owner, rec, json!({"id": racing})),
+        );
+        assert_eq!(left.status, StatusCode::CREATED, "{:?}", left.body);
+        assert_eq!(right.status, StatusCode::CREATED, "{:?}", right.body);
+        assert_eq!(left.body["link"]["code"], right.body["link"]["code"]);
+        let count: i64 = sqlx::query_scalar("select count(*) from share_links where id = $1")
+            .bind(racing).fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+
+        let protected_id = Uuid::new_v4();
+        let protected = json!({"id": protected_id, "password": "same-secret"});
+        let first = make_link(&app, &owner, rec, protected.clone()).await;
+        let again = make_link(&app, &owner, rec, protected).await;
+        assert_eq!(first.status, StatusCode::CREATED);
+        assert_eq!(again.status, StatusCode::CREATED);
+        assert_eq!(code(&first), code(&again));
+        let wrong = make_link(&app, &owner, rec, json!({"id": protected_id, "password": "different-secret"})).await;
+        assert_eq!(wrong.code(), "link_id_conflict");
+
+        let revoked = app.req(Method::DELETE, &format!("/v1/recordings/{rec}/links/{id}")).jar(&owner).send().await;
+        assert_eq!(revoked.status, StatusCode::NO_CONTENT);
+        let after_revoke = make_link(&app, &owner, rec, json!({"id": id})).await;
+        assert_eq!(after_revoke.code(), "link_id_conflict", "a retry cannot revive a revoked link");
+    }
+}
+
+db_test! {
     async fn an_owner_makes_lists_and_revokes_links(pool: PgPool) {
         let app = app(pool);
         let owner = signup_verified_as(&app, "teacher@x.in", "creator").await;

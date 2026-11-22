@@ -66,11 +66,11 @@ fn parse(raw: &str, what: &'static str) -> Result<Uuid, ApiError> {
     params(("id" = Uuid, Path, description = "The recording.")),
     request_body = CreateLinkRequest,
     responses(
-        (status = 201, description = "Made. `link.url` is what to hand out.", body = LinkEnvelope),
+        (status = 201, description = "Made, or returned the same open link for a repeated client `id` and the same details. `link.url` is what to hand out.", body = LinkEnvelope),
         (status = 401, description = "`unauthenticated`", body = ErrorBody),
         (status = 403, description = "`forbidden` or `forbidden_origin`.", body = ErrorBody),
         (status = 404, description = "`not_found`", body = ErrorBody),
-        (status = 409, description = "`too_many_links`: a recording may have 10 live links; revoke one first.", body = ErrorBody),
+        (status = 409, description = "`too_many_links` or `link_id_conflict`: a recording may have 10 live links, and an id cannot be reused for another or closed link.", body = ErrorBody),
         (status = 422, description = "`validation_failed` (the password or the expiry) or `invalid_request`.", body = ErrorBody),
         (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
     )

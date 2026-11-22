@@ -84,14 +84,19 @@ pub async fn create(
     let recording = recordings::find_owned(&state.db, recording_id, user.id)
         .await?
         .ok_or_else(recording_not_found)?;
+    if let Some(id) = input.id {
+        if let Some(link) = repo::find_by_id(&state.db, id).await? {
+            return replay_link(state, &input, recording_id, &recording.visibility, link).await;
+        }
+    }
     if repo::count_live(&state.db, recording_id).await? >= MAX_LIVE_LINKS {
         return Err(too_many_links());
     }
     // The hash is the expensive part, so a request that is going to be refused anyway is refused
     // before it. This count is not the check that holds: two requests can both pass it. The one
     // inside the transaction below does.
-    let hash = match input.password {
-        Some(password) => Some(state.passwords.hash(password).await?),
+    let hash = match &input.password {
+        Some(password) => Some(state.passwords.hash(password.clone()).await?),
         None => None,
     };
 
@@ -100,6 +105,14 @@ pub async fn create(
     // insert between them.
     if !recordings::lock(&mut tx, recording_id).await? {
         return Err(recording_not_found());
+    }
+    if let Some(id) = input.id {
+        if let Some(link) = repo::find_by_id(&mut *tx, id).await? {
+            let current = recordings::find_owned(&mut *tx, recording_id, user.id)
+                .await?
+                .ok_or_else(recording_not_found)?;
+            return replay_link(state, &input, recording_id, &current.visibility, link).await;
+        }
     }
     if repo::count_live(&mut *tx, recording_id).await? >= MAX_LIVE_LINKS {
         return Err(too_many_links());
@@ -110,7 +123,7 @@ pub async fn create(
         let mut attempt = tx.begin().await?;
         match repo::insert(
             &mut attempt,
-            Uuid::new_v4(),
+            input.id.unwrap_or_else(Uuid::new_v4),
             &code::generate(),
             recording_id,
             hash.as_deref(),
@@ -123,7 +136,14 @@ pub async fn create(
                 link = Some(row);
                 break;
             }
-            Err(err) if unique_violation(&err) => attempt.rollback().await?,
+            Err(err) if unique_violation(&err) => {
+                attempt.rollback().await?;
+                if let Some(id) = input.id {
+                    if repo::find_by_id(&mut *tx, id).await?.is_some() {
+                        return Err(link_id_conflict());
+                    }
+                }
+            }
             Err(err) => return Err(err.into()),
         }
     }
@@ -136,6 +156,44 @@ pub async fn create(
     };
     tx.commit().await?;
     Ok((link, visibility))
+}
+
+fn link_id_conflict() -> ApiError {
+    ApiError::Http {
+        status: axum::http::StatusCode::CONFLICT,
+        code: "link_id_conflict",
+        message: "This link id is already used by another or closed link.".into(),
+    }
+}
+
+async fn replay_link(
+    state: &AppState,
+    input: &NewLink,
+    recording_id: Uuid,
+    visibility: &str,
+    link: LinkRow,
+) -> Result<(LinkRow, String), ApiError> {
+    if link.recording_id != recording_id
+        || link.revoked_at.is_some()
+        || link.expires_at.is_some_and(|at| at <= Utc::now())
+        || link.expires_at != input.expires_at
+    {
+        return Err(link_id_conflict());
+    }
+    let same_password = match (&input.password, &link.password_hash) {
+        (None, None) => true,
+        (Some(password), Some(hash)) => {
+            state
+                .passwords
+                .verify(password.clone(), Some(hash.clone()))
+                .await?
+        }
+        _ => false,
+    };
+    if !same_password {
+        return Err(link_id_conflict());
+    }
+    Ok((link, visibility.to_owned()))
 }
 
 pub async fn list(

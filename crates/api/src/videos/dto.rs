@@ -25,6 +25,9 @@ pub struct CreateVideoRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateStreamingRequest {
+    /// Client-generated id for retrying a start whose response was lost. Reuse it only for the
+    /// same recording; an existing id with different details is refused.
+    pub id: Option<Uuid>,
     pub filename: String,
     pub content_type: String,
     #[serde(default)]
@@ -45,6 +48,7 @@ pub const DEFAULT_PART_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct NewStreaming {
+    pub id: Option<Uuid>,
     pub filename: String,
     pub title: String,
     pub content_type: String,
@@ -78,6 +82,7 @@ impl CreateStreamingRequest {
         }
         let ok = checked?;
         Ok(NewStreaming {
+            id: self.id,
             filename: ok.filename,
             title: ok.title,
             content_type: ok.content_type,
@@ -389,6 +394,7 @@ mod tests {
 
     fn streaming(part: Option<u64>, content_type: &str) -> CreateStreamingRequest {
         CreateStreamingRequest {
+            id: None,
             filename: "Zeno 2026.webm".into(),
             content_type: content_type.into(),
             title: None,

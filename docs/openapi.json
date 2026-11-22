@@ -1565,7 +1565,7 @@
         },
         "responses": {
           "201": {
-            "description": "Made. `link.url` is what to hand out.",
+            "description": "Made, or returned the same open link for a repeated client `id` and the same details. `link.url` is what to hand out.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1615,7 +1615,7 @@
             }
           },
           "409": {
-            "description": "`too_many_links`: a recording may have 10 live links; revoke one first.",
+            "description": "`too_many_links` or `link_id_conflict`: a recording may have 10 live links, and an id cannot be reused for another or closed link.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2092,7 +2092,7 @@
         },
         "responses": {
           "201": {
-            "description": "Started. `upload.parts` is empty: ask for each part as it fills.",
+            "description": "Started, or returned the same still-open upload for a repeated client `id`. `upload.parts` is empty: ask for each part as it fills.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2123,6 +2123,16 @@
           },
           "403": {
             "description": "`forbidden` (only creator and admin accounts upload) or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`streaming_id_conflict`: that client id belongs to a different or finished upload.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2565,6 +2575,14 @@
             "format": "date-time",
             "description": "From a minute to ten years from now. Without one the link never expires."
           },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Client-generated id for retrying a link creation whose response was lost."
+          },
           "password": {
             "type": [
               "string",
@@ -2636,6 +2654,14 @@
           },
           "filename": {
             "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Client-generated id for retrying a start whose response was lost. Reuse it only for the\nsame recording; an existing id with different details is refused."
           },
           "part_size_bytes": {
             "type": [

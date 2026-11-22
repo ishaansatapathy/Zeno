@@ -185,6 +185,11 @@ pub async fn create_streaming(
         HOUR,
     )
     .await?;
+    if let Some(id) = input.id {
+        if let Some(video) = repo::find(&state.db, id).await? {
+            return replay_streaming(&input, user, video);
+        }
+    }
     if repo::count_uploading(&state.db, user.id).await? >= MAX_UNFINISHED_UPLOADS {
         return Err(ApiError::Http {
             status: StatusCode::TOO_MANY_REQUESTS,
@@ -192,7 +197,7 @@ pub async fn create_streaming(
             message: "Finish or cancel your unfinished uploads before starting another.".into(),
         });
     }
-    let id = Uuid::new_v4();
+    let id = input.id.unwrap_or_else(Uuid::new_v4);
     let key = source_key(id);
     let upload_id = state
         .store
@@ -217,17 +222,54 @@ pub async fn create_streaming(
             if let Err(abort_err) = state.store.abort_multipart(&key, &upload_id).await {
                 tracing::error!(error = ?abort_err, "could not abort orphaned upload");
             }
+            if err
+                .as_database_error()
+                .is_some_and(|db| db.code().as_deref() == Some("23505"))
+            {
+                if let Some(video) = repo::find(&state.db, id).await? {
+                    return replay_streaming(&input, user, video);
+                }
+                return Err(streaming_id_conflict());
+            }
             return Err(err.into());
         }
     };
-    let upload = UploadResponse {
-        part_size: input.part_size,
+    Ok((video, empty_stream_upload(input.part_size)))
+}
+
+fn empty_stream_upload(part_size: u64) -> UploadResponse {
+    UploadResponse {
+        part_size,
         total_parts: 0,
         uploaded: Vec::new(),
         parts: Vec::new(),
         expires_at: Utc::now() + chrono::Duration::from_std(URL_TTL).unwrap_or_default(),
-    };
-    Ok((video, upload))
+    }
+}
+
+fn streaming_id_conflict() -> ApiError {
+    conflict(
+        "streaming_id_conflict",
+        "This recording id is already used by another upload or its upload has ended.",
+    )
+}
+
+fn replay_streaming(
+    input: &NewStreaming,
+    user: &AuthUser,
+    video: VideoRow,
+) -> Result<(VideoRow, UploadResponse), ApiError> {
+    if video.owner_id != user.id
+        || !video.streaming
+        || video.status != VideoStatus::Uploading
+        || video.title != input.title
+        || video.original_filename != input.filename
+        || video.content_type != input.content_type
+        || video.part_size != input.part_size as i64
+    {
+        return Err(streaming_id_conflict());
+    }
+    Ok((video, empty_stream_upload(input.part_size)))
 }
 
 /// The URL for one more part of a streaming upload, signed for exactly its length. Asking again for

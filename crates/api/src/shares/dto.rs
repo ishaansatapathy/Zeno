@@ -23,6 +23,8 @@ pub const LINK_STATES: &[&str] = &["active", "expired", "revoked"];
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateLinkRequest {
+    /// Client-generated id for retrying a link creation whose response was lost.
+    pub id: Option<Uuid>,
     /// A speed bump for casual sharing, not an account. Checked before a viewing starts.
     #[schema(value_type = Option<String>, format = Password, min_length = 4, max_length = 128)]
     pub password: Option<String>,
@@ -32,6 +34,7 @@ pub struct CreateLinkRequest {
 
 #[derive(Debug)]
 pub struct NewLink {
+    pub id: Option<Uuid>,
     pub password: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
 }
@@ -71,6 +74,7 @@ impl CreateLinkRequest {
             return Err(ApiError::validation(errors));
         }
         Ok(NewLink {
+            id: self.id,
             password: self.password,
             expires_at: self.expires_at,
         })
@@ -256,6 +260,7 @@ mod tests {
         let now = Utc::now();
         let with = |at| {
             CreateLinkRequest {
+                id: None,
                 password: None,
                 expires_at: Some(at),
             }
@@ -267,6 +272,7 @@ mod tests {
         assert!(with(now + Duration::days(3650)).is_ok());
         assert!(with(now + Duration::days(3651)).is_err());
         assert!(CreateLinkRequest {
+            id: None,
             password: None,
             expires_at: None
         }
@@ -279,6 +285,7 @@ mod tests {
         let now = Utc::now();
         let with = |p: &str| {
             CreateLinkRequest {
+                id: None,
                 password: Some(p.into()),
                 expires_at: None,
             }
