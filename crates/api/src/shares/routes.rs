@@ -23,6 +23,12 @@ use crate::state::AppState;
 /// revoked a second ago cannot be watched from a cached page.
 const CACHE_CONTROL: &str = "public, max-age=15, stale-while-revalidate=45";
 
+/// While the video is still being made, the page is what somebody is waiting on: it is reused for two seconds
+/// at most, and never served stale, so the moment the video plays is the moment the page says so. Still cheap
+/// for the origin (an edge asks it about a link about once in two seconds, however many are waiting), and
+/// only for as long as the video takes to prepare.
+const CACHE_CONTROL_WAITING: &str = "public, max-age=2";
+
 /// The owner's side, merged into `/v1/recordings`.
 pub fn recording_router() -> Router<AppState> {
     Router::new()
@@ -154,7 +160,8 @@ pub(crate) async fn revoke(
 /// Public and cacheable: an edge may reuse the answer for 15 seconds and serve it stale for 45
 /// more while it fetches a fresh one, so the origin hears about a link about four times a minute
 /// however many people open it. A cached answer never lets anyone watch after a revoke: playing
-/// asks the database again.
+/// asks the database again. While the video is not ready the answer is reused for 2 seconds only (see
+/// `CACHE_CONTROL_WAITING`), so a page waiting for it to play finds out at once.
 #[utoipa::path(
     get,
     path = "/v1/s/{code}",
@@ -166,7 +173,7 @@ pub(crate) async fn revoke(
     ),
     responses(
         (status = 200, description = "What the page needs.", body = ShareEnvelope, headers(
-            ("Cache-Control" = String, description = "`public, max-age=15, stale-while-revalidate=45`"),
+            ("Cache-Control" = String, description = "`public, max-age=15, stale-while-revalidate=45`; `public, max-age=2` while the video is not ready yet."),
             ("ETag" = String, description = "A weak validator over the body."),
         )),
         (status = 304, description = "The caller already holds this exact answer.", headers(
@@ -184,10 +191,16 @@ pub(crate) async fn resolve(
     Path(code): Path<String>,
 ) -> Result<Response, ApiError> {
     let share = service::resolve(&state, &code).await?;
+    // A locked link shows no status, and nothing is waited for before the password is given.
+    let waiting = share.status.is_some_and(|status| status != "ready");
     Ok(crate::httpcache::json_with_etag(
         &request,
         &ShareEnvelope { share },
-        CACHE_CONTROL,
+        if waiting {
+            CACHE_CONTROL_WAITING
+        } else {
+            CACHE_CONTROL
+        },
     ))
 }
 

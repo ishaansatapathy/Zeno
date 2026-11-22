@@ -1799,7 +1799,7 @@
           "share"
         ],
         "summary": "What a visitor's page needs before anyone presses play.",
-        "description": "Public and cacheable: an edge may reuse the answer for 15 seconds and serve it stale for 45\nmore while it fetches a fresh one, so the origin hears about a link about four times a minute\nhowever many people open it. A cached answer never lets anyone watch after a revoke: playing\nasks the database again.",
+        "description": "Public and cacheable: an edge may reuse the answer for 15 seconds and serve it stale for 45\nmore while it fetches a fresh one, so the origin hears about a link about four times a minute\nhowever many people open it. A cached answer never lets anyone watch after a revoke: playing\nasks the database again. While the video is not ready the answer is reused for 2 seconds only (see\n`CACHE_CONTROL_WAITING`), so a page waiting for it to play finds out at once.",
         "operationId": "share_resolve",
         "parameters": [
           {
@@ -1832,7 +1832,7 @@
                 "schema": {
                   "type": "string"
                 },
-                "description": "`public, max-age=15, stale-while-revalidate=45`"
+                "description": "`public, max-age=15, stale-while-revalidate=45`; `public, max-age=2` while the video is not ready yet."
               },
               "ETag": {
                 "schema": {

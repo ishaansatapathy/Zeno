@@ -278,7 +278,8 @@ export interface paths {
          * @description Public and cacheable: an edge may reuse the answer for 15 seconds and serve it stale for 45
          *     more while it fetches a fresh one, so the origin hears about a link about four times a minute
          *     however many people open it. A cached answer never lets anyone watch after a revoke: playing
-         *     asks the database again.
+         *     asks the database again. While the video is not ready the answer is reused for 2 seconds only (see
+         *     `CACHE_CONTROL_WAITING`), so a page waiting for it to play finds out at once.
          */
         get: operations["share_resolve"];
         put?: never;
@@ -2143,7 +2144,7 @@ export interface operations {
             /** @description What the page needs. */
             200: {
                 headers: {
-                    /** @description `public, max-age=15, stale-while-revalidate=45` */
+                    /** @description `public, max-age=15, stale-while-revalidate=45`; `public, max-age=2` while the video is not ready yet. */
                     "Cache-Control"?: string;
                     /** @description A weak validator over the body. */
                     ETag?: string;

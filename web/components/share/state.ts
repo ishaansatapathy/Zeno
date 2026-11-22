@@ -40,9 +40,15 @@ export function viewOf(share: ShareInfo): View {
 /** How often a viewing asks whether its link is still open. The answer is cached for 15 seconds by the API and the page, so this costs the origin almost nothing. */
 export const LINK_CHECK_SECONDS = 30;
 
-/** Seconds to wait before asking again whether a video is ready: 6, 9, 13, ... up to 30. */
+/**
+ * Seconds to wait before asking again whether a video is ready: 2, 3, 5, 7, 10, 15, 23, then 30.
+ * A video is usually playable seconds after the recording stops, and somebody who opens the link in that time
+ * is waiting for exactly that, so the first questions come quickly (the API answers a waiting page from a
+ * cache that lasts two seconds, so asking this often costs the origin almost nothing). A video that takes
+ * longer is asked about less and less.
+ */
 export function pollDelaySeconds(attempt: number): number {
-  return Math.min(30, Math.round(6 * 1.5 ** Math.max(0, attempt)));
+  return Math.min(30, Math.round(2 * 1.5 ** Math.max(0, attempt)));
 }
 
 /** The words for a video that is not ready. */

@@ -284,10 +284,19 @@ db_test! {
         sqlx::query("update videos set status = 'processing' where id = $1").bind(video).execute(&pool).await.unwrap();
         let rec = recording(&app, &owner, Some(video)).await;
         let c = code(&make_link(&app, &owner, rec, json!({})).await);
-        assert_eq!(resolve(&app, &c).await.body["share"]["status"], "processing");
+        let waiting = resolve(&app, &c).await;
+        assert_eq!(waiting.body["share"]["status"], "processing");
+        // Somebody waiting for it to play must find out at once: the answer is not kept for long, and never served stale.
+        assert_eq!(waiting.headers[header::CACHE_CONTROL], "public, max-age=2");
         let started = play(&app, &c, json!({})).await;
         assert_eq!((started.status, started.code()), (StatusCode::CONFLICT, "not_ready"));
         assert_eq!(open_sessions(&pool).await, 0);
+
+        // The moment it is ready the page is kept for the usual fifteen seconds again.
+        sqlx::query("update videos set status = 'ready' where id = $1").bind(video).execute(&pool).await.unwrap();
+        let ready = resolve(&app, &c).await;
+        assert_eq!(ready.body["share"]["status"], "ready");
+        assert!(ready.headers[header::CACHE_CONTROL].to_str().unwrap().starts_with("public, max-age=15"));
     }
 }
 

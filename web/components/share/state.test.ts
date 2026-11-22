@@ -40,8 +40,8 @@ describe("viewOf", () => {
 
 describe("pollDelaySeconds", () => {
   it("starts quick, slows down, and never goes beyond half a minute", () => {
-    expect([0, 1, 2, 3, 4, 5, 10, 50].map(pollDelaySeconds)).toEqual([6, 9, 14, 20, 30, 30, 30, 30]);
-    expect(pollDelaySeconds(-3)).toBe(6);
+    expect([0, 1, 2, 3, 4, 5, 10, 50].map(pollDelaySeconds)).toEqual([2, 3, 5, 7, 10, 15, 30, 30]);
+    expect(pollDelaySeconds(-3)).toBe(2);
   });
 });
 
