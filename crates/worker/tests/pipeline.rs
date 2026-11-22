@@ -18,11 +18,21 @@ macro_rules! db_test {
     };
 }
 
-async fn run(ctx: &pipeline::Context) {
+/// Runs the job that is due, which makes the first rendition: the video can be watched after it.
+async fn run_first(ctx: &pipeline::Context) {
     let handled = runner::run_once(ctx, &CancellationToken::new())
         .await
         .unwrap();
     assert!(handled, "there should have been a job to run");
+}
+
+/// Runs everything that is due until nothing is: the first rendition, and then the rest of the ladder.
+async fn run(ctx: &pipeline::Context) {
+    run_first(ctx).await;
+    while runner::run_once(ctx, &CancellationToken::new())
+        .await
+        .unwrap()
+    {}
 }
 
 fn looks_like_plain_mpegts(bytes: &[u8]) -> bool {
@@ -228,7 +238,6 @@ db_test! {
         // The same bytes in an accepted container transcode fine; the container is what is judged.
         let accepted = seed(&ctx, make_in_container(scratch.path(), "ok.mkv", "matroska")).await;
         let refused = seed(&ctx, make_in_container(scratch.path(), "no.nut", "nut")).await;
-        run(&ctx).await;
         run(&ctx).await;
         assert_eq!(video_state(&pool, accepted).await.status, "ready");
         let video = video_state(&pool, refused).await;
@@ -452,5 +461,167 @@ db_test! {
         assert_eq!(key.len(), 16);
         assert!(!blob.windows(16).any(|w| w == &key[..]), "the raw key must not appear in the database");
         assert!(test_vault().open(uuid::Uuid::new_v4(), &blob).is_err(), "bound to its own video");
+    }
+}
+
+// ---- first play: one rendition, then the rest ---------------------------------------------------------------
+
+async fn live_jobs(pool: &PgPool, kind: &str) -> i64 {
+    sqlx::query_scalar(
+        "select count(*) from jobs where kind = $1 and completed_at is null and failed_at is null",
+    )
+    .bind(kind)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+db_test! {
+    async fn the_video_plays_after_the_first_rendition_while_the_rest_waits_in_its_own_job(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &Spec::default())).await;
+
+        run_first(&ctx).await;
+
+        // Ready, with exactly one rendition: the largest up to 360p.
+        let video = video_state(&pool, id).await;
+        assert_eq!(video.status, "ready", "{:?}", video.error_code);
+        assert_eq!(rendition_names(&video), ["360p"]);
+        assert_eq!((video.width, video.height, video.duration), (Some(1280), Some(720), Some(3)));
+        let has_ready_at: bool = sqlx::query_scalar("select ready_at is not null from videos where id = $1").bind(id).fetch_one(&pool).await.unwrap();
+        assert!(has_ready_at);
+
+        // The master lists only what is there, and it decrypts with the key that is stored.
+        let master = String::from_utf8(ctx.store.get_bytes(&format!("videos/{id}/master.m3u8"), 1 << 16).await.unwrap()).unwrap();
+        assert_eq!(master.lines().filter(|l| l.ends_with("/index.m3u8")).collect::<Vec<_>>(), ["360p/index.m3u8"]);
+        let key = stored_key(&pool, id).await;
+        let play = scratch_dir();
+        assert!(decodes_cleanly(&fetch_variant(&ctx, id, "360p", &key, play.path()).await));
+        assert_eq!(ctx.store.head(&format!("videos/{id}/720p/index.m3u8")).await.unwrap(), None, "nothing else is published yet");
+
+        // The rest is queued, once, and the first job is done.
+        assert_eq!(live_jobs(&pool, "transcode").await, 0);
+        assert_eq!(live_jobs(&pool, "transcode_rest").await, 1);
+        assert!(
+            jobs::enqueue(&pool, "transcode", &serde_json::json!({ "video_id": id })).await.unwrap().is_none(),
+            "a video has one live job at a time, of either kind"
+        );
+
+        // The rest arrives, under the same key, and the ladder is the whole ladder.
+        run(&ctx).await;
+        let video = video_state(&pool, id).await;
+        assert_eq!(rendition_names(&video), ["144p", "240p", "360p", "480p", "720p", "audio"]);
+        assert_eq!(live_jobs(&pool, "transcode_rest").await, 0);
+        assert_eq!(stored_key(&pool, id).await, key, "the key did not change");
+        let master = String::from_utf8(ctx.store.get_bytes(&format!("videos/{id}/master.m3u8"), 1 << 16).await.unwrap()).unwrap();
+        assert_eq!(master.lines().filter(|l| l.ends_with("/index.m3u8")).count(), 6);
+        for variant in ["144p", "720p", "audio"] {
+            let local = fetch_variant(&ctx, id, variant, &key, play.path()).await;
+            assert!(decodes_cleanly(&local), "{variant} decrypts with the key the first rendition used");
+        }
+        assert!(dir_is_empty(&ctx.config.work_dir), "both jobs clean up after themselves");
+    }
+}
+
+db_test! {
+    async fn viewers_see_a_consistent_ladder_at_every_moment_while_the_rest_is_added(pool: PgPool) {
+        let ctx = context_with(pool.clone(), |c| c.encode_threads = 1).await;
+        let scratch = scratch_dir();
+        let spec = Spec { secs: 6, ..Spec::default() };
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &spec)).await;
+        run_first(&ctx).await;
+
+        let rest = {
+            let ctx = ctx.clone();
+            tokio::spawn(async move { run(&ctx).await })
+        };
+        // Whenever somebody looks, every rendition the master names is one the row names (the API refuses a
+        // master that names more), and every playlist it names is already in storage. The master is read
+        // first: the row can only have grown by the time it is read.
+        let mut seen = std::collections::BTreeSet::new();
+        while !rest.is_finished() {
+            let master = String::from_utf8(ctx.store.get_bytes(&format!("videos/{id}/master.m3u8"), 1 << 16).await.unwrap()).unwrap();
+            let named: Vec<String> = master.lines().filter_map(|l| l.strip_suffix("/index.m3u8")).map(str::to_owned).collect();
+            let row = rendition_names(&video_state(&pool, id).await);
+            for name in &named {
+                assert!(row.contains(name), "the master names {name}, the row has {row:?}");
+                assert!(ctx.store.head(&format!("videos/{id}/{name}/index.m3u8")).await.unwrap().is_some(), "{name} is named before it is there");
+            }
+            seen.insert(named.len());
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        rest.await.unwrap();
+        assert!(seen.len() >= 3, "the ladder was seen growing, not appearing at once: {seen:?}");
+        assert_eq!(rendition_names(&video_state(&pool, id).await).len(), 6);
+    }
+}
+
+db_test! {
+    async fn nothing_more_is_queued_for_a_video_with_nothing_more_to_make(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let spec = Spec { width: 256, height: 144, audio: false, ..Spec::default() };
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &spec)).await;
+        run_first(&ctx).await;
+        assert_eq!(rendition_names(&video_state(&pool, id).await), ["144p"]);
+        assert_eq!(live_jobs(&pool, "transcode_rest").await, 0);
+    }
+}
+
+db_test! {
+    async fn a_video_with_one_picture_rung_and_sound_still_gets_its_audio_only_rendition(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let spec = Spec { width: 256, height: 144, ..Spec::default() };
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &spec)).await;
+        run_first(&ctx).await;
+        assert_eq!(live_jobs(&pool, "transcode_rest").await, 1);
+        run(&ctx).await;
+        assert_eq!(rendition_names(&video_state(&pool, id).await), ["144p", "audio"]);
+    }
+}
+
+db_test! {
+    async fn a_video_deleted_before_the_rest_is_made_gets_no_more_renditions(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &Spec::default())).await;
+        run_first(&ctx).await;
+        sqlx::query("update videos set deleted_at = now() where id = $1").bind(id).execute(&pool).await.unwrap();
+        run(&ctx).await;
+        assert_eq!(rendition_names(&video_state(&pool, id).await), ["360p"]);
+        assert_eq!(live_jobs(&pool, "transcode_rest").await, 0, "the job ends quietly");
+        assert_eq!(ctx.store.head(&format!("videos/{id}/720p/index.m3u8")).await.unwrap(), None);
+    }
+}
+
+db_test! {
+    async fn a_video_encoded_again_during_the_rest_is_not_given_renditions_under_the_old_key(pool: PgPool) {
+        let ctx = context_with(pool.clone(), |c| c.encode_threads = 1).await;
+        let scratch = scratch_dir();
+        let spec = Spec { secs: 8, ..Spec::default() };
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &spec)).await;
+        run_first(&ctx).await;
+        let old_key = stored_blob(&pool, id).await;
+
+        let rest = {
+            let ctx = ctx.clone();
+            tokio::spawn(async move { run(&ctx).await })
+        };
+        // As soon as one more rendition is in, the video gets a new key (what encoding it again does).
+        loop {
+            if rendition_names(&video_state(&pool, id).await).len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let other = test_vault().seal(id, &[9u8; 16]).unwrap();
+        sqlx::query("update video_keys set wrapped_key = $2 where video_id = $1").bind(id).bind(&other).execute(&pool).await.unwrap();
+        rest.await.unwrap();
+
+        assert_ne!(stored_blob(&pool, id).await, old_key);
+        assert!(rendition_names(&video_state(&pool, id).await).len() < 6, "it stopped instead of adding more");
+        assert_eq!(live_jobs(&pool, "transcode_rest").await, 0, "and its job is finished, not retried forever");
     }
 }

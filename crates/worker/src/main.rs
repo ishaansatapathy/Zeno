@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use anyhow::Context as _;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 use zeno_core::storage::S3Store;
 use zeno_worker::config::WorkerConfig;
 use zeno_worker::pipeline::Context;
+use zeno_worker::runner::Lane;
 use zeno_worker::{preflight, runner};
 
 #[tokio::main]
@@ -19,12 +23,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let config = WorkerConfig::from_env().context("invalid configuration")?;
-    let pool_size = u32::try_from(config.concurrency).unwrap_or(1) + 3;
+    // A connection each for the runners, one that listens for announcements, and a few spare.
+    let pool_size = u32::try_from(config.concurrency + config.rest_concurrency).unwrap_or(2) + 4;
     let db = zeno_core::db::connect(&config.database_url, pool_size)
         .await
         .context("could not connect to Postgres")?;
     let store = S3Store::new(&config.storage).context("invalid storage configuration")?;
-    let concurrency = config.concurrency;
+    let (concurrency, rest_concurrency) = (config.concurrency, config.rest_concurrency);
     let ctx = Context { db, store, config };
 
     preflight::check(&ctx)
@@ -42,13 +47,24 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    tracing::info!(concurrency, "worker started");
+    tracing::info!(concurrency, rest_concurrency, "worker started");
+    let wake = Arc::new(Notify::new());
+    tokio::spawn(runner::listen_for_jobs(
+        ctx.db.clone(),
+        wake.clone(),
+        shutdown.clone(),
+    ));
     let mut runners = Vec::new();
-    for _ in 0..concurrency {
-        runners.push(tokio::spawn(runner::run_forever(
-            ctx.clone(),
-            shutdown.clone(),
-        )));
+    for (lane, count) in [(Lane::First, concurrency), (Lane::Rest, rest_concurrency)] {
+        for _ in 0..count {
+            runners.push(tokio::spawn(runner::run_lane(
+                ctx.clone(),
+                shutdown.clone(),
+                lane,
+                wake.clone(),
+                runner::IDLE_POLL,
+            )));
+        }
     }
     for runner in runners {
         let _ = runner.await;

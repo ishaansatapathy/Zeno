@@ -175,6 +175,7 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
                 max_source_bytes: 64 << 20,
             },
             concurrency: 1,
+            rest_concurrency: 1,
             encode_threads: 2,
             encode_timeout: None,
         },
@@ -190,6 +191,11 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
         .send()
         .await;
     assert_eq!(shown.body["video"]["status"], "ready", "{:?}", shown.body);
+    assert_eq!(
+        shown.body["video"]["renditions"].as_array().unwrap().len(),
+        1,
+        "ready after the first rendition: the rest is still to come"
+    );
 
     // Build and publish a free course, then enroll a real student. The player path below is the
     // student lesson route—not the creator-only raw video preview route.
@@ -245,7 +251,48 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
         res.body["playback"]["playlist_url"].as_str().unwrap()
     );
     let (ok, stderr) = play_with_ffmpeg(&master).await;
-    assert!(ok && stderr.trim().is_empty(), "playback failed: {stderr}");
+    assert!(
+        ok && stderr.trim().is_empty(),
+        "playback of the first rendition failed: {stderr}"
+    );
+
+    // The rest of the ladder arrives while that viewing is open; the viewing is not disturbed, and
+    // somebody who opens the video afterwards is given the whole ladder.
+    while zeno_worker::runner::run_once(&worker, &CancellationToken::new())
+        .await
+        .unwrap()
+    {}
+    let grown = app
+        .get(&format!("/v1/videos/{video}"))
+        .jar(&creator)
+        .send()
+        .await;
+    assert!(
+        grown.body["video"]["renditions"].as_array().unwrap().len() > 1,
+        "{:?}",
+        grown.body
+    );
+    let (ok, stderr) = play_with_ffmpeg(&master).await;
+    assert!(
+        ok && stderr.trim().is_empty(),
+        "the open viewing broke when renditions were added: {stderr}"
+    );
+    let second = app
+        .post(&format!("/v1/lessons/{lesson_id}/play"))
+        .jar(&student)
+        .json(json!({}))
+        .send()
+        .await;
+    assert_eq!(second.status, StatusCode::CREATED, "{:?}", second.body);
+    let second_master = format!(
+        "http://{api}{}",
+        second.body["playback"]["playlist_url"].as_str().unwrap()
+    );
+    let (ok, stderr) = play_with_ffmpeg(&second_master).await;
+    assert!(
+        ok && stderr.trim().is_empty(),
+        "playback of the whole ladder failed: {stderr}"
+    );
 
     let fetches: i32 =
         sqlx::query_scalar("select key_fetches from playback_sessions where id = $1::uuid")

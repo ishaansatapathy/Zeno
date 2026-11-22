@@ -48,6 +48,28 @@ pub fn choose(source_height: u32) -> Vec<Rung> {
     rungs
 }
 
+/// The height the first rendition aims at: sharp enough to be watched properly on a laptop, small enough to
+/// be encoded in a fraction of the video's length. People can watch as soon as this one is published.
+pub const FIRST_PLAY_HEIGHT: u32 = 360;
+
+/// Which rung is encoded and published first: the largest that does not exceed `FIRST_PLAY_HEIGHT`, or the
+/// smallest there is when the source is smaller than that is. `rungs` is lowest first and not empty.
+pub fn first_play_index(rungs: &[Rung]) -> usize {
+    rungs
+        .iter()
+        .rposition(|rung| rung.height <= FIRST_PLAY_HEIGHT)
+        .unwrap_or(0)
+}
+
+/// The rungs left after the first one is out, in the order they are worth waiting for: the ones above it
+/// first, nearest first (people on a good connection see a better picture sooner), then the ones below it,
+/// highest first (they only matter to a viewer whose connection is poor).
+pub fn rest_in_order(rungs: &[Rung], first: usize) -> Vec<Rung> {
+    let above = rungs.iter().skip(first + 1).cloned();
+    let below = rungs.iter().take(first).rev().cloned();
+    above.chain(below).collect()
+}
+
 /// Output width for a given height and display aspect ratio, rounded down to an even number
 /// as H.264 4:2:0 requires.
 pub fn display_width(height: u32, display_aspect: f64) -> u32 {
@@ -73,6 +95,25 @@ mod tests {
         assert_eq!(heights(360), [144, 240, 360]);
         assert_eq!(heights(144), [144]);
         assert_eq!(heights(143), [142]);
+    }
+
+    #[test]
+    fn the_first_rendition_is_the_largest_up_to_360p_and_the_rest_follow_in_order_of_use() {
+        let names = |rungs: &[Rung]| rungs.iter().map(|r| r.height).collect::<Vec<_>>();
+        for (source, first, rest) in [
+            (1080, 360, vec![480, 720, 240, 144]),
+            (720, 360, vec![480, 720, 240, 144]),
+            (480, 360, vec![480, 240, 144]),
+            (360, 360, vec![240, 144]),
+            (240, 240, vec![144]),
+            (144, 144, vec![]),
+            (100, 100, vec![]),
+        ] {
+            let rungs = choose(source);
+            let at = first_play_index(&rungs);
+            assert_eq!(rungs[at].height, first, "source {source}");
+            assert_eq!(names(&rest_in_order(&rungs, at)), rest, "source {source}");
+        }
     }
 
     #[test]

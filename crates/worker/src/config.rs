@@ -29,6 +29,10 @@ pub struct WorkerConfig {
     /// Transcode jobs run at the same time in this process. Encoding is CPU-bound, so the
     /// default is one.
     pub concurrency: usize,
+    /// Jobs at a time that add the remaining renditions to videos people can already watch. They share the
+    /// machine with the first renditions, so they are kept to their own lane (and one, by default): a long
+    /// video's last renditions must not hold up the next video's first play.
+    pub rest_concurrency: usize,
     /// Threads given to each ffmpeg process (0 lets ffmpeg decide).
     pub encode_threads: u32,
     /// Overrides the computed per-ffmpeg-process timeout. Left unset in production.
@@ -55,6 +59,13 @@ impl WorkerConfig {
                 reason: "must be at least 1".into(),
             });
         }
+        let rest_concurrency: usize = parse_or("WORKER_REST_CONCURRENCY", 1)?;
+        if rest_concurrency == 0 {
+            return Err(ConfigError::Invalid {
+                name: "WORKER_REST_CONCURRENCY",
+                reason: "must be at least 1".into(),
+            });
+        }
         Ok(Self {
             database_url: required("DATABASE_URL")?,
             storage: StorageConfig::from_env()?,
@@ -68,6 +79,7 @@ impl WorkerConfig {
                 max_source_bytes: parse_or("MAX_UPLOAD_BYTES", 10u64 * 1024 * 1024 * 1024)?,
             },
             concurrency,
+            rest_concurrency,
             encode_threads: parse_or("ENCODE_THREADS", 0)?,
             encode_timeout: parse_or("ENCODE_TIMEOUT_SECS", 0u64)
                 .map(|secs| (secs > 0).then(|| Duration::from_secs(secs)))?,

@@ -194,11 +194,64 @@ pub struct Variant {
     pub playlist: String,
 }
 
+impl Variant {
+    /// How the video's row in the database describes this rendition. It carries everything the master
+    /// playlist needs, so that renditions published later can be added to a master that already exists.
+    pub fn to_rendition(&self) -> serde_json::Value {
+        serde_json::json!({
+            "name": self.name,
+            "audio_only": self.resolution.is_none(),
+            "width": self.resolution.map(|r| r.0),
+            "height": self.resolution.map(|r| r.1),
+            "bandwidth": self.peak_bps,
+            "average_bandwidth": self.average_bps,
+            "frame_rate": self.frame_rate,
+            "has_audio": self.has_audio,
+            "playlist": self.playlist,
+        })
+    }
+
+    /// The other way round. `None` for a description that is not one of ours.
+    pub fn from_rendition(value: &serde_json::Value) -> Option<Self> {
+        let name = value.get("name")?.as_str()?.to_owned();
+        let peak_bps = value.get("bandwidth")?.as_u64()?;
+        let resolution = match (
+            value.get("width").and_then(serde_json::Value::as_u64),
+            value.get("height").and_then(serde_json::Value::as_u64),
+        ) {
+            (Some(width), Some(height)) => {
+                Some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))
+            }
+            _ => None,
+        };
+        Some(Self {
+            playlist: value.get("playlist")?.as_str()?.to_owned(),
+            average_bps: value
+                .get("average_bandwidth")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(peak_bps),
+            frame_rate: value.get("frame_rate").and_then(serde_json::Value::as_f64),
+            has_audio: value
+                .get("has_audio")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            name,
+            resolution,
+            peak_bps,
+        })
+    }
+}
+
 /// Lowest-quality video first (players start at the first entry), audio-only last (Apple's
 /// authoring guidance: never let an audio-only variant be the default).
-pub fn master_playlist(variants: &[Variant]) -> String {
+pub fn ordered(variants: &[Variant]) -> Vec<&Variant> {
     let mut ordered: Vec<&Variant> = variants.iter().collect();
     ordered.sort_by_key(|v| (v.resolution.is_none(), v.peak_bps));
+    ordered
+}
+
+pub fn master_playlist(variants: &[Variant]) -> String {
+    let ordered = ordered(variants);
 
     let mut out = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-INDEPENDENT-SEGMENTS\n");
     for variant in ordered {
@@ -300,6 +353,89 @@ mod tests {
         args.iter()
             .position(|a| a == flag)
             .unwrap_or_else(|| panic!("{flag} missing in {args:?}"))
+    }
+
+    fn made(name: &str, height: Option<u32>, peak: u64) -> Variant {
+        Variant {
+            name: name.to_owned(),
+            resolution: height.map(|h| (h * 16 / 9, h)),
+            frame_rate: height.map(|_| 30.0),
+            has_audio: true,
+            peak_bps: peak,
+            average_bps: peak / 2,
+            playlist: format!("{name}/index.m3u8"),
+        }
+    }
+
+    #[test]
+    fn a_rendition_survives_the_database_unchanged_so_a_master_can_be_rebuilt_later() {
+        for original in [
+            made("360p", Some(360), 900_000),
+            made("audio", None, 70_000),
+        ] {
+            let back = Variant::from_rendition(&original.to_rendition()).unwrap();
+            assert_eq!(
+                (
+                    back.name.as_str(),
+                    back.resolution,
+                    back.frame_rate,
+                    back.has_audio
+                ),
+                (
+                    original.name.as_str(),
+                    original.resolution,
+                    original.frame_rate,
+                    original.has_audio
+                )
+            );
+            assert_eq!(
+                (back.peak_bps, back.average_bps, back.playlist),
+                (original.peak_bps, original.average_bps, original.playlist)
+            );
+        }
+        // What an older video's row holds (no average, no frame rate) still reads, with the peak standing in.
+        let old = serde_json::json!({"name": "144p", "audio_only": false, "width": 256, "height": 144, "bandwidth": 250000, "playlist": "144p/index.m3u8"});
+        let read = Variant::from_rendition(&old).unwrap();
+        assert_eq!(
+            (read.average_bps, read.frame_rate, read.has_audio),
+            (250_000, None, true)
+        );
+        assert!(Variant::from_rendition(&serde_json::json!({"name": "x"})).is_none());
+    }
+
+    #[test]
+    fn a_master_built_from_renditions_added_one_at_a_time_equals_one_built_at_once() {
+        let all = [
+            made("720p", Some(720), 3_000_000),
+            made("audio", None, 70_000),
+            made("360p", Some(360), 900_000),
+            made("144p", Some(144), 250_000),
+        ];
+        let at_once = master_playlist(&all);
+        let mut so_far: Vec<Variant> = Vec::new();
+        for next in &all {
+            so_far.push(next.clone());
+            let stored: Vec<Variant> = ordered(&so_far)
+                .iter()
+                .map(|v| Variant::from_rendition(&v.to_rendition()).unwrap())
+                .collect();
+            so_far = stored;
+        }
+        assert_eq!(master_playlist(&so_far), at_once);
+        // Lowest picture first, audio only last, however they arrived.
+        let names: Vec<&str> = at_once
+            .lines()
+            .filter(|l| l.ends_with("/index.m3u8"))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "144p/index.m3u8",
+                "360p/index.m3u8",
+                "720p/index.m3u8",
+                "audio/index.m3u8"
+            ]
+        );
     }
 
     #[test]

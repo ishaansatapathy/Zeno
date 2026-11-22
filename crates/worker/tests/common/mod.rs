@@ -47,6 +47,7 @@ pub fn test_config() -> WorkerConfig {
             max_source_bytes: 512 * 1024 * 1024,
         },
         concurrency: 1,
+        rest_concurrency: 1,
         encode_threads: 2,
         encode_timeout: None,
     }

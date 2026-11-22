@@ -28,18 +28,26 @@ impl Job {
     }
 }
 
+/// The channel a worker listens on to hear of new jobs at once instead of at its next poll.
+pub const WAKE_CHANNEL: &str = "zeno_jobs";
+
 /// Returns `None` if an equivalent live job already exists (see the unique index on
 /// transcode jobs), which makes retrying the request that enqueues it harmless.
+///
+/// Workers are told of the new job when the transaction that made it commits (Postgres holds a
+/// notification back until then), so a job is picked up in milliseconds, not at the next poll.
+/// The notification is only a hint: a worker that misses it finds the job at its next poll.
 pub async fn enqueue<'e>(
     db: impl PgExecutor<'e>,
     kind: &str,
     payload: &Value,
 ) -> Result<Option<Uuid>, sqlx::Error> {
     sqlx::query_scalar(
-        "insert into jobs (kind, payload) values ($1, $2) on conflict do nothing returning id",
+        "with inserted as (              insert into jobs (kind, payload) values ($1, $2) on conflict do nothing returning id          ) select id from inserted, lateral (select pg_notify($3, $1)) as woken",
     )
     .bind(kind)
     .bind(payload)
+    .bind(WAKE_CHANNEL)
     .fetch_optional(db)
     .await
 }
