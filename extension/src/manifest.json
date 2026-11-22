@@ -4,9 +4,10 @@
   "version": "0.0.0",
   "description": "Record your screen, camera and microphone. Saved as separate tracks, ready to edit.",
   "minimum_chrome_version": "116",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwNsgDW6WCxvVX9kGmwplyf+zoJeSu4PU4yxPyxbm6q0B+R9voCPuox1xFUlcgX/cO/67v6Gl/8wqH2O+qWW14jcOGetUiimYQTNczXKj7+GKLbQXHBHt93ea0IO3IrvIZcWg5s2d8ajS3NeyvFYg9USuxnOv/HLE6gAwVlWl4EKyVxKrSySVx8uNUoVFpiJl60xhMWuejDz9n1A22xWdS0fG5H8tU9hy712yTa2T5NYeF4n/1PPX1auzHRTK3dhl9sRO8lkhF4GQr08Sqje9h2AKMKTJNru0MFQSAA0piUk6zxj9UNjR1CKG1zSL3F4QDjfIS6NS3Ra1VYJSw08H6QIDAQAB",
   "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
   "action": { "default_title": "Record with Zeno", "default_popup": "popup.html", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
   "background": { "service_worker": "background.js" },
-  "permissions": ["offscreen", "downloads", "storage", "unlimitedStorage", "activeTab", "scripting"],
+  "permissions": ["offscreen", "downloads", "storage", "unlimitedStorage", "activeTab", "scripting", "clipboardWrite"],
   "web_accessible_resources": [{ "resources": ["bubble.html", "bubble.js"], "matches": ["<all_urls>"] }]
 }

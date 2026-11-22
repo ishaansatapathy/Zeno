@@ -16,6 +16,25 @@ const src = path.join(root, "src");
 const dist = path.join(root, "dist");
 const watch = process.argv.includes("--watch");
 
+// Where the API lives, and where the web app is (for signing in). Fixed when the extension is built, because the
+// extension asks the browser for access to exactly that address and no other site.
+//   ZENO_API_URL=https://api.zeno.example ZENO_WEB_URL=https://zeno.example npm run build
+const apiUrl = origin("ZENO_API_URL", process.env.ZENO_API_URL ?? "http://localhost:8080");
+const webUrl = origin("ZENO_WEB_URL", process.env.ZENO_WEB_URL ?? "http://localhost:3000");
+
+function origin(name, raw) {
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error(`${name} is not a URL: ${raw}`);
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1"].includes(url.hostname))) {
+    throw new Error(`${name} must be https (or http on localhost): ${raw}`);
+  }
+  return url.origin;
+}
+
 const scripts = {
   background: "background/index.ts",
   popup: "popup/popup.ts",
@@ -35,6 +54,7 @@ const options = {
   target: "chrome116",
   sourcemap: true,
   logLevel: "info",
+  define: { __ZENO_API_URL__: JSON.stringify(apiUrl), __ZENO_WEB_URL__: JSON.stringify(webUrl) },
 };
 
 const pages = [
@@ -57,6 +77,9 @@ async function copyStatic() {
   const { version } = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const manifest = JSON.parse(await readFile(path.join(src, "manifest.json"), "utf8"));
   manifest.version = version;
+  // The one site the extension may talk to as the person using it. With this access the browser sends the
+  // person's Zeno session along and does not make the API answer CORS questions for the extension.
+  manifest.host_permissions = [`${apiUrl}/*`];
   await writeFile(path.join(dist, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   for (const [from, to] of pages) await cp(path.join(src, from), path.join(dist, to));
   await mkdir(path.join(dist, "fonts"), { recursive: true });
