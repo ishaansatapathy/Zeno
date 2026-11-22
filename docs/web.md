@@ -108,8 +108,10 @@ caching one that says the link is gone.
 
 **What it says.** A code of the wrong shape is a 404 without any call. Otherwise, from what the API said:
 a video that is ready shows a cover with a play button; one that is not (being recorded, uploading,
-processing) says so and asks again by itself, 6 seconds apart and slowing to 30, and not while the tab is
-hidden; a failed one says so; a closed link says it is no longer available. A link with a password shows
+processing) says so and asks again by itself, after 2 seconds, then 3, 5, 7 ... slowing to 30 (a video is
+usually playable seconds after the recording stops, and somebody who opens the link then is waiting for exactly
+that; the API keeps such an answer for 2 seconds, not the usual 15, so asking often costs the origin almost
+nothing), and not while the tab is hidden; a failed one says so; a closed link says it is no longer available. A link with a password shows
 a password box and nothing else: not the title, not in the page, not in the preview.
 A page reused after a revoke shows a player that is refused when played, never a video that plays,
 because playing asks the database again. (A closed link is a 200 page that says so, not a 410: Next
