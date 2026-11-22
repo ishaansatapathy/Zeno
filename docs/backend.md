@@ -13,8 +13,9 @@ more currencies and providers are planned (see the README roadmap).
 The API is described as an OpenAPI 3.1 document, committed as [`openapi.json`](openapi.json). The web
 app generates its types from it, so a change to the API that the web app has not caught up with is a
 type error, not a surprise in production (see [web.md](web.md)). So far it covers the auth API, the
-recordings library (create, list, get, rename, delete) and a recording's share links (create, list,
-revoke); other areas are added as the web app starts to use them. The routes that exist but are not
+recordings library (create, list, get, rename, delete), a recording's share links (create, list,
+revoke) and the three routes that upload a recording while it is being made; other areas are added as the
+web app and the extension start to use them. The routes that exist but are not
 described yet (attaching a video, view counts, and the visitor's side of a share link) are named in
 `NOT_DESCRIBED_YET` in `tests/openapi.rs`: a new route that is neither documented nor on that list
 fails the build, and the list can only shrink.
@@ -80,6 +81,37 @@ Creators (and admins) upload straight to object storage; the API only coordinate
 | `POST /v1/videos/:id/abort` | Cancel an unfinished upload |
 | `GET /v1/videos/:id` | Status (`uploading`, `processing`, `ready`, `failed`), error code, renditions. Someone else's video looks like a missing one |
 | `DELETE /v1/videos/:id` | Stops serving the video at once; an hourly sweep then removes its files (waiting for any still-running transcode job to end first). Cancels an unfinished upload |
+
+### Uploading a recording while it is being made
+
+A file picked from disk has a size, and the part plan (and the exact length signed into each part's URL)
+follows from it. A recording has none until it stops, so it has its own three routes (documented in the
+OpenAPI document; the other video routes are on `NOT_DESCRIBED_YET`):
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/videos/streaming` | Start with no size: `filename`, `content_type`, optional `title` and `part_size_bytes` (5 to 64 MiB, default 16). The video is marked `streaming`; `upload.parts` is empty |
+| `POST /v1/videos/:id/parts` | `{number, size, last}`: a URL for one more part, signed for exactly `size` bytes. Every part but the last must be exactly the part size; the last is 1 up to it. Asking again for the same part gives a fresh URL, so a lost answer or an expired URL is just asked again. `409 not_streaming` for a finished upload or one started with a size. 2000 a person an hour |
+| `POST /v1/videos/:id/complete` | Now takes `{"size_bytes": n}` for a recording (required, within `MAX_UPLOAD_BYTES`); a file's upload sends no body, and a size sent anyway must match the one it started with |
+
+The size stated at the end gives the same part plan a file would have had. Storage is listed and every
+part must be there with its planned length *before* anything is assembled (`409 upload_incomplete` names
+the missing ones), and the assembled object is checked against the stated size again. So a client that
+lies about the size cannot get an object of another size accepted, and a recording that stopped one part
+short is refused, not published truncated. `GET /v1/videos/:id/upload` on a streaming upload lists the
+full parts storage holds; the client, which knows what it has recorded, carries on from there. Migration
+`0027` adds `videos.streaming` and relaxes the size check for uploading streaming rows only (expand-only:
+an old binary still inserts a size above zero).
+
+### Extensions
+
+`EXTENSION_ORIGINS` (comma separated `chrome-extension://<32 letters a-p>`, empty by default) lists the
+browser extensions that may call the API as the signed-in person. An origin on the list passes the CSRF
+origin check and CORS with credentials; any other extension, and any page claiming such an origin, is
+`403 forbidden_origin`. A malformed entry stops the API at start instead of silently locking an
+extension out. The extension itself must also be allowed to reach the API (its manifest asks for that one
+address) and storage must allow its origin for the part uploads (`MINIO_API_CORS_ALLOW_ORIGIN` in
+development; the bucket's CORS rule in production).
 
 Unfinished uploads are cancelled after 24 hours. Original uploads are deleted `SOURCE_RETENTION_DAYS` (default 7) after a video is ready or has failed; only the encrypted renditions remain.
 
