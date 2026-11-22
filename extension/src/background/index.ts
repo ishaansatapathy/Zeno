@@ -5,7 +5,9 @@
 // through the pure `reduce`, and changes are applied one at a time so two messages cannot overwrite each
 // other. The popup reads the same storage, so there is nothing to keep in step.
 
-import { isCommand, isOffscreenEvent, type Command, type OffscreenEvent, type RecordingOptions } from "../shared/messages";
+import { Api } from "../shared/api";
+import { API_URL } from "../shared/config";
+import { isCommand, isOffscreenEvent, type Account, type Command, type OffscreenEvent, type RecordingOptions } from "../shared/messages";
 import { IDLE, isBusy, reduce, type RecorderEvent, type RecorderState } from "../shared/state";
 
 const STATE_KEY = "recorder";
@@ -41,8 +43,8 @@ async function ensureOffscreen(): Promise<void> {
   if (await offscreenOpen()) return;
   await chrome.offscreen.createDocument({
     url: "offscreen.html",
-    reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.DISPLAY_MEDIA],
-    justification: "Record the screen, camera and microphone while the popup is closed.",
+    reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.DISPLAY_MEDIA, chrome.offscreen.Reason.CLIPBOARD],
+    justification: "Record the screen, camera and microphone while the popup is closed, and put the share link on the clipboard when it ends.",
   });
 }
 
@@ -57,6 +59,13 @@ async function reconcile(): Promise<RecorderState> {
     return apply({ type: "failed", code: "unexpected", message: "The recording was interrupted. What was recorded before that is kept." });
   }
   return state;
+}
+
+/** Who is signed in to Zeno in this browser. The extension has no sign-in of its own: it uses the web app's session. */
+async function account(): Promise<Account> {
+  const me = await new Api(API_URL).me();
+  if (me.ok) return { status: "signed_in", name: me.data.name, email: me.data.email ?? "" };
+  return me.error.status === 0 || me.error.status >= 500 ? { status: "unreachable" } : { status: "signed_out" };
 }
 
 async function start(options: RecordingOptions): Promise<RecorderState> {
@@ -129,6 +138,9 @@ async function onRecorder(event: OffscreenEvent): Promise<void> {
       }
       return;
     }
+    case "upload":
+      await apply({ type: "upload", id: event.id, view: event.view });
+      return;
     case "failed":
       await hideBubble();
       // Closing the picker is not a failure: go back to the start without a word.
@@ -149,6 +161,8 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     switch (command.type) {
       case "recorder.status":
         return reconcile();
+      case "recorder.account":
+        return account();
       case "recorder.start":
         await reconcile();
         return start(command.options);

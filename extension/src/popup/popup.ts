@@ -3,7 +3,8 @@
 // sends the person's choices as commands.
 
 import { bytesText, clock } from "../shared/format";
-import type { Command, RecordingOptions, SavedFile } from "../shared/messages";
+import { WEB_URL } from "../shared/config";
+import type { Account, Command, RecordingOptions, SavedFile, UploadView } from "../shared/messages";
 import { IDLE, type RecorderState } from "../shared/state";
 
 const app = document.getElementById("app") as HTMLElement;
@@ -23,6 +24,8 @@ const DEFAULTS: Settings = { screen: true, systemAudio: false, microphone: true,
 let settings: Settings = { ...DEFAULTS };
 let timer: ReturnType<typeof setInterval> | null = null;
 let current: RecorderState = IDLE;
+/** What is on screen, apart from the numbers that change as an upload goes: if it is the same, only the numbers are updated. */
+let shownKey = "";
 
 // ---- a very small way to build elements, without ever turning text into markup ------------------------------
 
@@ -43,8 +46,12 @@ function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props = {}, ...
   return element;
 }
 
-async function send(command: Command): Promise<RecorderState> {
-  return (await chrome.runtime.sendMessage(command)) as RecorderState;
+async function ask<T>(command: Command): Promise<T> {
+  return (await chrome.runtime.sendMessage(command)) as T;
+}
+
+function send(command: Command): Promise<RecorderState> {
+  return ask<RecorderState>(command);
 }
 
 // ---- remembering what the person chose last time ---------------------------------------------------------
@@ -107,7 +114,72 @@ function deviceSelect(id: "microphoneId" | "cameraId", label: string, list: Medi
   return select;
 }
 
+// ---- the share link ---------------------------------------------------------------------------------------
+
+/** Who is signed in. A server that is slow to answer must not hold the popup up, so it is not waited for. */
+async function whoIsSignedIn(): Promise<Account | null> {
+  try {
+    return await Promise.race([ask<Account>({ type: "recorder.account" }), new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))]);
+  } catch {
+    return null;
+  }
+}
+
+function openZeno(path: string): void {
+  void chrome.tabs.create({ url: `${WEB_URL}${path}` });
+}
+
+function accountNote(account: Account | null): HTMLElement | null {
+  if (!account) return null;
+  if (account.status === "signed_in") return h("p", { class: "note", id: "account" }, `A share link is made as soon as you start. Signed in as ${account.email || account.name}.`);
+  if (account.status === "unreachable") return h("p", { class: "note", id: "account" }, "Zeno cannot be reached right now. You can still record: it is saved on this computer.");
+  const signIn = h("button", { class: "secondary", id: "sign-in", type: "button" }, "Sign in to Zeno");
+  signIn.addEventListener("click", () => openZeno("/login"));
+  return h("div", { id: "account", class: "account" }, h("p", { class: "note" }, "Sign in to Zeno to get a share link while you record. Without it, the recording is only saved on this computer."), signIn);
+}
+
+/** One line on how the upload is going, in words a person can act on. */
+function uploadText(view: UploadView | undefined): string {
+  if (!view) return "";
+  switch (view.phase) {
+    case "off":
+      return view.reason === "signed_out" ? "Not uploaded: sign in to Zeno to get a link." : (view.message ?? "Not uploaded.");
+    case "connecting":
+      return view.reason === "unreachable" ? "Zeno cannot be reached. Recording goes on, and the upload catches up." : "Getting your link ready…";
+    case "uploading":
+      return view.reason === "unreachable" ? "Zeno cannot be reached. Recording goes on, and the upload catches up." : `Uploading as you record · ${bytesText(view.sent)} sent`;
+    case "finishing":
+      return view.reason === "unreachable" ? "Zeno cannot be reached. Trying again…" : "Finishing the upload…";
+    case "done":
+      return "Uploaded. Zeno is preparing it for playback.";
+    case "failed":
+      return `${view.message ?? "The upload did not finish."} Your copy is saved on this computer.`;
+  }
+}
+
+/** The link, ready to copy, and how the upload is going. */
+function linkBox(view: UploadView | undefined): HTMLElement | null {
+  if (!view) return null;
+  const parts: Child[] = [];
+  if (view.url) {
+    const url = view.url;
+    const field = h("input", { class: "link", id: "share-url", type: "text", readOnly: true, value: url, "aria-label": "Share link" });
+    field.addEventListener("focus", () => field.select());
+    const copy = h("button", { class: "secondary copy", id: "copy", type: "button" }, "Copy link");
+    copy.addEventListener("click", () => {
+      void navigator.clipboard.writeText(url).then(() => {
+        copy.textContent = "Copied";
+      });
+    });
+    parts.push(h("div", { class: "linkrow" }, field, copy));
+    if (view.copied) parts.push(h("p", { class: "note", id: "copied" }, "The link is on your clipboard."));
+  }
+  parts.push(h("p", { class: "note", id: "upload-line", role: "status", "aria-live": "polite" }, uploadText(view)));
+  return h("div", { class: "share" }, ...parts);
+}
+
 async function idleScreen(): Promise<HTMLElement> {
+  const account = await whoIsSignedIn();
   const microphones = settings.microphone ? await devices("audioinput") : [];
   const cameras = settings.camera ? await devices("videoinput") : [];
   const items = [
@@ -131,6 +203,7 @@ async function idleScreen(): Promise<HTMLElement> {
     h("h1", {}, "Ready when ", h("em", {}, "you are.")),
     list,
     start,
+    accountNote(account),
     h("p", { class: "note" }, "Recordings are saved to your Downloads folder, in a Zeno folder."),
   );
 }
@@ -171,6 +244,7 @@ function recordingScreen(state: Extract<RecorderState, { phase: "recording" }>):
     {},
     h("div", { class: "status", role: "status" }, h("span", { class: "dot", "aria-hidden": "true" }), time),
     h("p", { class: "label", style: "margin-bottom:20px" }, `Recording ${names}`),
+    linkBox(state.upload),
     stop,
     h("p", { class: "note" }, "You can also stop from the browser's own Stop sharing bar."),
   );
@@ -183,6 +257,7 @@ function savedScreen(state: Extract<RecorderState, { phase: "saved" }>): HTMLEle
     "section",
     {},
     h("h1", {}, "Saved ", h("em", {}, clock(state.durationMs))),
+    linkBox(state.upload),
     h("ul", { class: "files", "aria-label": "Saved files" }, ...state.files.map((file: SavedFile) => h("li", {}, h("span", { class: "file", title: file.name }, file.name), h("span", { class: "size" }, bytesText(file.bytes))))),
     again,
     h("p", { class: "note" }, "In your Downloads folder, in a Zeno folder."),
@@ -195,7 +270,22 @@ function failedScreen(state: Extract<RecorderState, { phase: "failed" }>): HTMLE
   return h("section", {}, h("h1", {}, "That didn't ", h("em", {}, "work.")), h("p", { class: "problem", role: "alert" }, state.message), again);
 }
 
+/** Everything on screen except the running numbers. */
+function keyOf(state: RecorderState): string {
+  const upload = "upload" in state ? state.upload : undefined;
+  return [state.phase, "id" in state ? state.id : "", upload?.phase, upload?.reason, upload?.url, upload?.copied, upload?.message].join("|");
+}
+
 function render(state: RecorderState): void {
+  const key = keyOf(state);
+  // Only the numbers of an upload moved: say them in place, so a link that is being selected is not thrown away.
+  const line = document.getElementById("upload-line");
+  if (key === shownKey && line && "upload" in state) {
+    line.textContent = uploadText(state.upload);
+    current = state;
+    return;
+  }
+  shownKey = key;
   current = state;
   if (timer) clearInterval(timer);
   timer = null;

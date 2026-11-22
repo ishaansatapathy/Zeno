@@ -6,6 +6,7 @@
 // the last second, not the recording.
 
 interface SyncHandle {
+  read(buffer: ArrayBuffer | ArrayBufferView, options?: { at?: number }): number;
   write(buffer: ArrayBuffer | ArrayBufferView, options?: { at?: number }): number;
   flush(): void;
   getSize(): number;
@@ -16,9 +17,10 @@ interface SyncHandle {
 type Message =
   | { n: number; op: "open"; path: string[] }
   | { n: number; op: "write"; data: ArrayBuffer }
+  | { n: number; op: "read"; start: number; end: number }
   | { n: number; op: "close" };
 
-type Reply = { n: number; ok: true; size: number } | { n: number; ok: false; name: string; message: string };
+type Reply = { n: number; ok: true; size: number; data?: ArrayBuffer } | { n: number; ok: false; name: string; message: string };
 
 let handle: SyncHandle | null = null;
 let offset = 0;
@@ -50,6 +52,14 @@ self.onmessage = async (event: MessageEvent<Message>) => {
       offset += written;
       handle.flush();
       return reply({ n: request.n, ok: true, size: offset });
+    }
+    if (request.op === "read") {
+      // What is already on disk, for the upload to send while the recording goes on. The range is always
+      // below what has been flushed, so it never reads a chunk that is half written.
+      const data = new ArrayBuffer(request.end - request.start);
+      const got = handle.read(data, { at: request.start });
+      if (got !== data.byteLength) throw new Error("The recording is shorter than it should be.");
+      return (self as unknown as { postMessage(message: Reply, transfer: Transferable[]): void }).postMessage({ n: request.n, ok: true, size: offset, data }, [data]);
     }
     handle.flush();
     const size = handle.getSize();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SavedFile } from "./messages";
+import type { SavedFile, UploadView } from "./messages";
 import { IDLE, isBusy, reduce, type RecorderEvent, type RecorderState } from "./state";
 
 const file: SavedFile = { track: "screen", name: "screen.webm", bytes: 1234, mime: "video/webm" };
@@ -112,5 +112,38 @@ describe("failures", () => {
   it("allow another try from the failed screen", () => {
     const failed: RecorderState = { phase: "failed", code: "unexpected", message: "x" };
     expect(reduce(failed, { type: "start-requested", id: "r3", screen: false })).toEqual({ phase: "starting", id: "r3" });
+  });
+});
+
+describe("the upload, which outlives the recording", () => {
+  const view: UploadView = { phase: "uploading", sent: 100, total: null, url: "https://zeno.test/s/abc", copied: false };
+  const recording: RecorderState = { phase: "recording", id: "r1", startedAt: 1, tracks: ["screen"] };
+
+  it("is shown on the recording it belongs to", () => {
+    expect(run([{ type: "upload", id: "r1", view }], recording)).toEqual({ ...recording, upload: view });
+  });
+
+  it("follows the recording through stopping and saved, and goes on changing after it", () => {
+    const state = run(
+      [
+        { type: "upload", id: "r1", view },
+        { type: "stop-requested" },
+        { type: "stopped", id: "r1", durationMs: 5000, files: [file] },
+        { type: "upload", id: "r1", view: { ...view, phase: "done", sent: 500, total: 500, copied: true } },
+      ],
+      recording,
+    );
+    expect(state).toMatchObject({ phase: "saved", id: "r1", upload: { phase: "done", copied: true, url: "https://zeno.test/s/abc" } });
+  });
+
+  it("ignores a late word about another recording, or about nothing", () => {
+    expect(run([{ type: "upload", id: "old", view }], recording)).toEqual(recording);
+    expect(run([{ type: "upload", id: "r1", view }])).toEqual(IDLE);
+    expect(run([{ type: "upload", id: "r1", view }], { phase: "failed", code: "unexpected", message: "x" })).toEqual({ phase: "failed", code: "unexpected", message: "x" });
+  });
+
+  it("is gone when the person starts again", () => {
+    const saved = run([{ type: "upload", id: "r1", view }, { type: "stopped", id: "r1", durationMs: 1, files: [file] }], recording);
+    expect(run([{ type: "dismissed" }, { type: "start-requested", id: "r2", screen: false }], saved)).toEqual({ phase: "starting", id: "r2" });
   });
 });

@@ -6,16 +6,16 @@
 // "start", a "stopped" nobody asked for) changes nothing, so a repeated or late message cannot
 // corrupt a recording.
 
-import type { FailureCode, SavedFile, Track } from "./messages";
+import type { FailureCode, SavedFile, Track, UploadView } from "./messages";
 
 export type RecorderState =
   | { phase: "idle" }
   /** The browser's own picker is open. */
   | { phase: "choosing"; id: string }
   | { phase: "starting"; id: string }
-  | { phase: "recording"; id: string; startedAt: number; tracks: Track[] }
-  | { phase: "stopping"; id: string }
-  | { phase: "saved"; id: string; durationMs: number; files: SavedFile[] }
+  | { phase: "recording"; id: string; startedAt: number; tracks: Track[]; upload?: UploadView }
+  | { phase: "stopping"; id: string; upload?: UploadView }
+  | { phase: "saved"; id: string; durationMs: number; files: SavedFile[]; upload?: UploadView }
   | { phase: "failed"; code: FailureCode; message: string };
 
 export type RecorderEvent =
@@ -27,6 +27,8 @@ export type RecorderEvent =
   | { type: "stop-requested" }
   | { type: "stopped"; id: string; durationMs: number; files: SavedFile[] }
   | { type: "failed"; code: FailureCode; message: string }
+  /** How the upload is going. It outlives the recording: it can finish after "stopped". */
+  | { type: "upload"; id: string; view: UploadView }
   | { type: "dismissed" };
 
 export const IDLE: RecorderState = { phase: "idle" };
@@ -50,17 +52,21 @@ export function reduce(state: RecorderState, event: RecorderEvent): RecorderStat
       // From choosing as well: the picker belongs to the recorder, which says nothing until it has begun.
       return (state.phase === "starting" || state.phase === "choosing") && state.id === event.id ? { phase: "recording", id: event.id, startedAt: event.startedAt, tracks: event.tracks } : state;
     case "stop-requested":
-      return state.phase === "recording" ? { phase: "stopping", id: state.id } : state;
+      return state.phase === "recording" ? { phase: "stopping", id: state.id, ...(state.upload ? { upload: state.upload } : {}) } : state;
     case "stopped":
       // From stopping, and also from recording: the person can end it from the browser's own bar.
       if ((state.phase === "stopping" || state.phase === "recording") && state.id === event.id) {
-        return { phase: "saved", id: event.id, durationMs: event.durationMs, files: event.files };
+        return { phase: "saved", id: event.id, durationMs: event.durationMs, files: event.files, ...(state.upload ? { upload: state.upload } : {}) };
       }
       return state;
     case "failed":
       // A failure ends whatever was going on, and is shown until the person dismisses it. It does not
       // overwrite a recording that was already saved.
       return state.phase === "saved" ? state : { phase: "failed", code: event.code, message: event.message };
+    case "upload":
+      // Only for the recording it belongs to, and only while there is one to show it on.
+      if ((state.phase === "recording" || state.phase === "stopping" || state.phase === "saved") && state.id === event.id) return { ...state, upload: event.view };
+      return state;
     case "dismissed":
       return state.phase === "saved" || state.phase === "failed" ? IDLE : state;
   }

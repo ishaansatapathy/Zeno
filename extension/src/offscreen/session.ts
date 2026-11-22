@@ -8,6 +8,7 @@
 import type { FailureCode, RecordingOptions, SavedFile, Track } from "../shared/messages";
 import { fileName, pickMime } from "../shared/format";
 import { DiskError, DiskWriter, readFile, writeJson } from "./opfs";
+import type { Source } from "./uploader";
 
 /** A failure with the word the rest of the extension understands it by. */
 export class RecorderError extends Error {
@@ -58,6 +59,8 @@ export interface Hooks {
   onSourceEnded(): void;
   /** Something broke after recording had started (the disk, usually). */
   onFailure(error: RecorderError): void;
+  /** A chunk of a track is on disk (and flushed): `size` bytes of it now are. */
+  onWritten(track: Track, size: number): void;
 }
 
 /**
@@ -145,7 +148,12 @@ export class Session {
       const run: Run = { track, file, mime, recorder, writer, startedAt: 0 };
       this.runs.push(run);
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) void run.writer.write(event.data).catch((error) => this.fail(error));
+        if (event.data.size > 0) {
+          void run.writer
+            .write(event.data)
+            .then(() => this.hooks.onWritten(run.track, run.writer.size))
+            .catch((error) => this.fail(error));
+        }
       };
       recorder.onerror = () => this.fail(new RecorderError("unexpected", "The recorder stopped unexpectedly."));
     }
@@ -179,6 +187,31 @@ export class Session {
 
   get tracks(): Track[] {
     return this.runs.map((run) => run.track);
+  }
+
+  /**
+   * The file to upload for a share link: the screen when there is one, otherwise the camera. (The other
+   * track stays on this computer for the editor; the link plays one picture.) Readable while it is being
+   * written, and after.
+   */
+  get primary(): (Source & { track: Track }) | null {
+    const run = this.runs[0];
+    if (!run) return null;
+    const path = ["recordings", this.id, run.file];
+    return {
+      track: run.track,
+      size: () => run.writer.size,
+      read: async (start, end) => {
+        try {
+          return await run.writer.read(start, end);
+        } catch (error) {
+          if ((error as { kind?: string }).kind !== "Closed") throw error;
+          // The recording has ended and the file is closed: it is an ordinary file now.
+          await run.writer.closed;
+          return (await readFile(path)).slice(start, end).arrayBuffer();
+        }
+      },
+    };
   }
 
   private fail(error: unknown): void {

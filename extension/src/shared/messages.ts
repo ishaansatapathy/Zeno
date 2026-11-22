@@ -37,12 +37,38 @@ export type FailureCode =
   | "storage_full"
   | "unexpected";
 
+/** How the upload of a recording is going. The recording itself never depends on it: it is saved on disk either way. */
+export interface UploadView {
+  /**
+   * `off`: nothing is uploaded (see `reason`). `connecting`: getting the upload and the link ready, or the
+   * network is in the way. `uploading`: parts are going up while the recording goes on. `finishing`: the
+   * recording has ended and the last of it is going up. `done`: it is all in Zeno. `failed`: it could not be.
+   */
+  phase: "off" | "connecting" | "uploading" | "finishing" | "done" | "failed";
+  /** `signed_out`: no Zeno session. `unreachable`: Zeno cannot be reached right now (it keeps trying). */
+  reason?: "signed_out" | "unreachable" | "refused" | undefined;
+  /** Bytes of the recording that are in Zeno. */
+  sent: number;
+  /** The size of the whole recording, once it has ended. */
+  total: number | null;
+  /** The address to share, as soon as it exists (before the recording ends). */
+  url: string | null;
+  /** Whether the link has been put on the clipboard. */
+  copied: boolean;
+  message?: string | undefined;
+}
+
+/** Who is signed in to Zeno in this browser, as far as the extension can tell. */
+export type Account = { status: "signed_in"; name: string; email: string } | { status: "signed_out" } | { status: "unreachable" };
+
 // ---- popup -> service worker ----------------------------------------------------------------------
 
 export type Command =
   | { type: "recorder.start"; options: RecordingOptions }
   | { type: "recorder.stop" }
   | { type: "recorder.status" }
+  /** Asks who is signed in to Zeno. */
+  | { type: "recorder.account" }
   /** Leaves the "saved" or "failed" screen and goes back to the start. */
   | { type: "recorder.dismiss" };
 
@@ -62,7 +88,8 @@ export type OffscreenCommand =
 export type OffscreenEvent =
   | { target: "background"; type: "started"; id: string; startedAt: number; tracks: Track[] }
   | { target: "background"; type: "stopped"; id: string; durationMs: number; files: (SavedFile & { url: string })[] }
-  | { target: "background"; type: "failed"; id: string; code: FailureCode; message: string };
+  | { target: "background"; type: "failed"; id: string; code: FailureCode; message: string }
+  | { target: "background"; type: "upload"; id: string; view: UploadView };
 
 export function isOffscreenEvent(message: unknown): message is OffscreenEvent {
   return typeof message === "object" && message !== null && (message as { target?: unknown }).target === "background";

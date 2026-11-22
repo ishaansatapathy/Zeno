@@ -276,3 +276,29 @@ button {
   border: 1px solid color-mix(in srgb, var(--fault) 50%, transparent);
   color: var(--fault);
 }
+
+.share {
+  margin: 0 0 16px;
+}
+.linkrow {
+  display: flex;
+  gap: 8px;
+}
+.link {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line-hi);
+  background: var(--panel);
+  color: var(--paper);
+  font: 500 12px/1 "IBM Plex Mono", ui-monospace, monospace;
+}
+.copy {
+  width: auto;
+  flex: none;
+  padding: 0 14px;
+}
+.account .secondary {
+  margin-top: 10px;
+}
