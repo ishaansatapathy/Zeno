@@ -191,7 +191,7 @@ export class Uploader {
   private async setUp(): Promise<void> {
     const { backend } = this.deps;
     const started = await this.persist(
-      async () => this.ok(await backend.startUpload({ filename: this.plan.filename, title: this.plan.title, partSize: this.partSize })),
+      async () => this.ok(await backend.startUpload({ id: this.plan.recordingId, filename: this.plan.filename, title: this.plan.title, partSize: this.partSize })),
       () => this.show({ phase: "connecting", reason: "unreachable" }),
     );
     this.videoId = started.video.id;

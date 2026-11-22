@@ -50,6 +50,8 @@ const fail = (status: number, code = "x"): Result<never> => ({ ok: false, error:
 
 class FakeZeno implements Backend {
   calls: string[] = [];
+  startIds: string[] = [];
+  linkIds: string[] = [];
   parts = new Map<number, Uint8Array>();
   completedWith: number | null = null;
   /** Answers to give before the real one, per call name: a status number is a failure. */
@@ -64,7 +66,8 @@ class FakeZeno implements Backend {
   async me() {
     return this.scripted("me") ?? ok({ id: "u", name: "Asha", email: "a@x.in", email_verified: true, role: "creator" as const });
   }
-  async startUpload() {
+  async startUpload(input: { id: string }) {
+    this.startIds.push(input.id);
     return (
       this.scripted("startUpload") ??
       ok({
@@ -76,7 +79,8 @@ class FakeZeno implements Backend {
   async createRecording() {
     return this.scripted("createRecording") ?? ok({ id: "rec-1" } as never);
   }
-  async createLink() {
+  async createLink(recordingId: string) {
+    this.linkIds.push(recordingId);
     return this.scripted("createLink") ?? ok({ url: "https://zeno.test/s/abc" } as never);
   }
   async partUrl(_video: string, part: { number: number; size: number; last: boolean }) {
@@ -217,6 +221,16 @@ describe("when the network or Zeno misbehaves", () => {
     await settle();
     expect(views.some((view) => view.phase === "connecting" && view.reason === "unreachable")).toBe(true);
     expect(views.at(-1)).toMatchObject({ phase: "uploading", reason: undefined, url: "https://zeno.test/s/abc" });
+    expect(zeno.startIds).toEqual(["rec-1", "rec-1", "rec-1", "rec-1"]);
+  });
+
+  it("retries a lost link response under the same client id", async () => {
+    const { zeno, uploader, views } = setup();
+    zeno.script["createLink"] = [0];
+    uploader.start();
+    await settle();
+    expect(zeno.linkIds).toEqual(["rec-1", "rec-1"]);
+    expect(views.at(-1)?.url).toBe("https://zeno.test/s/abc");
   });
 
   it("does not upload for someone who is signed out, and says why", async () => {
@@ -255,10 +269,10 @@ describe("when the network or Zeno misbehaves", () => {
     const clock = { now: 0 };
     zeno.script["startUpload"] = Array.from({ length: 500 }, () => 0);
     const original = zeno.startUpload.bind(zeno);
-    zeno.startUpload = async () => {
+    zeno.startUpload = async (input) => {
       clock.now += 10_000;
       vi.setSystemTime(clock.now);
-      return original();
+      return original(input);
     };
     uploader.start();
     disk.append(10);

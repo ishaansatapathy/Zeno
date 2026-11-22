@@ -27,7 +27,7 @@ export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiFailure }
 /** What the uploader needs from the API, so tests can stand in for it. */
 export interface Backend {
   me(): Promise<Result<Schemas["UserResponse"]>>;
-  startUpload(input: { filename: string; title: string; partSize: number }): Promise<Result<Schemas["CreateVideoResponse"]>>;
+  startUpload(input: { id: string; filename: string; title: string; partSize: number }): Promise<Result<Schemas["CreateVideoResponse"]>>;
   partUrl(videoId: string, part: { number: number; size: number; last: boolean }): Promise<Result<Schemas["PartEnvelope"]>>;
   complete(videoId: string, sizeBytes: number): Promise<Result<Schemas["VideoEnvelope"]>>;
   createRecording(input: { id: string; title: string; videoId: string }): Promise<Result<Schemas["RecordingResponse"]>>;
@@ -100,9 +100,9 @@ export class Api implements Backend {
     );
   }
 
-  startUpload({ filename, title, partSize }: { filename: string; title: string; partSize: number }) {
+  startUpload({ id, filename, title, partSize }: { id: string; filename: string; title: string; partSize: number }) {
     return this.call(
-      () => this.client.POST("/v1/videos/streaming", { body: { filename, title, content_type: "video/webm", part_size_bytes: partSize } }),
+      () => this.client.POST("/v1/videos/streaming", { body: { id, filename, title, content_type: "video/webm", part_size_bytes: partSize } }),
       (data) => data as Schemas["CreateVideoResponse"],
     );
   }
@@ -130,7 +130,7 @@ export class Api implements Backend {
 
   createLink(recordingId: string) {
     return this.call(
-      () => this.client.POST("/v1/recordings/{id}/links", { params: { path: { id: recordingId } }, body: {} }),
+      () => this.client.POST("/v1/recordings/{id}/links", { params: { path: { id: recordingId } }, body: { id: recordingId } }),
       (data) => (data as Schemas["LinkEnvelope"]).link,
     );
   }

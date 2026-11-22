@@ -55,6 +55,8 @@ which is then added to the same two lists.
   network is slow, down or flaky, parts wait on disk and catch up (every try asks for a fresh address, and
   waits 0.5 s, 1 s, 2 s ... up to 15 s), and the recording itself is never held up. After the recording ends
   it keeps trying for 90 seconds, then says it could not finish and that the copy on the computer is kept.
+  The upload and the plain share link use the recording's stable UUID, so losing either creation response
+  and retrying returns the same resource instead of leaving an extra upload or live link.
   Which track is uploaded: the screen's, or the camera's when there is no screen; the other track stays on the
   computer for the editor.
 * **Signed out, or not allowed to upload** (a student's account): the recording works exactly the same, the
