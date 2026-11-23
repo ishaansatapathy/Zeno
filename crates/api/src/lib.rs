@@ -2,6 +2,7 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod comments;
 pub mod config;
 pub mod coupons;
 pub mod courses;
@@ -105,6 +106,7 @@ pub fn build_app(state: AppState) -> Router {
         .nest("/v1/lessons", courses::lessons::routes::item_router())
         .nest("/v1/videos", videos::routes::router())
         .nest("/v1/recordings", recordings::routes::router())
+        .nest("/v1/comments", comments::routes::router())
         .nest(
             "/v1/s",
             shares::routes::public_router().layer(from_fn_with_state(

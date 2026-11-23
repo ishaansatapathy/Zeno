@@ -233,7 +233,7 @@ pub async fn revoke(
 
 /// The link behind `code`, if it is usable. `404` for a code that never existed (including one
 /// that is not even the right shape: no database call for those), `410` for one that has closed.
-async fn live_target(state: &AppState, raw_code: &str) -> Result<Target, ApiError> {
+pub(crate) async fn live_target(state: &AppState, raw_code: &str) -> Result<Target, ApiError> {
     if !code::is_well_formed(raw_code) {
         return Err(link_not_found());
     }

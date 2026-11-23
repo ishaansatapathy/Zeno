@@ -10,7 +10,7 @@
 //! the API that the web app has not caught up with is a type error, not a surprise in production.
 //!
 //! Covered so far: authentication, the recordings library, share links (the owner's side and
-//! the visitor's), and the upload of a recording while it is made. Other areas are added as the web app starts to use them; `tests/openapi.rs` lists the routes
+//! the visitor's), the upload of a recording while it is made, and comments. Other areas are added as the web app starts to use them; `tests/openapi.rs` lists the routes
 //! that exist but are not described yet, so none is forgotten.
 
 use serde_json::{json, Value};
@@ -56,6 +56,10 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::videos::routes::create_streaming,
         crate::videos::routes::part,
         crate::videos::routes::complete,
+        crate::comments::routes::list_for_link,
+        crate::comments::routes::create,
+        crate::comments::routes::list_for_owner,
+        crate::comments::routes::remove,
     ),
     components(schemas(
         crate::auth::dto::RegisterRequest,
@@ -97,12 +101,18 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::videos::dto::PartEnvelope,
         crate::videos::dto::UploadResponse,
         crate::videos::dto::CreateVideoResponse,
+        crate::comments::dto::CreateCommentRequest,
+        crate::comments::dto::CommentAuthor,
+        crate::comments::dto::CommentResponse,
+        crate::comments::dto::CommentEnvelope,
+        crate::comments::dto::CommentListEnvelope,
     )),
     modifiers(&SessionCookie, &CommonErrors, &Enums),
     tags(
         (name = "auth", description = "Accounts and sessions."),
         (name = "recordings", description = "A person's library, and the links that share its recordings."),
         (name = "videos", description = "Uploading video. A recording is uploaded while it is made: parts go straight to storage, never through the API."),
+        (name = "comments", description = "What people watching a shared recording say about it: comments and reactions pinned to a moment."),
         (name = "share", description = "What anyone holding a share link can do. No account, no cookie."),
     )
 )]
@@ -252,6 +262,13 @@ impl Modify for Enums {
             crate::videos::dto::VIDEO_STATUSES,
             false,
         );
+        {
+            use crate::comments::dto::{EMOJIS, KINDS};
+            restrict(openapi, "CreateCommentRequest", "kind", KINDS, false);
+            restrict(openapi, "CreateCommentRequest", "emoji", EMOJIS, true);
+            restrict(openapi, "CommentResponse", "kind", KINDS, false);
+            restrict(openapi, "CommentResponse", "emoji", EMOJIS, true);
+        }
     }
 }
 

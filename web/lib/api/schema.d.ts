@@ -180,6 +180,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/comments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Removes a comment or a reaction: its author may, and so may the owner of the recording it is on.
+         *     For anyone else it does not exist.
+         */
+        delete: operations["comments_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/recordings": {
         parameters: {
             query?: never;
@@ -226,6 +246,23 @@ export interface paths {
          *     answer is `409 version_conflict` and nothing changes.
          */
         patch: operations["recordings_update"];
+        trace?: never;
+    };
+    "/v1/recordings/{id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The conversation on one of the caller's own recordings, newest first, whether or not it is open to others. */
+        get: operations["recordings_comments_list"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/recordings/{id}/links": {
@@ -284,6 +321,32 @@ export interface paths {
         get: operations["share_resolve"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/s/{code}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The conversation on a shared recording, newest first, a page at a time.
+         * @description Open to anyone who can watch: no account is needed to read. For a link with a password, only a viewing that
+         *     unlocked it may (pass the `t` of its playlist address). Never cached: it carries what the asker may delete.
+         */
+        get: operations["share_comments_list"];
+        put?: never;
+        /**
+         * Leaves a comment or a reaction on a shared recording.
+         * @description Needs a signed-in account (any), and a link that is open to the asker, as for reading. Sending the same
+         *     `id` and content again returns the comment that was left instead of a second one.
+         */
+        post: operations["share_comments_create"];
         delete?: never;
         options?: never;
         head?: never;
@@ -390,10 +453,70 @@ export interface components {
         ActivityResponse: {
             events: components["schemas"]["ActivityItem"][];
         };
+        CommentAuthor: {
+            /** @description The name on their account. */
+            name: string;
+        };
+        CommentEnvelope: {
+            comment: components["schemas"]["CommentResponse"];
+        };
+        CommentListEnvelope: {
+            /** @description Newest first. */
+            comments: components["schemas"]["CommentResponse"][];
+            /** @description When off, the owner has closed the conversation: `comments` is empty and nobody can add to it. */
+            comments_enabled: boolean;
+            /** @description Pass as `cursor` for the next page; absent on the last. */
+            next_cursor?: string | null;
+        };
+        CommentResponse: {
+            /**
+             * Format: int32
+             * @description Where in the video, in milliseconds.
+             */
+            at_ms?: number | null;
+            author: components["schemas"]["CommentAuthor"];
+            body?: string | null;
+            /** @description Whether the person asking may remove it: its author, or the owner of the recording. */
+            can_delete: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** @enum {string|null} */
+            emoji?: "👍" | "❤️" | "😂" | "🔥" | "👏" | "😮" | null;
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            kind: "comment" | "reaction";
+            /** @description Left by the person asking. */
+            mine: boolean;
+        };
         /** @description How a streaming upload ends: the size the recording came to. */
         CompleteRequest: {
             /** Format: int64 */
             size_bytes: number;
+        };
+        /** @description What a person leaves. A comment has `body`; a reaction has `emoji` and `at_ms`. */
+        CreateCommentRequest: {
+            /**
+             * Format: int64
+             * @description Where in the video, in milliseconds. Optional for a comment (without it, it is about the whole video),
+             *     required for a reaction. Not past the end of the video.
+             */
+            at_ms?: number | null;
+            /** @description The words of a comment, 1 to 1000 characters. */
+            body?: string | null;
+            /**
+             * @description One of the reactions on offer. Only for a reaction.
+             * @enum {string|null}
+             */
+            emoji?: "👍" | "❤️" | "😂" | "🔥" | "👏" | "😮" | null;
+            /**
+             * Format: uuid
+             * @description Client-generated id for retrying a post whose response was lost: the same id with the same content
+             *     returns the same comment instead of a second one.
+             */
+            id?: string | null;
+            /** @enum {string} */
+            kind: "comment" | "reaction";
         };
         CreateLinkRequest: {
             /**
@@ -554,6 +677,8 @@ export interface components {
             recordings: components["schemas"]["RecordingResponse"][];
         };
         RecordingResponse: {
+            /** @description Whether people watching may leave comments and reactions. */
+            comments_enabled: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: int32 */
@@ -665,6 +790,8 @@ export interface components {
             token: string;
         };
         UpdateRecordingRequest: {
+            /** @description Whether people watching may leave comments and reactions. Turning it off keeps what is there but hides it. */
+            comments_enabled?: boolean | null;
             title?: string | null;
             /**
              * Format: int32
@@ -1456,6 +1583,74 @@ export interface operations {
             };
         };
     };
+    comments_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The comment. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Gone. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden_origin` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     recordings_list: {
         parameters: {
             query?: {
@@ -1889,6 +2084,101 @@ export interface operations {
             };
         };
     };
+    recordings_comments_list: {
+        parameters: {
+            query?: {
+                /** @description From the previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description How many, 1 to 200 (default 100). */
+                limit?: number;
+                /** @description For a link with a password: the token of a viewing that unlocked it (the `t` of its playlist address). */
+                t?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The recording. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page. `comments_enabled` says whether others can see and add to it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentListEnvelope"];
+                };
+            };
+            /** @description `invalid_cursor` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden`: only creator and admin accounts keep a library. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed`: `limit` is not from 1 to 200. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     links_list: {
         parameters: {
             query?: never;
@@ -2187,6 +2477,232 @@ export interface operations {
             };
             /** @description `link_unavailable`: the link was good and has closed (revoked, expired, switched off, or its recording deleted). */
             410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    share_comments_list: {
+        parameters: {
+            query?: {
+                /** @description From the previous page's `next_cursor`. */
+                cursor?: string;
+                /** @description How many, 1 to 200 (default 100). */
+                limit?: number;
+                /** @description For a link with a password: the token of a viewing that unlocked it (the `t` of its playlist address). */
+                t?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The 22 characters after `/s/` in the link. */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page. With comments turned off it is empty and says so. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentListEnvelope"];
+                };
+            };
+            /** @description `invalid_cursor` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `password_required`: the link has a password and this is not a viewing that gave it. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `link_unavailable`: the link has closed. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed`: `limit` is not from 1 to 200. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    share_comments_create: {
+        parameters: {
+            query?: {
+                /** @description For a link with a password: the token of a viewing that unlocked it. */
+                t?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The 22 characters after `/s/` in the link. */
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCommentRequest"];
+            };
+        };
+        responses: {
+            /** @description Left (or already left, for a repeated `id`). */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommentEnvelope"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `password_required` or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `comments_off`, `comments_full`, `too_many_comments` (200 a person, 2000 a video) or `comment_id_conflict`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `link_unavailable`: the link has closed. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (see `fields`) or `invalid_request`. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

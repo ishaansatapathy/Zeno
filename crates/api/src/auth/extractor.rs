@@ -67,6 +67,27 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
+/// The signed-in caller if there is one, and nobody if there is not: for routes anyone may use that show a
+/// signed-in person a little more (which of the comments are theirs).
+#[derive(Debug, Clone)]
+pub struct MaybeUser(pub Option<AuthUser>);
+
+#[async_trait]
+impl FromRequestParts<AppState> for MaybeUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        match AuthUser::from_request_parts(parts, state).await {
+            Ok(user) => Ok(Self(Some(user))),
+            Err(ApiError::Unauthorized { .. }) => Ok(Self(None)),
+            Err(other) => Err(other),
+        }
+    }
+}
+
 /// Who is calling and from where, with the address resolved through the configured number
 /// of trusted proxies.
 pub struct Client(pub ClientContext);

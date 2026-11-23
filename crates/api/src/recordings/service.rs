@@ -151,6 +151,7 @@ pub async fn update(
         expected_version,
         changes.title.as_deref(),
         changes.visibility,
+        changes.comments_enabled,
     )
     .await?;
     if !changed {

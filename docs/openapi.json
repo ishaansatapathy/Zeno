@@ -889,6 +889,97 @@
         }
       }
     },
+    "/v1/comments/{id}": {
+      "delete": {
+        "tags": [
+          "comments"
+        ],
+        "summary": "Removes a comment or a reaction: its author may, and so may the owner of the recording it is on.\nFor anyone else it does not exist.",
+        "operationId": "comments_delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The comment.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Gone."
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden_origin`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/recordings": {
       "get": {
         "tags": [
@@ -1458,6 +1549,152 @@
         ]
       }
     },
+    "/v1/recordings/{id}/comments": {
+      "get": {
+        "tags": [
+          "comments"
+        ],
+        "summary": "The conversation on one of the caller's own recordings, newest first, whether or not it is open to others.",
+        "operationId": "recordings_comments_list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The recording.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "From the previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many, 1 to 200 (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "description": "For a link with a password: the token of a viewing that unlocked it (the `t` of its playlist address).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page. `comments_enabled` says whether others can see and add to it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: only creator and admin accounts keep a library.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed`: `limit` is not from 1 to 200.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/recordings/{id}/links": {
       "get": {
         "tags": [
@@ -1917,6 +2154,322 @@
             }
           }
         }
+      }
+    },
+    "/v1/s/{code}/comments": {
+      "get": {
+        "tags": [
+          "comments"
+        ],
+        "summary": "The conversation on a shared recording, newest first, a page at a time.",
+        "description": "Open to anyone who can watch: no account is needed to read. For a link with a password, only a viewing that\nunlocked it may (pass the `t` of its playlist address). Never cached: it carries what the asker may delete.",
+        "operationId": "share_comments_list",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The 22 characters after `/s/` in the link.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "From the previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many, 1 to 200 (default 100).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "description": "For a link with a password: the token of a viewing that unlocked it (the `t` of its playlist address).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page. With comments turned off it is empty and says so.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password_required`: the link has a password and this is not a viewing that gave it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`link_unavailable`: the link has closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed`: `limit` is not from 1 to 200.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "comments"
+        ],
+        "summary": "Leaves a comment or a reaction on a shared recording.",
+        "description": "Needs a signed-in account (any), and a link that is open to the asker, as for reading. Sending the same\n`id` and content again returns the comment that was left instead of a second one.",
+        "operationId": "share_comments_create",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "description": "The 22 characters after `/s/` in the link.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "description": "For a link with a password: the token of a viewing that unlocked it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCommentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Left (or already left, for a repeated `id`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`password_required` or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`comments_off`, `comments_full`, `too_many_comments` (200 a person, 2000 a video) or `comment_id_conflict`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "`link_unavailable`: the link has closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed` (see `fields`) or `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/v1/s/{code}/play": {
@@ -2549,6 +3102,124 @@
           }
         }
       },
+      "CommentAuthor": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name on their account."
+          }
+        }
+      },
+      "CommentEnvelope": {
+        "type": "object",
+        "required": [
+          "comment"
+        ],
+        "properties": {
+          "comment": {
+            "$ref": "#/components/schemas/CommentResponse"
+          }
+        }
+      },
+      "CommentListEnvelope": {
+        "type": "object",
+        "required": [
+          "comments",
+          "comments_enabled"
+        ],
+        "properties": {
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommentResponse"
+            },
+            "description": "Newest first."
+          },
+          "comments_enabled": {
+            "type": "boolean",
+            "description": "When off, the owner has closed the conversation: `comments` is empty and nobody can add to it."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; absent on the last."
+          }
+        }
+      },
+      "CommentResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "author",
+          "created_at",
+          "mine",
+          "can_delete"
+        ],
+        "properties": {
+          "at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Where in the video, in milliseconds."
+          },
+          "author": {
+            "$ref": "#/components/schemas/CommentAuthor"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "can_delete": {
+            "type": "boolean",
+            "description": "Whether the person asking may remove it: its author, or the owner of the recording."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "emoji": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "👍",
+              "❤️",
+              "😂",
+              "🔥",
+              "👏",
+              "😮",
+              null
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comment",
+              "reaction"
+            ]
+          },
+          "mine": {
+            "type": "boolean",
+            "description": "Left by the person asking."
+          }
+        }
+      },
       "CompleteRequest": {
         "type": "object",
         "description": "How a streaming upload ends: the size the recording came to.",
@@ -2560,6 +3231,65 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateCommentRequest": {
+        "type": "object",
+        "description": "What a person leaves. A comment has `body`; a reaction has `emoji` and `at_ms`.",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Where in the video, in milliseconds. Optional for a comment (without it, it is about the whole video),\nrequired for a reaction. Not past the end of the video.",
+            "minimum": 0
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The words of a comment, 1 to 1000 characters.",
+            "maxLength": 1000,
+            "minLength": 1
+          },
+          "emoji": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One of the reactions on offer. Only for a reaction.",
+            "enum": [
+              "👍",
+              "❤️",
+              "😂",
+              "🔥",
+              "👏",
+              "😮",
+              null
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Client-generated id for retrying a post whose response was lost: the same id with the same content\nreturns the same comment instead of a second one."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "comment",
+              "reaction"
+            ]
           }
         },
         "additionalProperties": false
@@ -2998,6 +3728,7 @@
           "title",
           "source",
           "visibility",
+          "comments_enabled",
           "status",
           "version",
           "view_count",
@@ -3005,6 +3736,10 @@
           "updated_at"
         ],
         "properties": {
+          "comments_enabled": {
+            "type": "boolean",
+            "description": "Whether people watching may leave comments and reactions."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -3287,6 +4022,13 @@
       "UpdateRecordingRequest": {
         "type": "object",
         "properties": {
+          "comments_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether people watching may leave comments and reactions. Turning it off keeps what is there but hides it."
+          },
           "title": {
             "type": [
               "string",
@@ -3517,6 +4259,10 @@
     {
       "name": "videos",
       "description": "Uploading video. A recording is uploaded while it is made: parts go straight to storage, never through the API."
+    },
+    {
+      "name": "comments",
+      "description": "What people watching a shared recording say about it: comments and reactions pinned to a moment."
     },
     {
       "name": "share",

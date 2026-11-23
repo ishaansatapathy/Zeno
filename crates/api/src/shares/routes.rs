@@ -36,11 +36,13 @@ pub fn recording_router() -> Router<AppState> {
         .route("/:id/links/:link", delete(revoke))
 }
 
-/// The visitor's side, mounted at `/v1/s`. Nothing here reads cookies or identifies the caller.
+/// The visitor's side, mounted at `/v1/s`. Watching reads no cookies and identifies nobody; the comments
+/// merged in below know who is signed in, to show them which are theirs and to let them add one.
 pub fn public_router() -> Router<AppState> {
     Router::new()
         .route("/:code", get(resolve))
         .route("/:code/play", post(play))
+        .merge(crate::comments::routes::viewer_router())
 }
 
 fn not_found(what: &'static str) -> ApiError {

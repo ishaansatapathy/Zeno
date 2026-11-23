@@ -175,6 +175,19 @@ pub mod policies {
         rule: Rule::per_minute(120),
         fail: Fail::Open,
     };
+    /// Reading the comments on a shared video, per client address. A page is read when somebody opens it and
+    /// now and then while they watch.
+    pub const COMMENT_READ: Policy = Policy {
+        name: "comment_read",
+        rule: Rule::per_minute(120),
+        fail: Fail::Open,
+    };
+    /// Leaving or removing a comment, per account. A person writes a few a minute at most.
+    pub const COMMENT_WRITE: Policy = Policy {
+        name: "comment_write",
+        rule: Rule::per_minute(10),
+        fail: Fail::Closed,
+    };
     /// Reading one's own progress, per account.
     pub const PROGRESS_READ: Policy = Policy {
         name: "progress_read",

@@ -103,6 +103,10 @@ enum Class {
     InvalidCredential,
     /// Any signed-in account.
     Signed,
+    /// A signed-in caller asking about something that is not there (a comment that does not exist): it is
+    /// nobody's to remove, so everyone signed in is told it is missing and nobody who is not signed in
+    /// learns anything. Whether the author and the owner can remove one is tested where comments are made.
+    SignedFindsNothing,
     /// Creators and admins; the route is not about one particular resource.
     Creator,
     /// A creator's own resource (a course, lesson or video): the owner and admins. Other
@@ -147,6 +151,8 @@ fn expect(class: Class, actor: Actor) -> Out {
         (Class::InvalidCredential, _) => Out::Unauthorized,
         (Class::Signed, Anonymous) => Out::Unauthorized,
         (Class::Signed, _) => Out::Allowed,
+        (Class::SignedFindsNothing, Anonymous) => Out::Unauthorized,
+        (Class::SignedFindsNothing, _) => Out::Hidden,
         (Class::Creator, Anonymous) => Out::Unauthorized,
         (Class::Creator, Student | Outsider) => Out::Forbidden,
         (Class::Creator, _) => Out::Allowed,
@@ -525,6 +531,7 @@ fn fill(path: &str, world: &World) -> String {
         .replace("{video}", &world.video.to_string())
         .replace("{recording}", &world.recording.to_string())
         .replace("{link}", &world.link.to_string())
+        .replace("{comment}", &Uuid::new_v4().to_string())
         .replace("{code}", &world.share_code)
         .replace("{upload}", &world.upload.to_string())
         .replace("{session}", &world.session.to_string())
@@ -658,6 +665,12 @@ fn rows() -> Vec<Row> {
         // View numbers are the owner's alone.
         row(get.clone(), "/v1/recordings/{recording}/views", OwnerOnly),
         row(get.clone(), "/v1/s/{code}", Public),
+        // What people say about it: anyone with the link reads; any signed-in account leaves one; the owner
+        // reads their own conversation, and a comment is removed by its author or the owner.
+        row(get.clone(), "/v1/s/{code}/comments", Public),
+        row(post.clone(), "/v1/s/{code}/comments", Signed).json(|_, _| json!({"kind": "comment", "body": "Good one"})),
+        row(get.clone(), "/v1/recordings/{recording}/comments", OwnerOnly),
+        row(delete.clone(), "/v1/comments/{comment}", SignedFindsNothing),
         row(post.clone(), "/v1/s/{code}/play", Public).json(|_, _| json!({})),
         // Playback
         row(delete.clone(), "/v1/play/{session}", SessionViewer),

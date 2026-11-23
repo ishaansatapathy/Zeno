@@ -77,6 +77,14 @@ const ROUTERS: &[(&str, &[(&str, &str)])] = &[
         "crates/api/src/videos/routes.rs",
         &[("router", "/v1/videos")],
     ),
+    (
+        "crates/api/src/comments/routes.rs",
+        &[
+            ("viewer_router", "/v1/s"),
+            ("recording_router", "/v1/recordings"),
+            ("router", "/v1/comments"),
+        ],
+    ),
 ];
 
 /// Routes that exist and are not in the document yet. The list is explicit so that a new route
@@ -383,6 +391,13 @@ fn the_words_the_api_chooses_from_are_listed_in_the_document() {
     );
     assert_eq!(listed("RecordingResponse", "status"), own(STATUSES));
     assert_eq!(listed("LinkResponse", "state"), own(LINK_STATES));
+    {
+        use zeno_api::comments::dto::{EMOJIS, KINDS};
+        assert_eq!(listed("CreateCommentRequest", "kind"), own(KINDS));
+        assert_eq!(listed("CommentResponse", "kind"), own(KINDS));
+        assert_eq!(listed("CreateCommentRequest", "emoji"), own(EMOJIS));
+        assert_eq!(listed("CommentResponse", "emoji"), own(EMOJIS));
+    }
     // A field that may be absent may be null, and the list must say so.
     let optional = &schemas["UpdateRecordingRequest"]["properties"]["visibility"]["enum"];
     assert!(optional.as_array().unwrap().contains(&Value::Null));
@@ -576,7 +591,7 @@ db_test! {
             .provoke_common_errors(&app, "/v1/recordings", Some(&owner), &[("id", &id.to_string()), ("link", &nobody_s)])
             .await;
 
-        let unseen = contract.unseen("/v1/recordings");
+        let unseen: Vec<String> = contract.unseen("/v1/recordings").into_iter().filter(|route| !route.contains("/comments")).collect();
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }
@@ -663,7 +678,7 @@ db_test! {
         contract.check("post", play, &press(closed.clone(), json!({})).await);
 
         // What can go wrong on any route.
-        contract.provoke_common_errors(&app, "/v1/s", None, &[("code", &open)]).await;
+        contract.provoke_common_errors(&app, "/v1/s", Some(&owner), &[("code", &open)]).await;
 
         // Running out of budget: password guesses on one link, starting viewings, and opening pages.
         let mut limited = None;
@@ -695,7 +710,7 @@ db_test! {
         contract.check("get", page, &limited.expect("opening pages runs out"));
         let _ = nobody;
 
-        let unseen = contract.unseen("/v1/s");
+        let unseen: Vec<String> = contract.unseen("/v1/s").into_iter().filter(|route| !route.contains("/comments")).collect();
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }
@@ -827,5 +842,139 @@ db_test! {
 
         let unseen = contract.unseen("/v1/videos");
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+    }
+}
+
+db_test! {
+    async fn the_comments_api_keeps_its_promises(pool: PgPool) {
+        let app = app(pool.clone());
+        let contract = Contract::new();
+        let owner = signup_creator(&app, "teacher@example.com").await;
+        let pupil = signup_verified_as(&app, "pupil@example.com", "student").await;
+        let other = signup_verified_as(&app, "other@example.com", "student").await;
+        let stranger = signup_creator(&app, "stranger@example.com").await;
+        let nobody = uuid::Uuid::new_v4();
+
+        let video = common::media::ready_video(&app, &owner, &pool).await;
+        let made = app.post("/v1/recordings").jar(&owner).json(json!({"source": "extension", "title": "Week 3", "video_id": video})).send().await;
+        let recording = made.body["recording"]["id"].as_str().unwrap().to_owned();
+        let open = app.post(&format!("/v1/recordings/{recording}/links")).jar(&owner).json(json!({})).send().await;
+        let code = open.body["link"]["code"].as_str().unwrap().to_owned();
+        let locked = app.post(&format!("/v1/recordings/{recording}/links")).jar(&owner).json(json!({"password": "open sesame"})).send().await;
+        let locked_code = locked.body["link"]["code"].as_str().unwrap().to_owned();
+        let closed = app.post(&format!("/v1/recordings/{recording}/links")).jar(&owner).json(json!({})).send().await;
+        let closed_code = closed.body["link"]["code"].as_str().unwrap().to_owned();
+        let revoked = app.req(axum::http::Method::DELETE, &format!("/v1/recordings/{recording}/links/{}", closed.body["link"]["id"].as_str().unwrap())).jar(&owner).send().await;
+        assert_eq!(revoked.status, StatusCode::NO_CONTENT);
+
+        let on_link = "/v1/s/{code}/comments";
+        let on_owner = "/v1/recordings/{id}/comments";
+        let one = "/v1/comments/{id}";
+
+        // Leaving one, and every way that can go wrong.
+        let said = app.post(&format!("/v1/s/{code}/comments")).jar(&pupil).json(json!({"kind": "comment", "body": "Nice", "at_ms": 1500})).send().await;
+        assert_eq!(said.status, StatusCode::CREATED, "{:?}", said.body);
+        contract.check("post", on_link, &said);
+        let reacted = app.post(&format!("/v1/s/{code}/comments")).jar(&pupil).json(json!({"kind": "reaction", "emoji": "🔥", "at_ms": 3000})).send().await;
+        assert_eq!(reacted.status, StatusCode::CREATED);
+        contract.check("post", on_link, &reacted);
+        contract.check("post", on_link, &app.post(&format!("/v1/s/{code}/comments")).json(json!({"kind": "comment", "body": "x"})).send().await);
+        contract.check("post", on_link, &app.post(&format!("/v1/s/{locked_code}/comments")).jar(&pupil).json(json!({"kind": "comment", "body": "x"})).send().await);
+        contract.check("post", on_link, &app.post(&format!("/v1/s/{}/comments", "A".repeat(22))).jar(&pupil).json(json!({"kind": "comment", "body": "x"})).send().await);
+        contract.check("post", on_link, &app.post(&format!("/v1/s/{closed_code}/comments")).jar(&pupil).json(json!({"kind": "comment", "body": "x"})).send().await);
+        contract.check("post", on_link, &app.post(&format!("/v1/s/{code}/comments")).jar(&other).json(json!({"kind": "comment", "body": ""})).send().await);
+        let id = uuid::Uuid::new_v4();
+        let first = app.post(&format!("/v1/s/{code}/comments")).jar(&other).json(json!({"id": id, "kind": "comment", "body": "same"})).send().await;
+        contract.check("post", on_link, &first);
+        let clash = app.post(&format!("/v1/s/{code}/comments")).jar(&other).json(json!({"id": id, "kind": "comment", "body": "different"})).send().await;
+        assert_eq!(clash.code(), "comment_id_conflict");
+        contract.check("post", on_link, &clash);
+
+        // Reading it, a page at a time.
+        let page = app.get(&format!("/v1/s/{code}/comments?limit=1")).send().await;
+        assert_eq!(page.status, StatusCode::OK, "{:?}", page.body);
+        contract.check("get", on_link, &page);
+        let cursor = page.body["next_cursor"].as_str().expect("a second page").to_owned();
+        contract.check("get", on_link, &app.get(&format!("/v1/s/{code}/comments?limit=1&cursor={cursor}")).jar(&pupil).send().await);
+        let bad = app.get(&format!("/v1/s/{code}/comments?cursor=garbage")).send().await;
+        assert_eq!(bad.code(), "invalid_cursor");
+        contract.check("get", on_link, &bad);
+        contract.check("get", on_link, &app.get(&format!("/v1/s/{code}/comments?limit=0")).send().await);
+        contract.check("get", on_link, &app.get(&format!("/v1/s/{locked_code}/comments")).send().await);
+        contract.check("get", on_link, &app.get(&format!("/v1/s/{}/comments", "A".repeat(22))).send().await);
+        contract.check("get", on_link, &app.get(&format!("/v1/s/{closed_code}/comments")).send().await);
+
+        // The owner's view, and closing the conversation.
+        let theirs = app.get(&format!("/v1/recordings/{recording}/comments")).jar(&owner).send().await;
+        assert_eq!(theirs.status, StatusCode::OK, "{:?}", theirs.body);
+        contract.check("get", on_owner, &theirs);
+        contract.check("get", on_owner, &app.get(&format!("/v1/recordings/{recording}/comments")).send().await);
+        contract.check("get", on_owner, &app.get(&format!("/v1/recordings/{recording}/comments")).jar(&pupil).send().await);
+        contract.check("get", on_owner, &app.get(&format!("/v1/recordings/{nobody}/comments")).jar(&owner).send().await);
+        contract.check("get", on_owner, &app.get(&format!("/v1/recordings/{recording}/comments")).jar(&stranger).send().await);
+        contract.check("get", on_owner, &app.get(&format!("/v1/recordings/{recording}/comments?cursor=garbage")).jar(&owner).send().await);
+        contract.check("get", on_owner, &app.get(&format!("/v1/recordings/{recording}/comments?limit=999")).jar(&owner).send().await);
+        let version = app.get(&format!("/v1/recordings/{recording}")).jar(&owner).send().await.body["recording"]["version"].clone();
+        let off = app.req(axum::http::Method::PATCH, &format!("/v1/recordings/{recording}")).jar(&owner).json(json!({"version": version, "comments_enabled": false})).send().await;
+        assert_eq!(off.status, StatusCode::OK, "{:?}", off.body);
+        let closed_talk = app.post(&format!("/v1/s/{code}/comments")).jar(&pupil).json(json!({"kind": "comment", "body": "x"})).send().await;
+        assert_eq!(closed_talk.code(), "comments_off");
+        contract.check("post", on_link, &closed_talk);
+        let shut = app.get(&format!("/v1/s/{code}/comments")).send().await;
+        assert_eq!(shut.body["comments_enabled"], false);
+        contract.check("get", on_link, &shut);
+
+        // Removing one.
+        let mine = said.body["comment"]["id"].as_str().unwrap().to_owned();
+        contract.check("delete", one, &app.req(axum::http::Method::DELETE, &format!("/v1/comments/{mine}")).send().await);
+        contract.check("delete", one, &app.req(axum::http::Method::DELETE, &format!("/v1/comments/{mine}")).jar(&other).send().await);
+        contract.check("delete", one, &app.req(axum::http::Method::DELETE, "/v1/comments/not-an-id").jar(&owner).send().await);
+        let gone = app.req(axum::http::Method::DELETE, &format!("/v1/comments/{mine}")).jar(&pupil).send().await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT);
+        contract.check("delete", one, &gone);
+
+        // Running out of budget: reading by address, and leaving or removing by account.
+        let mut limited = None;
+        for _ in 0..130 {
+            let res = app.get(&format!("/v1/s/{code}/comments")).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("get", on_link, &limited.expect("reading runs out"));
+        let mut limited = None;
+        for _ in 0..130 {
+            let res = app.get(&format!("/v1/recordings/{recording}/comments")).jar(&owner).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("get", on_owner, &limited.expect("the owner's reading runs out"));
+        let mut limited = None;
+        for _ in 0..15 {
+            let res = app.req(axum::http::Method::DELETE, &format!("/v1/comments/{nobody}")).jar(&other).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("delete", one, &limited.expect("removing runs out"));
+        // Posting runs out too: the account that has just been removing is the one with the budget spent.
+        contract.check(
+            "post",
+            on_link,
+            &app.post(&format!("/v1/s/{code}/comments")).jar(&other).json(json!({"kind": "comment", "body": "x"})).send().await,
+        );
+
+        // What can go wrong on any route.
+        contract.provoke_common_errors(&app, on_link, Some(&pupil), &[("code", &code)]).await;
+        contract.provoke_common_errors(&app, "/v1/comments", Some(&pupil), &[("id", &nobody.to_string())]).await;
+
+        for prefix in [on_link, on_owner, one] {
+            let unseen = contract.unseen(prefix);
+            assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+        }
     }
 }

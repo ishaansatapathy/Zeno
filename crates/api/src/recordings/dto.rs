@@ -90,12 +90,15 @@ pub struct UpdateRecordingRequest {
     pub title: Option<String>,
     /// Who may watch. Changing it to `private` ends every viewing under way through a link.
     pub visibility: Option<String>,
+    /// Whether people watching may leave comments and reactions. Turning it off keeps what is there but hides it.
+    pub comments_enabled: Option<bool>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct RecordingChanges {
     pub title: Option<String>,
     pub visibility: Option<&'static str>,
+    pub comments_enabled: Option<bool>,
 }
 
 impl UpdateRecordingRequest {
@@ -110,16 +113,27 @@ impl UpdateRecordingRequest {
         let visibility = self
             .visibility
             .and_then(|raw| choose(&mut errors, "visibility", &raw, VISIBILITIES));
-        if title.is_none() && visibility.is_none() && errors.is_empty() {
+        if title.is_none()
+            && visibility.is_none()
+            && self.comments_enabled.is_none()
+            && errors.is_empty()
+        {
             errors.push(FieldError::new(
                 "title",
-                "Send a title or a visibility to change.",
+                "Send a title, a visibility or the comments setting to change.",
             ));
         }
         if !errors.is_empty() {
             return Err(ApiError::validation(errors));
         }
-        Ok((self.version, RecordingChanges { title, visibility }))
+        Ok((
+            self.version,
+            RecordingChanges {
+                title,
+                visibility,
+                comments_enabled: self.comments_enabled,
+            },
+        ))
     }
 }
 
@@ -174,6 +188,8 @@ pub struct RecordingResponse {
     pub title: String,
     pub source: String,
     pub visibility: String,
+    /// Whether people watching may leave comments and reactions.
+    pub comments_enabled: bool,
     /// Read from the video underneath; never stored.
     pub status: &'static str,
     pub video_id: Option<Uuid>,
@@ -195,6 +211,7 @@ impl From<RecordingRow> for RecordingResponse {
             title: row.title,
             source: row.source,
             visibility: row.visibility,
+            comments_enabled: row.comments_enabled,
             video_id: row.video_id,
             duration_seconds: row.duration_seconds,
             version: row.version,
@@ -280,18 +297,21 @@ mod tests {
             version: Some(1),
             title: None,
             visibility: None,
+            comments_enabled: None,
         };
         assert!(nothing.validate().is_err());
         let bad = UpdateRecordingRequest {
             version: Some(1),
             title: None,
             visibility: Some("everyone".into()),
+            comments_enabled: None,
         };
         assert!(bad.validate().is_err());
         let good = UpdateRecordingRequest {
             version: Some(2),
             title: Some(" New ".into()),
             visibility: Some("LINK".into()),
+            comments_enabled: None,
         };
         let (version, changes) = good.validate().unwrap();
         assert_eq!(version, Some(2));
@@ -301,8 +321,19 @@ mod tests {
             version: Some(0),
             title: Some("x".into()),
             visibility: None,
+            comments_enabled: None,
         };
         assert!(stale.validate().is_err());
+        // The comments setting is a change on its own, and says what it is.
+        let only_comments = UpdateRecordingRequest {
+            version: Some(1),
+            title: None,
+            visibility: None,
+            comments_enabled: Some(false),
+        };
+        let (_, changes) = only_comments.validate().unwrap();
+        assert_eq!(changes.comments_enabled, Some(false));
+        assert_eq!((changes.title, changes.visibility), (None, None));
     }
 
     #[test]

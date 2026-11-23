@@ -14,6 +14,8 @@ pub struct RecordingRow {
     pub source: String,
     pub title: String,
     pub visibility: String,
+    /// Whether people watching may leave comments and reactions.
+    pub comments_enabled: bool,
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -25,7 +27,7 @@ pub struct RecordingRow {
 
 /// One join on the video's primary key; no stored status to drift out of step with it.
 const SELECT: &str = "select r.id, r.owner_id, r.video_id, r.source, r.title, r.visibility, \
-    r.version, r.created_at, r.updated_at, r.view_count, v.status as video_status, \
+    r.comments_enabled, r.version, r.created_at, r.updated_at, r.view_count, v.status as video_status, \
     v.duration_seconds \
     from recordings r left join videos v on v.id = r.video_id";
 
@@ -128,9 +130,11 @@ pub async fn update<'e>(
     version: i32,
     title: Option<&str>,
     visibility: Option<&str>,
+    comments_enabled: Option<bool>,
 ) -> Result<bool, sqlx::Error> {
     let result = sqlx::query(
         "update recordings set title = coalesce($4, title), visibility = coalesce($5, visibility), \
+                comments_enabled = coalesce($6, comments_enabled), \
                 version = version + 1, updated_at = now() \
          where id = $1 and owner_id = $2 and deleted_at is null and version = $3",
     )
@@ -139,6 +143,7 @@ pub async fn update<'e>(
     .bind(version)
     .bind(title)
     .bind(visibility)
+    .bind(comments_enabled)
     .execute(db)
     .await?;
     Ok(result.rows_affected() == 1)

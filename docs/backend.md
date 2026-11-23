@@ -14,7 +14,7 @@ The API is described as an OpenAPI 3.1 document, committed as [`openapi.json`](o
 app generates its types from it, so a change to the API that the web app has not caught up with is a
 type error, not a surprise in production (see [web.md](web.md)). So far it covers the auth API, the
 recordings library (create, list, get, rename, delete), a recording's share links (create, list,
-revoke) and the three routes that upload a recording while it is being made; other areas are added as the
+revoke), the three routes that upload a recording while it is being made, and comments; other areas are added as the
 web app and the extension start to use them. The routes that exist but are not
 described yet (attaching a video, view counts, and the visitor's side of a share link) are named in
 `NOT_DESCRIBED_YET` in `tests/openapi.rs`: a new route that is neither documented nor on that list
@@ -259,6 +259,41 @@ the outcome.
 meets an anonymous session cannot read its null user and refuses it. Roll both services out before
 anyone creates a link.
 
+## Comments and reactions
+
+What people watching a shared recording say about it. A **comment** is words (1 to 1000 characters),
+optionally pinned to a moment of the video; a **reaction** is one emoji from a fixed list of six
+(👍 ❤️ 😂 🔥 👏 😮), always pinned to a moment. They belong to the recording, not to a link: revoking a link
+does not take the conversation with it, and a new link shows the same one.
+
+| Endpoint | Who | Purpose |
+| --- | --- | --- |
+| `GET /v1/s/:code/comments` | anyone with the link | A page, newest first (`limit` 1 to 200, default 100, and `cursor`). Never cached (`private, no-store`): it says which are the asker's. With comments turned off it is empty and says `comments_enabled: false` |
+| `POST /v1/s/:code/comments` | any signed-in account | `{kind, body?, emoji?, at_ms?, id?}`. `201` with the comment. A repeated `id` with the same content returns the same comment (a retry after a lost answer); the same `id` with other content, or someone else's, is `409 comment_id_conflict`. A comment may leave `at_ms` out; a reaction may not |
+| `GET /v1/recordings/:id/comments` | the owner | The same page, whether or not it is open to others |
+| `DELETE /v1/comments/:id` | its author, or the owner of the recording | `204`. For anyone else it does not exist (`404`) |
+| `PATCH /v1/recordings/:id` with `comments_enabled` | the owner | Closes or reopens the conversation. What was said is kept either way |
+
+**Who sees what.** A link with no password shows its comments to anyone who has the link, signed in or
+not. A link with a password shows nothing, not even this, to somebody who has not given it: they prove it
+with the token of a viewing that did (the `t` of its playlist address, passed as `?t=`), and the token
+is checked against the database each time (a viewing that has ended, or was of another link, proves
+nothing: `403 password_required`). Only a signed-in account can leave one, so there is somebody behind
+every comment; the author's name on the account is shown, never an email. Removing a comment is for its
+author and the owner; to anybody else it does not exist, which would not be so if it were `403`.
+
+**Limits** (so nobody takes over a page): leaving or removing, 10 a minute per account
+(`comment_write`, fails closed); reading, 120 a minute per client address (`comment_read`, open); 200
+comments per person and 2000 per recording (`409 too_many_comments`, `comments_full`). The last two
+are counted before the insert, not inside it, so a burst of racing posts can pass the cap by a few.
+Words are plain text: no control characters, and none of the Unicode characters that reorder the text
+around them (they can make a comment read as something else on screen); joined emoji are fine. A moment
+must be in the video (up to a second past its end); the length is the video's own duration.
+
+Comments are deleted with the recording or the account that made them (`on delete cascade`): there is no
+comment without somebody behind it. Not done yet: replies, editing a comment, telling the owner about a
+new one (Day 40 or so, with notifications), blocking a person, reporting.
+
 ## View counts
 
 A view is counted when a share link's `play` succeeds, and it costs the visitor no database write.
@@ -401,6 +436,8 @@ One sliding-window limiter (`zeno_core::ratelimit`) serves every instance throug
 | `recording_write` | account | 60 / minute | refuses (`503`) |
 | `share_resolve` | client address | 300 / minute | lets requests through |
 | `share_play` | client address | 30 / minute | lets requests through |
+| `comment_read` | client address | 120 / minute | lets requests through |
+| `comment_write` | account | 10 / minute | refuses (`503`) |
 | `share_password` | link and client address | 10 / minute | refuses (`503`) |
 | `share_write` | account | 30 / minute | refuses (`503`) |
 | `order_read` | account | 120 / minute | lets requests through |
