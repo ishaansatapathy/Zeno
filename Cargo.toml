@@ -8,6 +8,12 @@ members = [
     "crates/keyserver",
 ]
 
+# Debug builds keep line numbers for backtraces but not full debug info, and do not keep an incremental cache:
+# with both, `target/` reached 144 GB, and on Windows linking many test binaries hit LNK1140 (PDB too large).
+[profile.dev]
+debug = "line-tables-only"
+incremental = false
+
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
