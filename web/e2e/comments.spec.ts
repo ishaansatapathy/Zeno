@@ -109,10 +109,10 @@ test("the owner closes the conversation from the library and visitors no longer 
   await say(page, recording.id, link.code, "Still here when it is back on");
 
   await page.goto("/library");
-  const toggle = page.getByRole("button", { name: "Comments for Week 3: on" });
+  const toggle = page.getByRole("button", { name: "Comments on for Week 3" });
   await expect(toggle).toBeVisible();
   await toggle.click();
-  await expect(page.getByRole("button", { name: "Comments for Week 3: off" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Comments off for Week 3" })).toBeVisible();
 
   const { context, page: seen } = await visitor(browser);
   await pretendReady(seen, link.code, "Week 3");
@@ -121,8 +121,8 @@ test("the owner closes the conversation from the library and visitors no longer 
   await expect(seen.getByRole("heading", { name: /^Comments/ })).toHaveCount(0);
 
   // Back on: what was said is still there.
-  await page.getByRole("button", { name: "Comments for Week 3: off" }).click();
-  await expect(page.getByRole("button", { name: "Comments for Week 3: on" })).toBeVisible();
+  await page.getByRole("button", { name: "Comments off for Week 3" }).click();
+  await expect(page.getByRole("button", { name: "Comments on for Week 3" })).toBeVisible();
   await seen.reload();
   await expect(seen.getByText("Still here when it is back on")).toBeVisible();
   await context.close();

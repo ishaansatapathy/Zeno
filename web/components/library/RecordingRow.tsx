@@ -252,7 +252,7 @@ export function RecordingRow({
               onClick={() => void toggleComments()}
               disabled={inFlight}
               aria-pressed={recording.comments_enabled}
-              aria-label={`Comments for ${recording.title}: ${recording.comments_enabled ? "on" : "off"}`}
+              aria-label={`${recording.comments_enabled ? "Comments on" : "Comments off"} for ${recording.title}`}
               className={action}
             >
               {recording.comments_enabled ? "Comments on" : "Comments off"}
