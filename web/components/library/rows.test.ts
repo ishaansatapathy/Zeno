@@ -8,6 +8,7 @@ const row = (n: number, over: Partial<Recording> = {}): Recording => ({
   title: `Recording ${n}`,
   source: "extension",
   visibility: "private",
+  comments_enabled: true,
   status: "ready",
   video_id: null,
   duration_seconds: null,

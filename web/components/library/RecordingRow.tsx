@@ -96,6 +96,27 @@ export function RecordingRow({
     titleInput.current?.focus();
   }
 
+  /** Opens or closes the conversation under this recording's link. What was said is kept either way. */
+  async function toggleComments() {
+    if (busy) return;
+    setBusy(true);
+    const next = !recording.comments_enabled;
+    const result = await api.recordings.setComments(recording.id, recording.version, next);
+    if (result.ok) {
+      setBusy(false);
+      onChange(result.data.recording);
+      return notify(next ? "Comments are on." : "Comments are off. What was said is kept, and can be turned back on.");
+    }
+    if (result.error.code === "version_conflict") {
+      const fresh = await api.recordings.get(recording.id);
+      setBusy(false);
+      if (fresh.ok) onChange(fresh.data.recording);
+      return notify("This recording changed elsewhere, so it was reloaded. Try again if you still want to.");
+    }
+    setBusy(false);
+    notify(describeFailure(result.error));
+  }
+
   async function destroy() {
     if (busy) return;
     setBusy(true);
@@ -225,6 +246,16 @@ export function RecordingRow({
           <div className="flex flex-wrap items-center gap-x-1 md:justify-end">
             <button type="button" onClick={() => void copyLink()} disabled={inFlight} aria-label={`Copy link for ${recording.title}`} className={action}>
               {copy.phase === "working" ? "Copying…" : copy.phase === "copied" ? "Copied" : "Copy link"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void toggleComments()}
+              disabled={inFlight}
+              aria-pressed={recording.comments_enabled}
+              aria-label={`Comments for ${recording.title}: ${recording.comments_enabled ? "on" : "off"}`}
+              className={action}
+            >
+              {recording.comments_enabled ? "Comments on" : "Comments off"}
             </button>
             <button type="button" ref={renameButton} onClick={startRename} disabled={inFlight || mode === "rename"} aria-label={`Rename ${recording.title}`} className={action}>
               Rename

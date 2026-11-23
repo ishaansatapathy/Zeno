@@ -160,12 +160,25 @@ export function createApi(options: ClientOptions = {}) {
       rename: (id: string, version: number, title: string) =>
         call(() => client.PATCH("/v1/recordings/{id}", { params: { path: { id } }, body: { version, title } })),
       remove: (id: string) => call(() => client.DELETE("/v1/recordings/{id}", { params: { path: { id } } })),
+      /** Opens or closes the conversation on a recording. */
+      setComments: (id: string, version: number, enabled: boolean) =>
+        call(() => client.PATCH("/v1/recordings/{id}", { params: { path: { id } }, body: { version, comments_enabled: enabled } })),
     },
     /** What anyone holding a share link can do: no account, no cookie. */
     share: {
       resolve: (code: string) => call(() => client.GET("/v1/s/{code}", { params: { path: { code } } })),
       play: (code: string, password?: string) =>
         call(() => client.POST("/v1/s/{code}/play", { params: { path: { code } }, body: password ? { password } : {} })),
+      /** The conversation, newest first. `t` is the token of a viewing, for a link with a password. */
+      comments: (code: string, query: { cursor?: string; limit?: number; t?: string } = {}) =>
+        call(() => client.GET("/v1/s/{code}/comments", { params: { path: { code }, query } })),
+      /** Leaves a comment or a reaction. Needs a signed-in account. */
+      comment: (code: string, body: Schemas["CreateCommentRequest"], t?: string) =>
+        call(() => client.POST("/v1/s/{code}/comments", { params: { path: { code }, query: t ? { t } : {} }, body })),
+    },
+    comments: {
+      /** Removes one: its author may, and so may the owner of the recording. */
+      remove: (id: string) => call(() => client.DELETE("/v1/comments/{id}", { params: { path: { id } } })),
     },
     links: {
       list: (recording: string) => call(() => client.GET("/v1/recordings/{id}/links", { params: { path: { id: recording } } })),

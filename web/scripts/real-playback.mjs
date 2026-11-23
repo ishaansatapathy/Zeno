@@ -125,6 +125,51 @@ await sleep(2000);
 await page.screenshot({ path: path.join(out, "playing.png") });
 say("watermark on screen:", await page.getByText(/^Shared view/).isVisible());
 
+// What people say, beside a video that really plays: a reaction lands at the moment the video is at, a comment
+// is pinned to it, and pressing a time goes back there. (The browser tests cannot decode H.264, so this is the only
+// place the comments meet a real player.)
+const signedIn = await page.request.post("/v1/auth/login", { data: { email, password: "correct horse battery staple" } });
+say("signed in to leave comments:", signedIn.status());
+const seconds = (label) => {
+  const parts = label.trim().split(":").map(Number);
+  return parts.reduce((total, part) => total * 60 + part, 0);
+};
+const position = () => page.evaluate(() => document.querySelector("video").currentTime);
+let commentsOk = true;
+const check = (what, ok, detail) => {
+  say(ok ? "ok  " : "FAIL", what, detail ?? "");
+  if (!ok) commentsOk = false;
+};
+
+const reactedAt = await position();
+await page.getByRole("button", { name: "React with 🔥" }).click();
+const reaction = page.getByRole("listitem").filter({ hasText: "🔥" }).first();
+await reaction.waitFor({ timeout: 10_000 });
+const reactionTime = seconds(await reaction.getByRole("button", { name: /^Go to/ }).innerText());
+check("a reaction is pinned to the moment the video is at", Math.abs(reactionTime - reactedAt) <= 3, `(video at ${reactedAt.toFixed(1)} s, pinned at ${reactionTime} s)`);
+
+await page.getByLabel("Add a comment").fill("This part, right here");
+const commentedAt = await position();
+await page.getByRole("button", { name: /^Comment/ }).click();
+const comment = page.getByRole("listitem").filter({ hasText: "This part, right here" });
+await comment.waitFor({ timeout: 10_000 });
+const commentTime = seconds(await comment.getByRole("button", { name: /^Go to/ }).innerText());
+check("a comment is pinned to the moment it was written at", Math.abs(commentTime - commentedAt) <= 3, `(video at ${commentedAt.toFixed(1)} s, pinned at ${commentTime} s)`);
+
+await sleep(3000);
+const wandered = await position();
+await comment.getByRole("button", { name: /^Go to/ }).click();
+await sleep(800);
+const back = await position();
+check("pressing a time goes back to it", wandered - back > 1 && Math.abs(back - commentTime) <= 2, `(was at ${wandered.toFixed(1)} s, now ${back.toFixed(1)} s, asked for ${commentTime} s)`);
+check("the video is still playing after that", !(await page.evaluate(() => document.querySelector("video").paused)));
+await page.screenshot({ path: path.join(out, "comments.png"), fullPage: true });
+if (!commentsOk) {
+  await page.screenshot({ path: path.join(out, "comments-failed.png") });
+  await browser.close();
+  process.exit(1);
+}
+
 // The owner revokes the link while the visitor watches.
 const revoked = await api.delete(`/v1/recordings/${recording.id}/links/${link.id}`);
 const revokedAt = Date.now();

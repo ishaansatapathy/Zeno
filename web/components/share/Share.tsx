@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { Mark } from "@/components/site/Mark";
 import { api } from "@/lib/api/client";
 
+import { Comments } from "./Comments";
+import type { PlayerControl } from "./conversation";
 import { Player } from "./Player";
 import { pollDelaySeconds, preparingText, viewOf, type ShareInfo, type View } from "./state";
 
@@ -55,6 +57,9 @@ function Statement({ eyebrow, first, second, children }: { eyebrow?: string; fir
  */
 export function Share({ code, initial }: { code: string; initial: Initial }) {
   const [view, setView] = useState<View>(initial.kind === "closed" ? { kind: "closed" } : viewOf(initial.share));
+  // The video, for the comments beside it; and the token of the viewing, which unlocks them on a protected link.
+  const control = useRef<PlayerControl | null>(null);
+  const [token, setToken] = useState<string | null>(null);
 
   // A video that is not ready: ask again, politely, until it is (or the link closes).
   useEffect(() => {
@@ -122,8 +127,9 @@ export function Share({ code, initial }: { code: string; initial: Initial }) {
         <Page>
           <h1 className="display text-[clamp(1.8rem,4vw,3rem)]">A protected video</h1>
           <div className="mt-8">
-            <Player code={code} title="Protected video" durationSeconds={null} needsPassword onClosed={closed} />
+            <Player code={code} title="Protected video" durationSeconds={null} needsPassword control={control} onViewing={setToken} onClosed={closed} />
           </div>
+          {token ? <Comments code={code} token={token} durationSeconds={null} control={control} playing /> : null}
         </Page>
       );
     case "ready":
@@ -131,8 +137,9 @@ export function Share({ code, initial }: { code: string; initial: Initial }) {
         <Page>
           <h1 className="display text-[clamp(1.8rem,4vw,3rem)]">{view.title}</h1>
           <div className="mt-8">
-            <Player code={code} title={view.title} durationSeconds={view.durationSeconds} needsPassword={false} onPreparing={preparing} onClosed={closed} />
+            <Player code={code} title={view.title} durationSeconds={view.durationSeconds} needsPassword={false} control={control} onViewing={setToken} onPreparing={preparing} onClosed={closed} />
           </div>
+          <Comments code={code} durationSeconds={view.durationSeconds} control={control} playing={token !== null} />
         </Page>
       );
   }

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useReducer, useRef, useState, type FormEvent } from "react";
+import { useEffect, useReducer, useRef, useState, type FormEvent, type MutableRefObject } from "react";
 
 import { Notice, PasswordField, Submit, focusField } from "@/components/auth/controls";
 import { describeFailure } from "@/components/auth/messages";
 import { clock } from "@/components/library/rows";
 import { api } from "@/lib/api/client";
 
+import type { PlayerControl } from "./conversation";
 import { LINK_CHECK_SECONDS, initialPlayerState, nextPlayerState, preparingText } from "./state";
 
 const ENDED = "This viewing has ended. Press play to start again.";
@@ -34,7 +35,7 @@ function Watermark({ text }: { text: string }) {
  * no player code. Only a browser without them (an iPhone before iOS 17.1) uses its own HLS. A viewing that is
  * refused (closed, expired) or fails for good hands control back with a sentence to show.
  */
-function Viewing({ code, playlistUrl, expiresAt, watermark, title, onEnded, onClosed }: { code: string; playlistUrl: string; expiresAt: number; watermark: string; title: string; onEnded: (notice: string) => void; onClosed: () => void }) {
+function Viewing({ code, playlistUrl, expiresAt, watermark, title, control, onEnded, onClosed }: { code: string; playlistUrl: string; expiresAt: number; watermark: string; title: string; control?: MutableRefObject<PlayerControl | null>; onEnded: (notice: string) => void; onClosed: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const ended = useRef(onEnded);
   ended.current = onEnded;
@@ -103,6 +104,23 @@ function Viewing({ code, playlistUrl, expiresAt, watermark, title, onEnded, onCl
     };
   }, [playlistUrl]);
 
+  // What the comments beside the video need of it: where it is, how long it is, and a way to go somewhere.
+  useEffect(() => {
+    const element = video.current;
+    if (!element || !control) return;
+    control.current = {
+      positionMs: () => element.currentTime * 1000,
+      durationMs: () => (Number.isFinite(element.duration) ? element.duration * 1000 : null),
+      seek: (ms) => {
+        element.currentTime = Math.max(0, ms / 1000);
+        void element.play().catch(() => undefined);
+      },
+    };
+    return () => {
+      control.current = null;
+    };
+  }, [control]);
+
   // Revoking a link stops new viewings and new keys at once, but a player that already holds the key
   // and the playlist would carry on to the end of the video without asking anyone anything. So the
   // viewing asks, now and then, whether its link is still open, and stops when it is not.
@@ -137,6 +155,8 @@ export function Player({
   title,
   durationSeconds,
   needsPassword,
+  control,
+  onViewing,
   onPreparing,
   onClosed,
 }: {
@@ -144,6 +164,10 @@ export function Player({
   title: string;
   durationSeconds: number | null;
   needsPassword: boolean;
+  /** Filled while a viewing is under way, for whatever sits beside the video and wants to follow or steer it. */
+  control?: MutableRefObject<PlayerControl | null>;
+  /** The token of the viewing (the `t` of its playlist address) while one is under way, and `null` when it ends. */
+  onViewing?: (token: string | null) => void;
   /** The video turned out not to be ready (for a link with no password, the page then waits for it). */
   onPreparing?: () => void;
   onClosed: () => void;
@@ -151,6 +175,11 @@ export function Player({
   const [state, dispatch] = useReducer(nextPlayerState, initialPlayerState);
   const [password, setPassword] = useState("");
   const [empty, setEmpty] = useState(false);
+
+  const token = state.phase === "playing" ? new URL(state.playlistUrl, "http://x").searchParams.get("t") : null;
+  useEffect(() => {
+    onViewing?.(token);
+  }, [token, onViewing]);
 
   useEffect(() => {
     if (state.phase === "closed") onClosed();
@@ -186,6 +215,7 @@ export function Player({
         expiresAt={state.expiresAt}
         watermark={state.watermark}
         title={title}
+        control={control}
         onEnded={(notice) => dispatch({ type: "ended", notice })}
         onClosed={onClosed}
       />
