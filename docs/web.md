@@ -147,6 +147,22 @@ Recent Chrome plays HLS by itself (`canPlayType` says "maybe"), but its own play
 flow, so hls.js is used wherever it runs, and the browser's own HLS only where it does not (an iPhone
 before iOS 17.1). The cause of Chrome's failure was not chased down.
 
+**Comments.** Under the player, `Comments` (components/share/Comments.tsx) shows what was said, newest first
+(`Older comments` for the next page, and the first page asked for again every 20 seconds while the tab is
+visible). Anyone with the link reads. Leaving one needs an account: a person who is not signed in who
+presses *Comment* is told so with a link to sign in that comes back to this page, and what they typed is
+kept. A comment is pinned to the moment the video is at (a box to switch that off); six reaction buttons
+leave an emoji at the current moment and wait for the video to be playing, since without it there is no
+moment. A bar under the heading marks the moments people reacted to (grouped, so a hundred reactions in
+the same minute are one mark with a number), and pressing a mark or a time in the list goes there. Each
+comment has *Remove* if it is yours or the recording is yours. Words are drawn as text, never as markup.
+Posting uses a client-made id, so trying again after a dropped connection posts once. For a link with a
+password the panel appears when the viewing starts, with that viewing's token. The owner switches the
+conversation off and on in the library (*Comments on/off* on each row); off, visitors see no panel.
+The logic (merging pages, marks, the words for people) is plain functions in `conversation.ts` with
+tests; the screen is tested in `e2e/comments.spec.ts`. Not tested end to end: seeking, and pinning to the playhead (the browser tests cannot decode H.264, so they
+never have a playing video); `scripts/real-playback.mjs` is where that is tried against real Chrome.
+
 **A viewing keeps checking its link.** Every 30 seconds a viewing asks `GET /v1/s/:code` (cached by the
 API and the edge for 15 seconds); a `404` or `410` turns the page into the closed notice.
 
