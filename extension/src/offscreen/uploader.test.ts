@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiFailure, Backend, Result } from "../shared/api";
 import type { UploadView } from "../shared/messages";
-import { backoff, nextPart, Uploader, type Part, type Source } from "./uploader";
+import { backoff, contiguousParts, nextPart, Uploader, type Part, type Source } from "./uploader";
 
 describe("which part is next", () => {
   it("sends only full parts while recording", () => {
@@ -54,13 +54,16 @@ class FakeZeno implements Backend {
   linkIds: string[] = [];
   parts = new Map<number, Uint8Array>();
   completedWith: number | null = null;
-  /** Answers to give before the real one, per call name: a status number is a failure. */
-  script: Record<string, number[]> = {};
+  /** Answers to give before the real one, per call name: a status number is a failure (with its own code, if given). */
+  script: Record<string, (number | [number, string])[]> = {};
+  /** The numbers of the parts storage is said to hold. */
+  held: number[] = [];
 
   private scripted(name: string): Result<never> | null {
     this.calls.push(name);
     const next = this.script[name]?.shift();
-    return next === undefined ? null : fail(next);
+    if (next === undefined) return null;
+    return Array.isArray(next) ? fail(next[0], next[1]) : fail(next);
   }
 
   async me() {
@@ -75,6 +78,9 @@ class FakeZeno implements Backend {
         upload: { part_size: 10, total_parts: 0, uploaded: [], parts: [], expires_at: "" },
       })
     );
+  }
+  async uploadProgress() {
+    return this.scripted("uploadProgress") ?? ok({ part_size: 10, total_parts: 0, uploaded: this.held, parts: [], expires_at: "" });
   }
   async createRecording() {
     return this.scripted("createRecording") ?? ok({ id: "rec-1" } as never);
@@ -110,7 +116,7 @@ class FakeDisk implements Source {
   }
 }
 
-function setup(zeno = new FakeZeno(), disk = new FakeDisk()) {
+function setup(zeno = new FakeZeno(), disk = new FakeDisk(), resume = false) {
   const views: UploadView[] = [];
   const sleeps: number[] = [];
   const sent = new Map<string, Uint8Array>();
@@ -131,7 +137,7 @@ function setup(zeno = new FakeZeno(), disk = new FakeDisk()) {
       },
       emit: (view) => views.push(view),
     },
-    { recordingId: "rec-1", title: "Recording", filename: "r.webm", partSize: 10 },
+    { recordingId: "rec-1", title: "Recording", filename: "r.webm", partSize: 10, resume },
   );
   return { zeno, disk, uploader, views, sleeps, sent, failPuts: (n: number) => (putFailures = n) };
 }
@@ -279,5 +285,115 @@ describe("when the network or Zeno misbehaves", () => {
     const view = await uploader.end(10);
     expect(view.phase).toBe("failed");
     expect(views.at(-1)?.message).toMatch(/could not reach zeno/i);
+  });
+});
+
+describe("which parts storage holds", () => {
+  it("counts from the first, without a gap", () => {
+    expect(contiguousParts([])).toBe(0);
+    expect(contiguousParts([1, 2, 3])).toBe(3);
+    expect(contiguousParts([3, 1, 2])).toBe(3);
+    expect(contiguousParts([2, 3])).toBe(0);
+    expect(contiguousParts([1, 2, 4, 5])).toBe(2);
+  });
+});
+
+describe("finishing a recording that an earlier run left", () => {
+  /** A whole recording on disk (it has ended), as it is found after the browser came back. */
+  function finishedOnDisk(bytes: number, held: number[], script: Record<string, (number | [number, string])[]> = {}) {
+    const zeno = new FakeZeno();
+    zeno.held = held;
+    zeno.script = script;
+    const disk = new FakeDisk();
+    disk.append(bytes);
+    const made = setup(zeno, disk, true);
+    made.uploader.start();
+    return { ...made, finished: made.uploader.end(bytes) };
+  }
+
+  it("sends only what storage does not hold, under the same ids as before, and gets the same link", async () => {
+    const { zeno, finished, sent, disk } = finishedOnDisk(25, [1, 2]);
+    expect(await finished).toMatchObject({ phase: "done", sent: 25, total: 25, url: "https://zeno.test/s/abc" });
+    expect(zeno.startIds).toEqual(["rec-1"]);
+    expect(zeno.linkIds).toEqual(["rec-1"]);
+    // Part 3 only: nothing is asked for or sent again for parts 1 and 2.
+    expect(zeno.calls.filter((call) => call === "partUrl")).toHaveLength(1);
+    expect([...sent.keys()]).toEqual(["https://storage.test/3"]);
+    expect([...(sent.get("https://storage.test/3") ?? [])]).toEqual([...disk.bytes.slice(20)]);
+    expect(zeno.completedWith).toBe(25);
+  });
+
+  it("starts again from a gap, because skipping a part that is missing would leave a hole", async () => {
+    const { zeno, finished, sent } = finishedOnDisk(35, [1, 3]);
+    await finished;
+    expect([...sent.keys()]).toEqual(["https://storage.test/2", "https://storage.test/3", "https://storage.test/4"]);
+    expect(zeno.completedWith).toBe(35);
+  });
+
+  it("sends everything when storage holds nothing", async () => {
+    const { zeno, finished, sent } = finishedOnDisk(20, []);
+    expect(await finished).toMatchObject({ phase: "done" });
+    expect(sent.size).toBe(2);
+    expect(zeno.completedWith).toBe(20);
+  });
+
+  it("leaves a resumed upload retryable if sign-in or permission is missing", async () => {
+    const signedOut = finishedOnDisk(20, [1], { me: [401] });
+    expect(await signedOut.finished).toMatchObject({ phase: "failed", reason: "signed_out" });
+    expect(signedOut.zeno.calls).toEqual(["me"]);
+    const refused = finishedOnDisk(20, [1], { startUpload: [403] });
+    expect(await refused.finished).toMatchObject({ phase: "failed", reason: "refused" });
+    expect(refused.sent.size).toBe(0);
+  });
+
+  it("says it is done when the whole recording was already in Zeno, which is for Zeno to confirm", async () => {
+    // The earlier run got as far as assembling it: the upload is no longer open.
+    const { zeno, finished, sent } = finishedOnDisk(25, [], { startUpload: [[409, "streaming_id_conflict"]] });
+    expect(await finished).toMatchObject({ phase: "done", url: "https://zeno.test/s/abc" });
+    expect(sent.size).toBe(0);
+    expect(zeno.calls).not.toContain("partUrl");
+    expect(zeno.calls).not.toContain("uploadProgress");
+    expect(zeno.completedWith).toBe(25);
+  });
+
+  it("does the same when the upload turns out to be closed after it was started again", async () => {
+    const { zeno, finished } = finishedOnDisk(25, [], { uploadProgress: [[409, "not_uploading"]] });
+    expect(await finished).toMatchObject({ phase: "done" });
+    expect(zeno.calls).not.toContain("partUrl");
+    expect(zeno.completedWith).toBe(25);
+  });
+
+  it("does not call a recording whole when Zeno says it is not", async () => {
+    const { finished } = finishedOnDisk(25, [], { startUpload: [[409, "streaming_id_conflict"]], complete: [[409, "upload_incomplete"]] });
+    const view = await finished;
+    expect(view.phase).toBe("failed");
+    expect(view.message).toContain("409");
+  });
+
+  it("waits for Zeno to come back when it asks what is held", async () => {
+    const { zeno, finished, sleeps } = finishedOnDisk(20, [1], { uploadProgress: [0, 503] });
+    expect(await finished).toMatchObject({ phase: "done" });
+    expect(sleeps).toEqual([500, 1000]);
+    expect(zeno.calls.filter((call) => call === "uploadProgress")).toHaveLength(3);
+  });
+
+  it("does not ask what is held for a recording that is being made now", async () => {
+    const { zeno, disk, uploader } = setup();
+    uploader.start();
+    disk.append(10);
+    await uploader.end(10);
+    expect(zeno.calls).not.toContain("uploadProgress");
+  });
+
+  it("only treats a closed upload as finished when it was told to pick one up", async () => {
+    // A new recording must never be told "already done": a clash of ids there is an error.
+    const zeno = new FakeZeno();
+    zeno.script["startUpload"] = [[409, "streaming_id_conflict"]];
+    const { uploader, disk } = setup(zeno);
+    uploader.start();
+    disk.append(10);
+    const view = await uploader.end(10);
+    expect(view.phase).toBe("failed");
+    expect(zeno.completedWith).toBeNull();
   });
 });

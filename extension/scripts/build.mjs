@@ -22,6 +22,17 @@ const watch = process.argv.includes("--watch");
 const apiUrl = origin("ZENO_API_URL", process.env.ZENO_API_URL ?? "http://localhost:8080");
 const webUrl = origin("ZENO_WEB_URL", process.env.ZENO_WEB_URL ?? "http://localhost:3000");
 
+// How long a recording may be left paused before it is stopped and saved (a paused recording still holds the
+// screen and the camera). Half an hour; the browser tests build with a few seconds, to see it happen.
+//   node scripts/build.mjs --pause-limit=8000
+const pauseLimit = (() => {
+  const given = process.argv.find((arg) => arg.startsWith("--pause-limit="));
+  if (!given) return 30 * 60 * 1000;
+  const ms = Number(given.split("=")[1]);
+  if (!Number.isInteger(ms) || ms < 1000) throw new Error(`--pause-limit is milliseconds, at least 1000: ${given}`);
+  return ms;
+})();
+
 function origin(name, raw) {
   let url;
   try {
@@ -54,7 +65,7 @@ const options = {
   target: "chrome116",
   sourcemap: true,
   logLevel: "info",
-  define: { __ZENO_API_URL__: JSON.stringify(apiUrl), __ZENO_WEB_URL__: JSON.stringify(webUrl) },
+  define: { __ZENO_API_URL__: JSON.stringify(apiUrl), __ZENO_WEB_URL__: JSON.stringify(webUrl), __ZENO_MAX_PAUSE_MS__: String(pauseLimit) },
 };
 
 const pages = [

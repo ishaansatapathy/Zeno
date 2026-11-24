@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { bytesText, clock, fileName, pickMime } from "./format";
+import { bytesText, clock, fileName, pickMime, recordingTitle } from "./format";
 
 describe("clock", () => {
   it("writes minutes and seconds, and hours only when there are some", () => {
@@ -49,5 +49,13 @@ describe("pickMime", () => {
 
   it("says so when it supports none", () => {
     expect(pickMime(() => false)).toBeNull();
+  });
+});
+
+describe("recordingTitle", () => {
+  it("is made from the start alone, so finishing an upload later names the recording the same", () => {
+    const at = new Date(2026, 10, 21, 14, 5, 9).getTime();
+    expect(recordingTitle(at)).toBe("Recording 2026-11-21 14:05");
+    expect(recordingTitle(at)).toBe(recordingTitle(at));
   });
 });

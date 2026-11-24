@@ -38,6 +38,17 @@ export function nextPart(size: number, partSize: number, done: number, ended: bo
   return null;
 }
 
+/**
+ * How many parts, counted from the first, storage holds without a gap. A part past a gap is sent again: sending
+ * a part twice is harmless, and skipping one that is missing would leave a hole.
+ */
+export function contiguousParts(uploaded: readonly number[]): number {
+  const held = new Set(uploaded);
+  let count = 0;
+  while (held.has(count + 1)) count += 1;
+  return count;
+}
+
 /** What the uploader reads the recording from. */
 export interface Source {
   /** Bytes that are safely on disk. */
@@ -60,6 +71,11 @@ export interface Plan {
   title: string;
   filename: string;
   partSize?: number;
+  /**
+   * This recording was started before (by an earlier run that was interrupted): the upload and the link already
+   * exist, and storage is asked what it holds so that only the rest is sent.
+   */
+  resume?: boolean;
 }
 
 /** Waiting before the n-th retry: 0.5 s, 1 s, 2 s ... up to 15 s. */
@@ -74,6 +90,7 @@ class Fatal extends Error {
   constructor(
     message: string,
     readonly status = 0,
+    readonly code = "",
   ) {
     super(message);
   }
@@ -88,6 +105,8 @@ export class Uploader {
   private total: number | null = null;
   private wake: (() => void) | null = null;
   private finished: Promise<UploadView> | null = null;
+  /** Zeno already has the whole recording: all that is left is to say so (an earlier run got that far). */
+  private assembled = false;
 
   constructor(
     private readonly deps: Deps,
@@ -150,7 +169,7 @@ export class Uploader {
   private ok<T>(result: { ok: true; data: T } | { ok: false; error: ApiFailure }): T {
     if (result.ok) return result.data;
     if (transient(result.error)) throw new Error(result.error.message);
-    throw new Fatal(result.error.message, result.error.status);
+    throw new Fatal(result.error.message, result.error.status, result.error.code);
   }
 
   private async run(): Promise<UploadView> {
@@ -162,10 +181,15 @@ export class Uploader {
     } catch (error) {
       const message = error instanceof Fatal ? error.message : "The upload stopped.";
       // An account that may not upload (a student's) is not a failure to apologise for: it is just not uploaded.
-      if (error instanceof Fatal && error.status === 403) this.show({ phase: "off", reason: "refused", message: "This account cannot upload recordings." });
+      if (error instanceof Fatal && error.status === 403) this.unavailable("refused", "This account cannot upload recordings.");
+      else if (error instanceof Fatal && error.status === 401) this.show({ phase: "failed", reason: "signed_out", message: "Sign in to Zeno, then try the upload again." });
       else this.show({ phase: "failed", message });
       return this.view;
     }
+  }
+
+  private unavailable(reason: "signed_out" | "refused", message: string): void {
+    this.show({ phase: this.plan.resume || this.videoId ? "failed" : "off", reason, message });
   }
 
   /** Is there a Zeno session to upload as? If there is none, the recording is only saved on this computer. */
@@ -174,11 +198,11 @@ export class Uploader {
       const me = await this.deps.backend.me();
       if (me.ok) return true;
       if (me.error.status === 401 || me.error.status === 403) {
-        this.show({ phase: "off", reason: "signed_out" });
+        this.unavailable("signed_out", "Sign in to Zeno, then try the upload again.");
         return false;
       }
       if (!transient(me.error)) {
-        this.show({ phase: "off", reason: "refused", message: me.error.message });
+        this.unavailable("refused", me.error.message);
         return false;
       }
       this.show({ phase: "connecting", reason: "unreachable" });
@@ -190,13 +214,23 @@ export class Uploader {
   /** The upload, the recording it belongs to, and the link. All three are safe to repeat. */
   private async setUp(): Promise<void> {
     const { backend } = this.deps;
-    const started = await this.persist(
-      async () => this.ok(await backend.startUpload({ id: this.plan.recordingId, filename: this.plan.filename, title: this.plan.title, partSize: this.partSize })),
-      () => this.show({ phase: "connecting", reason: "unreachable" }),
-    );
-    this.videoId = started.video.id;
+    // The recording's id is also its video's id: that is how an earlier run can be picked up again.
+    let videoId = this.plan.recordingId;
+    try {
+      const started = await this.persist(
+        async () => this.ok(await backend.startUpload({ id: this.plan.recordingId, filename: this.plan.filename, title: this.plan.title, partSize: this.partSize })),
+        () => this.show({ phase: "connecting", reason: "unreachable" }),
+      );
+      videoId = started.video.id;
+    } catch (error) {
+      // An upload that is no longer open is, for a run that is picking one up again, one that was finished: the
+      // answer to "complete" below says whether it really is.
+      if (!(this.plan.resume && error instanceof Fatal && error.code === "streaming_id_conflict")) throw error;
+      this.assembled = true;
+    }
+    this.videoId = videoId;
     await this.persist(
-      async () => this.ok(await backend.createRecording({ id: this.plan.recordingId, title: this.plan.title, videoId: started.video.id })),
+      async () => this.ok(await backend.createRecording({ id: this.plan.recordingId, title: this.plan.title, videoId })),
       () => this.show({ phase: "connecting", reason: "unreachable" }),
     );
     const link = await this.persist(
@@ -204,13 +238,30 @@ export class Uploader {
       () => this.show({ phase: "connecting", reason: "unreachable" }),
     );
     this.show({ phase: this.ended ? "finishing" : "uploading", reason: undefined, url: link.url });
+    if (this.plan.resume && !this.assembled) await this.catchUp(videoId);
+  }
+
+  /** Asks storage what it holds, and carries on after it. */
+  private async catchUp(videoId: string): Promise<void> {
+    try {
+      const progress = await this.persist(
+        async () => this.ok(await this.deps.backend.uploadProgress(videoId)),
+        () => this.show({ reason: "unreachable" }),
+      );
+      this.done = contiguousParts(progress.uploaded);
+      this.show({ sent: this.done * this.partSize, reason: undefined });
+    } catch (error) {
+      // Not open any more: it was finished, and `complete` (which may be asked twice) says whether it is whole.
+      if (error instanceof Fatal && error.code === "not_uploading") this.assembled = true;
+      else throw error;
+    }
   }
 
   private async sendParts(): Promise<void> {
     const { backend, source } = this.deps;
     const videoId = this.videoId;
     if (!videoId) throw new Fatal("The upload was not started.");
-    for (;;) {
+    for (; !this.assembled; ) {
       const part = nextPart(this.ended ? (this.total ?? 0) : source.size(), this.partSize, this.done, this.ended);
       if (!part) {
         if (this.ended) break;

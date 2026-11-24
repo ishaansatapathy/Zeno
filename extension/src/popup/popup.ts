@@ -4,8 +4,8 @@
 
 import { bytesText, clock } from "../shared/format";
 import { WEB_URL } from "../shared/config";
-import type { Account, Command, RecordingOptions, SavedFile, UploadView } from "../shared/messages";
-import { IDLE, type RecorderState } from "../shared/state";
+import type { Account, Command, RecordingOptions, SavedFile, Unfinished, UploadView } from "../shared/messages";
+import { elapsedMs, IDLE, type RecorderState, type Running } from "../shared/state";
 
 const app = document.getElementById("app") as HTMLElement;
 const STATE_KEY = "recorder";
@@ -18,9 +18,10 @@ interface Settings {
   camera: boolean;
   microphoneId?: string;
   cameraId?: string;
+  countdown: boolean;
 }
 
-const DEFAULTS: Settings = { screen: true, systemAudio: false, microphone: true, camera: false };
+const DEFAULTS: Settings = { screen: true, systemAudio: false, microphone: true, camera: false, countdown: true };
 let settings: Settings = { ...DEFAULTS };
 let timer: ReturnType<typeof setInterval> | null = null;
 let current: RecorderState = IDLE;
@@ -178,8 +179,76 @@ function linkBox(view: UploadView | undefined): HTMLElement | null {
   return h("div", { class: "share" }, ...parts);
 }
 
+// ---- recordings an earlier run left unfinished ---------------------------------------------------------------
+
+/** What is left on this computer to finish. A slow answer must not hold the start screen up, so it is not waited for long. */
+async function whatIsUnfinished(): Promise<Unfinished[]> {
+  try {
+    const list = await Promise.race([ask<Unfinished[]>({ type: "recorder.unfinished" }), new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000))]);
+    return list ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function when(at: number): string {
+  return new Date(at).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
+function unfinishedList(items: Unfinished[]): HTMLElement | null {
+  if (items.length === 0) return null;
+  const rows = items.map((item) => {
+    const label = when(item.startedAt);
+    const action = {
+      interrupted: { label: "Recover", description: "Recover the recording from", status: "cut short" },
+      upload: { label: "Finish upload", description: "Finish the upload of the recording from", status: "not all in Zeno yet" },
+      download: { label: "Save locally", description: "Save a local copy of the recording from", status: "local save incomplete" },
+    }[item.kind];
+    const finish = h(
+      "button",
+      { class: "secondary small", type: "button", "data-action": "recover", "aria-label": `${action.description} ${label}` },
+      action.label,
+    );
+    finish.addEventListener("click", () => {
+      finish.disabled = true;
+      void send({ type: "recorder.recover", id: item.id });
+    });
+    // Deleting for good takes two presses, and the second says what it will do.
+    const discard = h("button", { class: "quiet", type: "button", "data-action": "discard", "aria-label": `Delete the recording from ${label} from this computer` }, "Delete");
+    let armed = false;
+    const name = discard.getAttribute("aria-label") ?? "";
+    discard.addEventListener("click", () => {
+      if (!armed) {
+        armed = true;
+        discard.textContent = "Delete for good?";
+        discard.setAttribute("aria-label", `Press again to delete the recording from ${label} for good`);
+        return;
+      }
+      discard.disabled = true;
+      void ask<Unfinished[]>({ type: "recorder.discard", id: item.id }).then(() => render(current, true));
+    });
+    discard.addEventListener("blur", () => {
+      armed = false;
+      discard.textContent = "Delete";
+      discard.setAttribute("aria-label", name);
+    });
+    return h(
+      "li",
+      {},
+      h(
+        "div",
+        { class: "what" },
+        h("span", { class: "when" }, label),
+        h("span", { class: "meta" }, `${clock(item.durationMs)} · ${bytesText(item.bytes)} · ${action.status}`),
+      ),
+      h("div", { class: "actions" }, finish, discard),
+    );
+  });
+  return h("section", { class: "unfinished", "aria-label": "Unfinished recordings" }, h("p", { class: "label" }, "Unfinished"), h("ul", {}, ...rows));
+}
+
 async function idleScreen(): Promise<HTMLElement> {
-  const account = await whoIsSignedIn();
+  const [account, unfinished] = await Promise.all([whoIsSignedIn(), whatIsUnfinished()]);
   const microphones = settings.microphone ? await devices("audioinput") : [];
   const cameras = settings.camera ? await devices("videoinput") : [];
   const items = [
@@ -187,6 +256,7 @@ async function idleScreen(): Promise<HTMLElement> {
     option("systemAudio", "Sound from the screen", "Tick Share audio in the next step too", { sub: true, disabled: !settings.screen }),
     option("microphone", "Microphone", "Your voice"),
     option("camera", "Camera", "Shown over the screen and saved as its own file"),
+    option("countdown", "Countdown", "3, 2, 1 before it starts"),
   ];
   const list = h("ul", { class: "options" }, ...items);
   const micSelect = deviceSelect("microphoneId", "Microphone", microphones);
@@ -201,6 +271,7 @@ async function idleScreen(): Promise<HTMLElement> {
     "section",
     {},
     h("h1", {}, "Ready when ", h("em", {}, "you are.")),
+    unfinishedList(unfinished),
     list,
     start,
     accountNote(account),
@@ -228,37 +299,81 @@ function message(title: Child, body: string, role: "status" | "alert" = "status"
   return h("section", {}, h("h1", {}, title), h("p", { role, "aria-live": "polite", class: "note" }, body));
 }
 
-function recordingScreen(state: Extract<RecorderState, { phase: "recording" }>): HTMLElement {
-  const time = h("span", { class: "clock", id: "clock" }, clock(Date.now() - state.startedAt));
+function countingScreen(state: Extract<RecorderState, { phase: "counting" }>): HTMLElement {
+  const cancel = h("button", { class: "secondary", id: "cancel", type: "button" }, "Cancel");
+  cancel.addEventListener("click", () => {
+    cancel.disabled = true;
+    void send({ type: "recorder.cancel" });
+  });
+  return h(
+    "section",
+    {},
+    h("h1", {}, state.remaining > 0 ? h("span", {}, "Starting in ", h("em", { id: "count" }, String(state.remaining))) : "Starting…"),
+    h("p", { class: "note", role: "status", "aria-live": "polite", style: "margin:0 0 18px" }, "Get ready. Nothing is recorded until it reaches zero. Esc on the page cancels."),
+    cancel,
+  );
+}
+
+function recordingScreen(state: Running): HTMLElement {
+  const paused = state.pausedAt !== null;
+  const time = h("span", { class: "clock", id: "clock" }, clock(elapsedMs(state, Date.now())));
   const stop = h("button", { class: "primary", id: "stop", type: "button" }, "Stop and save");
   stop.addEventListener("click", () => {
     stop.disabled = true;
     void send({ type: "recorder.stop" });
   });
-  timer = setInterval(() => {
-    time.textContent = clock(Date.now() - state.startedAt);
-  }, 250);
+  // It says so when it has paused or resumed, not when the button was pressed: until then the button waits.
+  const hold = h("button", { class: "secondary hold", id: paused ? "resume" : "pause", type: "button" }, paused ? "Resume" : "Pause");
+  hold.addEventListener("click", () => {
+    hold.disabled = true;
+    void send({ type: paused ? "recorder.resume" : "recorder.pause" });
+  });
+  if (!paused) {
+    timer = setInterval(() => {
+      time.textContent = clock(elapsedMs(state, Date.now()));
+    }, 250);
+  }
   const names = state.tracks.map((track) => (track === "screen" ? "Screen" : "Camera")).join(" and ");
   return h(
     "section",
     {},
-    h("div", { class: "status", role: "status" }, h("span", { class: "dot", "aria-hidden": "true" }), time),
-    h("p", { class: "label", style: "margin-bottom:20px" }, `Recording ${names}`),
+    h("div", { class: `status${paused ? " paused" : ""}`, role: "status" }, h("span", { class: "dot", "aria-hidden": "true" }), time),
+    h("p", { class: "label", id: "recording-label", style: "margin-bottom:20px" }, paused ? `Paused · ${names}` : `Recording ${names}`),
     linkBox(state.upload),
+    hold,
     stop,
     h("p", { class: "note" }, "You can also stop from the browser's own Stop sharing bar."),
   );
 }
 
+/** Said when a recording did not end because the person pressed stop. */
+function noteText(note: "recovered" | "paused_too_long" | undefined): string | null {
+  if (note === "recovered") return "This recording was cut short. What had reached the disk was kept, and is saved here.";
+  if (note === "paused_too_long") return "It was left paused for a long time, so it was stopped and saved: a paused recording still has the screen and camera shared.";
+  return null;
+}
+
 function savedScreen(state: Extract<RecorderState, { phase: "saved" }>): HTMLElement {
   const again = h("button", { class: "secondary", id: "again", type: "button" }, "Record again");
   again.addEventListener("click", () => void send({ type: "recorder.dismiss" }));
+  // The copy on this computer is whole, so an upload that did not finish can be tried again at any time.
+  const retry =
+    state.upload?.phase === "failed"
+      ? h("button", { class: "secondary", id: "retry-upload", type: "button", style: "margin-bottom:10px" }, "Try the upload again")
+      : null;
+  retry?.addEventListener("click", () => {
+    retry.disabled = true;
+    void send({ type: "recorder.recover", id: state.id });
+  });
+  const why = noteText(state.note);
   return h(
     "section",
     {},
     h("h1", {}, "Saved ", h("em", {}, clock(state.durationMs))),
+    why ? h("p", { class: "note", id: "saved-note", style: "margin:0 0 14px" }, why) : null,
     linkBox(state.upload),
     h("ul", { class: "files", "aria-label": "Saved files" }, ...state.files.map((file: SavedFile) => h("li", {}, h("span", { class: "file", title: file.name }, file.name), h("span", { class: "size" }, bytesText(file.bytes))))),
+    retry,
     again,
     h("p", { class: "note" }, "In your Downloads folder, in a Zeno folder."),
   );
@@ -273,11 +388,14 @@ function failedScreen(state: Extract<RecorderState, { phase: "failed" }>): HTMLE
 /** Everything on screen except the running numbers. */
 function keyOf(state: RecorderState): string {
   const upload = "upload" in state ? state.upload : undefined;
-  return [state.phase, "id" in state ? state.id : "", upload?.phase, upload?.reason, upload?.url, upload?.copied, upload?.message].join("|");
+  const moving = state.phase === "recording" ? [state.pausedAt !== null, state.pausedMs] : state.phase === "counting" ? [state.remaining] : [];
+  return [state.phase, "id" in state ? state.id : "", upload?.phase, upload?.reason, upload?.url, upload?.copied, upload?.message, ...moving].join("|");
 }
 
-function render(state: RecorderState): void {
+/** `again` draws it afresh even when nothing about the state changed (the list of unfinished recordings changed). */
+function render(state: RecorderState, again = false): void {
   const key = keyOf(state);
+  if (again) shownKey = "";
   // Only the numbers of an upload moved: say them in place, so a link that is being selected is not thrown away.
   const line = document.getElementById("upload-line");
   if (key === shownKey && line && "upload" in state) {
@@ -298,10 +416,14 @@ function render(state: RecorderState): void {
           return message(h("span", {}, "Choose what ", h("em", {}, "to share.")), "Pick the screen, window or tab in the browser's window. Nothing is recorded until you do.");
         case "starting":
           return message("Starting…", "One moment.");
+        case "counting":
+          return countingScreen(state);
         case "recording":
           return recordingScreen(state);
         case "stopping":
           return message("Saving…", "Finishing the files.");
+        case "recovering":
+          return message("Finishing…", "Closing the recording off, and sending what Zeno does not have.");
         case "saved":
           return savedScreen(state);
         case "failed":

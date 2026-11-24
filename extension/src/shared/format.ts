@@ -46,3 +46,9 @@ const CANDIDATES = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", 
 export function pickMime(isSupported: (mime: string) => boolean): string | null {
   return CANDIDATES.find(isSupported) ?? null;
 }
+
+/** What a recording is called in Zeno: "Recording 2026-11-21 14:05". Made from its start, so a finished-later upload names it the same. */
+export function recordingTitle(startedAt: number): string {
+  const d = new Date(startedAt);
+  return `Recording ${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}

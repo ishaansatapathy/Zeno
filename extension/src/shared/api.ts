@@ -30,6 +30,8 @@ export interface Backend {
   startUpload(input: { id: string; filename: string; title: string; partSize: number }): Promise<Result<Schemas["CreateVideoResponse"]>>;
   partUrl(videoId: string, part: { number: number; size: number; last: boolean }): Promise<Result<Schemas["PartEnvelope"]>>;
   complete(videoId: string, sizeBytes: number): Promise<Result<Schemas["VideoEnvelope"]>>;
+  /** What storage already holds of an upload that was started earlier. */
+  uploadProgress(videoId: string): Promise<Result<Schemas["UploadResponse"]>>;
   createRecording(input: { id: string; title: string; videoId: string }): Promise<Result<Schemas["RecordingResponse"]>>;
   createLink(recordingId: string): Promise<Result<Schemas["LinkResponse"]>>;
 }
@@ -118,6 +120,13 @@ export class Api implements Backend {
     return this.call(
       () => this.client.POST("/v1/videos/{id}/complete", { params: { path: { id: videoId } }, body: { size_bytes: sizeBytes } }),
       (data) => data as Schemas["VideoEnvelope"],
+    );
+  }
+
+  uploadProgress(videoId: string) {
+    return this.call(
+      () => this.client.GET("/v1/videos/{id}/upload", { params: { path: { id: videoId } } }),
+      (data) => data as Schemas["UploadResponse"],
     );
   }
 

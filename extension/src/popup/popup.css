@@ -302,3 +302,70 @@ button {
 .account .secondary {
   margin-top: 10px;
 }
+
+.hold {
+  margin-bottom: 10px;
+}
+.status.paused .dot {
+  animation: none;
+  background: var(--mute);
+}
+.status.paused .clock {
+  color: var(--mute);
+}
+
+.unfinished {
+  margin: 0 0 16px;
+  border: 1px solid var(--line-hi);
+  background: var(--panel);
+  padding: 12px;
+}
+.unfinished .label {
+  margin: 0 0 8px;
+}
+.unfinished ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.unfinished li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+}
+.unfinished li + li {
+  border-top: 1px solid var(--line);
+}
+.unfinished .what {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.unfinished .meta {
+  color: var(--mute);
+  font-size: 12px;
+}
+.unfinished .actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+.secondary.small {
+  width: auto;
+  height: 32px;
+  padding: 0 12px;
+}
+.quiet {
+  border: 0;
+  background: transparent;
+  color: var(--mute);
+  font-size: 12px;
+  text-decoration: underline;
+  padding: 4px;
+}
+.quiet:hover {
+  color: var(--paper);
+}

@@ -15,9 +15,14 @@ export interface RecordingOptions {
   camera: boolean;
   microphoneId?: string;
   cameraId?: string;
+  /** Count 3, 2, 1 once everything is chosen and open, before recording begins. */
+  countdown: boolean;
 }
 
 export type Track = "screen" | "camera";
+
+/** Why a saved recording says something about how it ended, when it was not the person pressing stop. */
+export type SavedNote = "recovered" | "paused_too_long";
 
 /** A recording that has been written to disk. */
 export interface SavedFile {
@@ -58,6 +63,16 @@ export interface UploadView {
   message?: string | undefined;
 }
 
+/** A recording an earlier run left on this computer, which the person can finish. */
+export interface Unfinished {
+  id: string;
+  startedAt: number;
+  /** How long it ran, as far as is known. */
+  durationMs: number;
+  bytes: number;
+  kind: "interrupted" | "upload" | "download";
+}
+
 /** Who is signed in to Zeno in this browser, as far as the extension can tell. */
 export type Account = { status: "signed_in"; name: string; email: string } | { status: "signed_out" } | { status: "unreachable" };
 
@@ -66,7 +81,18 @@ export type Account = { status: "signed_in"; name: string; email: string } | { s
 export type Command =
   | { type: "recorder.start"; options: RecordingOptions }
   | { type: "recorder.stop" }
+  /** Holds the recording without ending it: nothing is written until it is resumed. */
+  | { type: "recorder.pause" }
+  | { type: "recorder.resume" }
+  /** Changes one's mind during the count: nothing has been recorded. */
+  | { type: "recorder.cancel" }
   | { type: "recorder.status" }
+  /** The recordings an earlier run left unfinished (and a tidy-up of the finished ones that are old). */
+  | { type: "recorder.unfinished" }
+  /** Finishes one of them: closes it off if it was cut short, and uploads what Zeno does not have. */
+  | { type: "recorder.recover"; id: string }
+  /** Deletes one of them from this computer, for good. */
+  | { type: "recorder.discard"; id: string }
   /** Asks who is signed in to Zeno. */
   | { type: "recorder.account" }
   /** Leaves the "saved" or "failed" screen and goes back to the start. */
@@ -81,13 +107,28 @@ export type OffscreenCommand =
       id: string;
       options: RecordingOptions;
     }
-  | { target: "offscreen"; type: "stop"; id: string };
+  | { target: "offscreen"; type: "stop"; id: string }
+  | { target: "offscreen"; type: "pause"; id: string }
+  | { target: "offscreen"; type: "resume"; id: string }
+  /** Before the count reaches zero: forget it. */
+  | { target: "offscreen"; type: "cancel"; id: string }
+  | { target: "offscreen"; type: "recover"; id: string };
 
 // ---- offscreen document -> service worker ---------------------------------------------------------
 
 export type OffscreenEvent =
+  | { target: "background"; type: "counting"; id: string; remaining: number }
   | { target: "background"; type: "started"; id: string; startedAt: number; tracks: Track[] }
-  | { target: "background"; type: "stopped"; id: string; durationMs: number; files: (SavedFile & { url: string })[] }
+  | { target: "background"; type: "paused"; id: string; at: number }
+  | { target: "background"; type: "resumed"; id: string; at: number }
+  | {
+      target: "background";
+      type: "stopped";
+      id: string;
+      durationMs: number;
+      files: (SavedFile & { url: string })[];
+      note?: SavedNote;
+    }
   | { target: "background"; type: "failed"; id: string; code: FailureCode; message: string }
   | { target: "background"; type: "upload"; id: string; view: UploadView };
 

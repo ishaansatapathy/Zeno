@@ -6,12 +6,22 @@ import { fileURLToPath } from "node:url";
 
 import { chromium, expect, test as base, type BrowserContext, type Page, type Worker } from "@playwright/test";
 
+import { developmentExtensionId } from "../scripts/extension-id.mjs";
+
 const DIST = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 
 export interface Stored {
   id: string;
   files: { name: string; size: number }[];
-  manifest: { status: string; tracks: { track: string; file: string; mime: string }[]; durationMs?: number } | null;
+  manifest: {
+    status: string;
+    tracks: { track: string; file: string; mime: string }[];
+    durationMs?: number;
+    pauses?: { from: number; to: number | null }[];
+    joints?: { at: number; ms: number }[];
+    recovered?: boolean;
+  } | null;
+  upload: { status: string; partSize: number } | null;
 }
 
 interface Fixtures {
@@ -43,8 +53,19 @@ export const test = base.extend<Fixtures>({
     fs.rmSync(profile, { recursive: true, force: true });
   },
   worker: async ({ context }, use) => {
-    const [existing] = context.serviceWorkers();
-    await use(existing ?? (await context.waitForEvent("serviceworker")));
+    // The listener goes first: a worker that starts between looking and listening would be missed for good.
+    const starting = context.waitForEvent("serviceworker", { timeout: 20_000 }).catch(() => null);
+    let found = context.serviceWorkers()[0] ?? (await starting);
+    if (!found) {
+      // The browser stops an idle worker, and one that had already stopped never announces itself again. Any
+      // message to the extension wakes it, and the popup sends one as soon as it opens.
+      const waking = context.waitForEvent("serviceworker", { timeout: 20_000 });
+      const page = await context.newPage();
+      await page.goto(`chrome-extension://${developmentExtensionId()}/popup.html`);
+      found = await waking;
+      await page.close();
+    }
+    await use(found);
   },
   extensionId: async ({ worker }, use) => {
     await use(new URL(worker.url()).host);
@@ -53,11 +74,25 @@ export const test = base.extend<Fixtures>({
 
 export { expect };
 
-/** The popup, opened as a page so a test can drive it. */
-export async function openPopup(context: BrowserContext, extensionId: string): Promise<Page> {
+/**
+ * The popup, opened as a page so a test can drive it. The countdown is off unless a test asks for it, so that a
+ * test about something else does not wait three seconds to start.
+ */
+export async function openPopup(context: BrowserContext, extensionId: string, options: { countdown?: boolean } = {}): Promise<Page> {
   const page = await context.newPage();
   await page.goto(`chrome-extension://${extensionId}/popup.html`);
+  const countdown = options.countdown ?? false;
+  await page.evaluate(async (wanted) => {
+    const kept = await chrome.storage.local.get("settings");
+    await chrome.storage.local.set({ settings: { ...(kept["settings"] as object | undefined), countdown: wanted } });
+  }, countdown);
+  await page.reload();
   return page;
+}
+
+/** What the toolbar icon says. */
+export async function badge(worker: Worker): Promise<string> {
+  return worker.evaluate(() => chrome.action.getBadgeText({}));
 }
 
 /**
@@ -86,12 +121,14 @@ export async function stored(page: Page): Promise<Stored[]> {
     for await (const [id, handle] of (recordings as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
       const files: Stored["files"] = [];
       let manifest: Stored["manifest"] = null;
+      let upload: Stored["upload"] = null;
       for await (const [name, entry] of (handle as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
         const file = await (entry as FileSystemFileHandle).getFile();
         files.push({ name, size: file.size });
         if (name === "manifest.json") manifest = JSON.parse(await file.text());
+        if (name === "upload.json") upload = JSON.parse(await file.text());
       }
-      result.push({ id, files, manifest });
+      result.push({ id, files, manifest, upload });
     }
     return result;
   });

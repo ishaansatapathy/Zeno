@@ -7,6 +7,7 @@
 
 import type { FailureCode, RecordingOptions, SavedFile, Track } from "../shared/messages";
 import { fileName, pickMime } from "../shared/format";
+import { activeMs, joints, type Pause } from "../shared/pauses";
 import { DiskError, DiskWriter, readFile, writeJson } from "./opfs";
 import type { Source } from "./uploader";
 
@@ -92,6 +93,10 @@ export class Session {
   private runs: Run[] = [];
   private cleanups: (() => void)[] = [];
   private failed = false;
+  /** What is open and waiting for `begin`. */
+  private waiting: { track: Track; stream: MediaStream; bits: number; mime: string }[] = [];
+  private pauses: Pause[] = [];
+  private ended = false;
   startedAt = 0;
 
   private constructor(
@@ -100,10 +105,11 @@ export class Session {
   ) {}
 
   /**
-   * Opens the sources, the files and the recorders, and starts. If anything fails, everything opened so
-   * far is closed again and the failure is thrown with its word.
+   * Opens the sources: the browser's picker, the microphone, the camera. Nothing is recorded and nothing is
+   * written yet, so the person can still change their mind (`cancel`), and a count can run first. If anything
+   * fails, everything opened so far is closed again and the failure is thrown with its word.
    */
-  static async start(id: string, options: RecordingOptions, hooks: Hooks): Promise<Session> {
+  static async prepare(id: string, options: RecordingOptions, hooks: Hooks): Promise<Session> {
     const session = new Session(id, hooks);
     try {
       await session.open(options);
@@ -112,6 +118,22 @@ export class Session {
       await session.abandon();
       throw classify(error);
     }
+  }
+
+  /** Opens the files and the recorders, and starts. If anything fails, everything is closed again. */
+  async begin(): Promise<void> {
+    try {
+      await this.startRecorders();
+    } catch (error) {
+      await this.abandon();
+      throw classify(error);
+    }
+  }
+
+  /** Lets go of everything opened, before recording began. Nothing is on disk. */
+  cancel(): void {
+    this.waiting = [];
+    this.release();
   }
 
   private async open(options: RecordingOptions): Promise<void> {
@@ -133,15 +155,16 @@ export class Session {
 
     const audio = mix([...(screen?.getAudioTracks() ?? []), ...(microphone?.getAudioTracks() ?? [])], this.cleanups);
     // With a screen, its file carries the sound. With only a camera, the camera's does.
-    const streams: { track: Track; stream: MediaStream; bits: number }[] = [];
-    if (screen) streams.push({ track: "screen", stream: new MediaStream([...screen.getVideoTracks(), ...(audio ? [audio] : [])]), bits: SCREEN_BITS_PER_SECOND });
-    if (camera) streams.push({ track: "camera", stream: new MediaStream([...camera.getVideoTracks(), ...(!screen && audio ? [audio] : [])]), bits: CAMERA_BITS_PER_SECOND });
+    if (screen) this.waiting.push({ track: "screen", stream: new MediaStream([...screen.getVideoTracks(), ...(audio ? [audio] : [])]), bits: SCREEN_BITS_PER_SECOND, mime });
+    if (camera) this.waiting.push({ track: "camera", stream: new MediaStream([...camera.getVideoTracks(), ...(!screen && audio ? [audio] : [])]), bits: CAMERA_BITS_PER_SECOND, mime });
 
     // The person ending the share from the browser's own bar ends the recording, with what there is.
     screen?.getVideoTracks()[0]?.addEventListener("ended", () => this.hooks.onSourceEnded());
+  }
 
+  private async startRecorders(): Promise<void> {
     const startedAt = Date.now();
-    for (const { track, stream, bits } of streams) {
+    for (const { track, stream, bits, mime } of this.waiting) {
       const file = `${track}.webm`;
       const writer = await DiskWriter.open(["recordings", this.id, file]);
       const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bits, audioBitsPerSecond: AUDIO_BITS_PER_SECOND });
@@ -181,8 +204,44 @@ export class Session {
       status,
       startedAt: this.startedAt,
       tracks: this.runs.map((run) => ({ track: run.track, file: run.file, mime: run.mime, startedAt: run.startedAt })),
+      // Every pause, in wall-clock time, so a recording cut short while paused still knows its own length.
+      pauses: this.pauses,
       ...extra,
     };
+  }
+
+  /** Whether the recording is held right now. */
+  get paused(): boolean {
+    return this.pauses.some((pause) => pause.to === null);
+  }
+
+  /**
+   * Holds the recording: nothing is written (the file has no gap, it simply goes on later), and the screen
+   * stays chosen. What was recorded is flushed first, so a recording that is left paused and then lost is
+   * complete up to the pause. Returns when it paused, or `null` if it was not recording.
+   */
+  pause(): number | null {
+    if (this.ended || this.paused || this.runs.length === 0) return null;
+    const at = Date.now();
+    for (const run of this.runs) {
+      if (run.recorder.state !== "recording") continue;
+      run.recorder.requestData();
+      run.recorder.pause();
+    }
+    this.pauses.push({ from: at, to: null });
+    void writeJson(["recordings", this.id, "manifest.json"], this.manifest("recording")).catch(() => undefined);
+    return at;
+  }
+
+  /** Carries on. Returns when it resumed, or `null` if it was not paused. */
+  resume(): number | null {
+    const open = this.pauses.find((pause) => pause.to === null);
+    if (this.ended || !open) return null;
+    const at = Date.now();
+    for (const run of this.runs) if (run.recorder.state === "paused") run.recorder.resume();
+    open.to = at;
+    void writeJson(["recordings", this.id, "manifest.json"], this.manifest("recording")).catch(() => undefined);
+    return at;
   }
 
   get tracks(): Track[] {
@@ -222,6 +281,10 @@ export class Session {
 
   /** Stops the recorders, finishes the files, and hands back what was saved. */
   async stop(): Promise<{ durationMs: number; files: (SavedFile & { url: string })[] }> {
+    // Stopped while paused: the pause ends here, and does not count towards the length.
+    const stoppedAt = Date.now();
+    for (const pause of this.pauses) if (pause.to === null) pause.to = stoppedAt;
+    this.ended = true;
     await Promise.all(
       this.runs.map(
         (run) =>
@@ -243,8 +306,12 @@ export class Session {
       }
     }
     this.release();
-    const durationMs = Date.now() - this.startedAt;
-    await writeJson(["recordings", this.id, "manifest.json"], this.manifest("complete", { endedAt: Date.now(), durationMs, bytes: sizes })).catch(() => undefined);
+    const endedAt = Date.now();
+    const durationMs = activeMs(this.startedAt, endedAt, this.pauses);
+    await writeJson(
+      ["recordings", this.id, "manifest.json"],
+      this.manifest("complete", { endedAt, durationMs, bytes: sizes, joints: joints(this.startedAt, this.pauses, endedAt) }),
+    ).catch(() => undefined);
     if (problem) throw classify(problem);
 
     const files: (SavedFile & { url: string })[] = [];
