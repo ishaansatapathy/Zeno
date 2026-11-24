@@ -366,7 +366,21 @@ pub async fn resume(
     };
     let held = match state.store.list_parts(&video.source_key, &upload_id).await {
         Ok(parts) => parts,
-        Err(StorageError::NotFound) => Vec::new(),
+        Err(StorageError::NotFound) => {
+            if state
+                .store
+                .head(&video.source_key)
+                .await
+                .map_err(storage_error)?
+                .is_some()
+            {
+                return Err(conflict(
+                    "not_uploading",
+                    "The file has been assembled. Complete the upload to queue processing.",
+                ));
+            }
+            Vec::new()
+        }
         Err(err) => return Err(storage_error(err)),
     };
     if video.streaming {
@@ -459,39 +473,34 @@ pub async fn complete(
     };
     let plan = PartPlan::from_parts(size, video.part_size as u64);
 
-    let held = match state.store.list_parts(&video.source_key, &upload_id).await {
-        Ok(parts) => parts,
-        Err(StorageError::NotFound) => {
-            return already_completed_or(state, id, "upload_expired").await
-        }
-        Err(err) => return Err(storage_error(err)),
-    };
-    let (_, missing) = split_parts(&plan, &held);
-    if !missing.is_empty() || held.len() != usize::from(plan.count) {
-        return Err(conflict(
-            "upload_incomplete",
-            format!(
-                "Parts {} are missing or have the wrong size. Request fresh URLs and upload them.",
-                missing
+    match state.store.list_parts(&video.source_key, &upload_id).await {
+        Ok(held) => {
+            let (_, missing) = split_parts(&plan, &held);
+            if !missing.is_empty() || held.len() != usize::from(plan.count) {
+                let numbers = missing
                     .iter()
                     .map(u16::to_string)
                     .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        ));
-    }
-
-    let etags: Vec<String> = held.iter().map(|part| part.etag.clone()).collect();
-    match state
-        .store
-        .complete_multipart(&video.source_key, &upload_id, &etags)
-        .await
-    {
-        Ok(()) => {}
-        // A concurrent call may have completed it between our read and now.
-        Err(StorageError::NotFound) => {
-            return already_completed_or(state, id, "upload_expired").await
+                    .join(", ");
+                return Err(conflict(
+                    "upload_incomplete",
+                    format!(
+                        "Parts {numbers} are missing or have the wrong size. Request fresh URLs and upload them.",
+                    ),
+                ));
+            }
+            let etags: Vec<String> = held.iter().map(|part| part.etag.clone()).collect();
+            match state
+                .store
+                .complete_multipart(&video.source_key, &upload_id, &etags)
+                .await
+            {
+                Ok(()) | Err(StorageError::NotFound) => {}
+                Err(err) => return Err(storage_error(err)),
+            }
         }
+        // The previous request may have assembled the object before committing the DB update.
+        Err(StorageError::NotFound) => {}
         Err(err) => return Err(storage_error(err)),
     }
 
@@ -500,12 +509,12 @@ pub async fn complete(
         .head(&video.source_key)
         .await
         .map_err(storage_error)?;
-    if stored != Some(size) {
+    let Some(stored) = stored else {
+        return already_completed_or(state, id, "upload_expired").await;
+    };
+    if stored != size {
         tracing::error!(video_id = %id, expected = size, ?stored, "assembled object has the wrong size");
-        repo::mark_failed(&state.db, id, "size_mismatch").await?;
-        if let Err(err) = state.store.delete(&video.source_key).await {
-            tracing::error!(error = ?err, "could not delete mismatched upload");
-        }
+        // A retry can declare the wrong size. Leave the object for a retry with the correct size.
         return Err(conflict(
             "size_mismatch",
             "The uploaded file does not match its declared size.",

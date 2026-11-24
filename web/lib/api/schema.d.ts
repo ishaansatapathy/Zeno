@@ -417,6 +417,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/videos/{id}/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What storage already holds of an upload, for a client that was interrupted.
+         * @description For a recording's upload (`POST /v1/videos/streaming`), `uploaded` lists the numbers of the parts storage
+         *     holds in full, that is, of exactly the part size the upload was started with: a shorter last part is not
+         *     listed, because it is only known to be the last once the recording has ended. `parts` is empty and
+         *     `total_parts` is 0, since the size is not known until the end: the client knows what it has, and asks for
+         *     each part it still needs with `POST /v1/videos/{id}/parts`. Asking changes nothing.
+         */
+        get: operations["videos_resume"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/videos/streaming": {
         parameters: {
             query?: never;
@@ -3062,6 +3086,74 @@ export interface operations {
                 headers: {
                     /** @description Seconds until the budget is available again. */
                     "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    videos_resume: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What storage holds. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden` (only creator and admin accounts upload) or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_uploading`: the upload is finished or was aborted. */
+            409: {
+                headers: {
                     [name: string]: unknown;
                 };
                 content: {

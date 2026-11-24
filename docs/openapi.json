@@ -3056,6 +3056,95 @@
           }
         ]
       }
+    },
+    "/v1/videos/{id}/upload": {
+      "get": {
+        "tags": [
+          "videos"
+        ],
+        "summary": "What storage already holds of an upload, for a client that was interrupted.",
+        "description": "For a recording's upload (`POST /v1/videos/streaming`), `uploaded` lists the numbers of the parts storage\nholds in full, that is, of exactly the part size the upload was started with: a shorter last part is not\nlisted, because it is only known to be the last once the recording has ended. `parts` is empty and\n`total_parts` is 0, since the size is not known until the end: the client knows what it has, and asks for\neach part it still needs with `POST /v1/videos/{id}/parts`. Asking changes nothing.",
+        "operationId": "videos_resume",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The video.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What storage holds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden` (only creator and admin accounts upload) or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_uploading`: the upload is finished or was aborted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {

@@ -96,7 +96,6 @@ const NOT_DESCRIBED_YET: &[&str] = &[
     "post /v1/videos",
     "get /v1/videos/{id}",
     "delete /v1/videos/{id}",
-    "get /v1/videos/{id}/upload",
     "post /v1/videos/{id}/abort",
     "post /v1/videos/{id}/play",
 ];
@@ -726,6 +725,7 @@ db_test! {
         let start = "/v1/videos/streaming";
         let parts = "/v1/videos/{id}/parts";
         let complete = "/v1/videos/{id}/complete";
+        let resume = "/v1/videos/{id}/upload";
         let started = json!({"filename": "Zeno.webm", "content_type": "video/webm", "part_size_bytes": 5 * MIB});
 
         // Signed out, and signed in without the right to upload: every route says so.
@@ -795,11 +795,22 @@ db_test! {
         assert_eq!(unsized_.status, StatusCode::UNPROCESSABLE_ENTITY);
         contract.check("post", complete, &unsized_);
         contract.check("post", complete, &app.post(&format!("/v1/videos/{nobody}/complete")).jar(&owner).json(json!({"size_bytes": 1})).send().await);
+        // Resuming: nothing yet, then only the parts that are whole (the last, shorter one is not listed).
+        let progress = format!("/v1/videos/{id}/upload");
+        let nothing_yet = app.get(&progress).jar(&owner).send().await;
+        assert_eq!(nothing_yet.status, StatusCode::OK, "{:?}", nothing_yet.body);
+        assert_eq!(nothing_yet.body["uploaded"], json!([]));
+        contract.check("get", resume, &nothing_yet);
         for (number, size, last) in [(1u16, 5 * MIB, false), (2, MIB, true)] {
             let res = app.post(&uri).jar(&owner).json(json!({"number": number, "size": size, "last": last})).send().await;
             let url = res.body["part"]["url"].as_str().unwrap().to_owned();
             assert!(browser_put(&url, vec![7; size]).await.is_success());
         }
+        let held = app.get(&progress).jar(&owner).send().await;
+        assert_eq!(held.body["uploaded"], json!([1]), "{:?}", held.body);
+        assert_eq!(held.body["parts"], json!([]));
+        contract.check("get", resume, &held);
+        contract.check("get", resume, &app.get(&format!("/v1/videos/{nobody}/upload")).jar(&owner).send().await);
         let done = app.post(&finish).jar(&owner).json(json!({"size_bytes": 6 * MIB})).send().await;
         assert_eq!(done.status, StatusCode::OK, "{:?}", done.body);
         assert_eq!(done.body["video"]["status"], "processing");
@@ -809,6 +820,9 @@ db_test! {
         let after = app.post(&uri).jar(&owner).json(json!({"number": 1, "size": 5 * MIB})).send().await;
         assert_eq!(after.code(), "not_streaming");
         contract.check("post", parts, &after);
+        let finished = app.get(&progress).jar(&owner).send().await;
+        assert_eq!(finished.code(), "not_uploading");
+        contract.check("get", resume, &finished);
 
         // Running out of budget: ten unfinished uploads, then the parts one person may ask for in an hour.
         let mut open_ids = Vec::new();

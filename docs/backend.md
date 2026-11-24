@@ -85,21 +85,22 @@ Creators (and admins) upload straight to object storage; the API only coordinate
 ### Uploading a recording while it is being made
 
 A file picked from disk has a size, and the part plan (and the exact length signed into each part's URL)
-follows from it. A recording has none until it stops, so it has its own three routes (documented in the
+follows from it. A recording has none until it stops, so it has its own routes (documented in the
 OpenAPI document; the other video routes are on `NOT_DESCRIBED_YET`):
 
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /v1/videos/streaming` | Start with no size: `filename`, `content_type`, optional `title`, `part_size_bytes` (5 to 64 MiB, default 16), and a client-generated UUID `id`. A retry with that id and identical details returns the same open upload; changed details or a finished upload return `409 streaming_id_conflict`. The video is marked `streaming`; `upload.parts` is empty |
 | `POST /v1/videos/:id/parts` | `{number, size, last}`: a URL for one more part, signed for exactly `size` bytes. Every part but the last must be exactly the part size; the last is 1 up to it. Asking again for the same part gives a fresh URL, so a lost answer or an expired URL is just asked again. `409 not_streaming` for a finished upload or one started with a size. 2000 a person an hour |
+| `GET /v1/videos/:id/upload` | What storage holds, for a client that was interrupted: `uploaded` lists the numbers of the parts held in full (of exactly the part size), `parts` is empty. A shorter last part is not listed, since it is only known to be the last once the recording has ended. `409 not_uploading` once storage has assembled the file. Retry `complete` with the recording size to confirm it and queue processing if still needed |
 | `POST /v1/videos/:id/complete` | Now takes `{"size_bytes": n}` for a recording (required, within `MAX_UPLOAD_BYTES`); a file's upload sends no body, and a size sent anyway must match the one it started with |
 
 The size stated at the end gives the same part plan a file would have had. Storage is listed and every
 part must be there with its planned length *before* anything is assembled (`409 upload_incomplete` names
 the missing ones), and the assembled object is checked against the stated size again. So a client that
 lies about the size cannot get an object of another size accepted, and a recording that stopped one part
-short is refused, not published truncated. `GET /v1/videos/:id/upload` on a streaming upload lists the
-full parts storage holds; the client, which knows what it has recorded, carries on from there. Migration
+short is refused, not published truncated. The client, which knows what it has recorded, carries on from
+what `GET /v1/videos/:id/upload` says storage holds (the extension finishes an interrupted recording this way). Migration
 `0027` adds `videos.streaming` and relaxes the size check for uploading streaming rows only (expand-only:
 an old binary still inserts a size above zero).
 

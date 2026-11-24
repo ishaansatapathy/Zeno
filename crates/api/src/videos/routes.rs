@@ -139,7 +139,29 @@ async fn show(
     }))
 }
 
-async fn resume(
+/// What storage already holds of an upload, for a client that was interrupted.
+///
+/// For a recording's upload (`POST /v1/videos/streaming`), `uploaded` lists the numbers of the parts storage
+/// holds in full, that is, of exactly the part size the upload was started with: a shorter last part is not
+/// listed, because it is only known to be the last once the recording has ended. `parts` is empty and
+/// `total_parts` is 0, since the size is not known until the end: the client knows what it has, and asks for
+/// each part it still needs with `POST /v1/videos/{id}/parts`. Asking changes nothing.
+#[utoipa::path(
+    get,
+    path = "/v1/videos/{id}/upload",
+    operation_id = "videos_resume",
+    tag = "videos",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The video.")),
+    responses(
+        (status = 200, description = "What storage holds.", body = UploadResponse),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`forbidden` (only creator and admin accounts upload) or `forbidden_origin`.", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 409, description = "`not_uploading`: the upload is finished or was aborted.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn resume(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,

@@ -55,6 +55,7 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::shares::routes::play,
         crate::videos::routes::create_streaming,
         crate::videos::routes::part,
+        crate::videos::routes::resume,
         crate::videos::routes::complete,
         crate::comments::routes::list_for_link,
         crate::comments::routes::create,

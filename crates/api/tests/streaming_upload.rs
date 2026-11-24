@@ -148,6 +148,37 @@ db_test! {
 }
 
 db_test! {
+    async fn an_assembled_upload_can_finish_after_the_api_loses_its_request(pool: PgPool) {
+        let app = app(pool.clone());
+        let jar = signup_creator(&app, "retry@streaming.in").await;
+        let (id, _) = start(&app, &jar).await;
+        put_part(&app, &jar, id, 1, bytes(MIB, 1), true).await;
+        let upload_id: String = sqlx::query_scalar("select upload_id from videos where id = $1")
+            .bind(id).fetch_one(&pool).await.unwrap();
+        let key = format!("uploads/{id}/source");
+        let parts = app.state.store.list_parts(&key, &upload_id).await.unwrap();
+        let etags = parts.into_iter().map(|part| part.etag).collect::<Vec<_>>();
+        app.state.store.complete_multipart(&key, &upload_id, &etags).await.unwrap();
+
+        let progress = app.get(&format!("/v1/videos/{id}/upload")).jar(&jar).send().await;
+        assert_eq!(progress.code(), "not_uploading");
+        let wrong = finish(&app, &jar, id, MIB + 1).await;
+        assert_eq!(wrong.code(), "size_mismatch");
+        assert_eq!(app.state.store.head(&key).await.unwrap(), Some(MIB as u64));
+
+        let (left, right) = tokio::join!(finish(&app, &jar, id, MIB), finish(&app, &jar, id, MIB));
+        for result in [left, right] {
+            assert_eq!(result.status, StatusCode::OK, "{:?}", result.body);
+            assert_eq!(result.body["video"]["status"], "processing");
+            assert_eq!(result.body["video"]["size_bytes"], MIB);
+        }
+        let jobs: i64 = sqlx::query_scalar("select count(*) from jobs where kind = 'transcode' and payload->>'video_id' = $1")
+            .bind(id.to_string()).fetch_one(&pool).await.unwrap();
+        assert_eq!(jobs, 1);
+    }
+}
+
+db_test! {
     async fn a_recording_shorter_than_one_part_is_a_single_last_part(pool: PgPool) {
         let app = app(pool.clone());
         let jar = signup_creator(&app, "t@x.in").await;
