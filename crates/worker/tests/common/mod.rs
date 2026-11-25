@@ -8,6 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use zeno_core::jobs;
 use zeno_core::keyvault::KeyVault;
+use zeno_core::segment_keys::{key_for, KeyRef};
 use zeno_core::storage::{S3Store, StorageConfig};
 use zeno_worker::config::{Limits, WorkerConfig};
 use zeno_worker::pipeline::Context;
@@ -318,11 +319,37 @@ pub async fn fetch_variant(
             .unwrap();
         std::fs::write(target.join(line), bytes).unwrap();
     }
-    std::fs::write(target.join("key.bin"), key).unwrap();
-    let local = text.replace("zeno-key://video", "key.bin");
+    // Each key tag names the key of its period (or the one key of an older video): write each one beside
+    // the playlist, the way the key server would hand it out, and point the tag at that file.
+    let content_key: [u8; 16] = key.try_into().expect("a content key is 16 bytes");
+    let mut local = String::new();
+    for line in text.lines() {
+        match key_uri(line) {
+            Some(uri) => {
+                let which = KeyRef::from_placeholder(uri)
+                    .unwrap_or_else(|| panic!("a key address the worker does not write: {uri}"));
+                let name = match which {
+                    KeyRef::Whole => "key.bin".to_owned(),
+                    KeyRef::Period(p) => format!("key-{p}.bin"),
+                };
+                std::fs::write(target.join(&name), key_for(&content_key, id, which)).unwrap();
+                local.push_str(&line.replace(uri, &name));
+            }
+            None => local.push_str(line),
+        }
+        local.push('\n');
+    }
     let path = target.join("index.m3u8");
     std::fs::write(&path, local).unwrap();
     path
+}
+
+/// The address inside a key tag, if the line is one.
+pub fn key_uri(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("#EXT-X-KEY:")?;
+    let start = rest.find("URI=\"")? + 5;
+    let end = rest[start..].find('"')? + start;
+    Some(&rest[start..end])
 }
 
 pub fn probe_json(path: &Path) -> Value {

@@ -68,7 +68,9 @@ db_test! {
         for variant in ["144p", "720p", "audio"] {
             let playlist = ctx.store.get_bytes(&format!("videos/{id}/{variant}/index.m3u8"), 1 << 20).await.unwrap();
             let text = String::from_utf8(playlist).unwrap();
-            assert!(text.contains("#EXT-X-KEY:METHOD=AES-128,URI=\"zeno-key://video\""), "{variant}: {text}");
+            // A short video is one period; its key is the first period's, not the content key.
+            assert!(text.contains("#EXT-X-KEY:METHOD=AES-128,URI=\"zeno-key://video/0\""), "{variant}: {text}");
+            assert_eq!(text.matches("#EXT-X-KEY").count(), 1, "{variant}: {text}");
             assert!(text.contains("#EXT-X-PLAYLIST-TYPE:VOD") && text.contains("#EXT-X-ENDLIST"));
 
             let first_segment = ctx.store.get_bytes(&format!("videos/{id}/{variant}/seg_00000.ts"), 64 << 20).await.unwrap();
@@ -98,6 +100,104 @@ db_test! {
         for never in ["key.bin", "keyinfo.txt", "source"] {
             assert_eq!(ctx.store.head(&format!("videos/{id}/{never}")).await.unwrap(), None, "{never} must never be published");
         }
+    }
+}
+
+db_test! {
+    async fn a_long_video_is_locked_in_periods_and_each_opens_only_with_its_own_key(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        // 75 s of 6 s segments: starts 0..72, so three 30 s periods (0, 1 and 2).
+        let spec = Spec { width: 320, height: 180, secs: 75, audio: true, fps: 15 };
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &spec)).await;
+        run_first(&ctx).await;
+
+        let video = video_state(&pool, id).await;
+        assert_eq!(video.status, "ready", "{:?}", video.error_code);
+        let rotation: Option<i32> = sqlx::query_scalar("select rotation_secs from video_keys where video_id = $1").bind(id).fetch_one(&pool).await.unwrap();
+        assert_eq!(rotation, Some(30), "the video says how its keys change");
+
+        let variant = rendition_names(&video).remove(0);
+        let text = String::from_utf8(ctx.store.get_bytes(&format!("videos/{id}/{variant}/index.m3u8"), 1 << 20).await.unwrap()).unwrap();
+        let tags: Vec<&str> = text.lines().filter_map(key_uri).collect();
+        assert_eq!(tags, ["zeno-key://video/0", "zeno-key://video/1", "zeno-key://video/2"], "{text}");
+        // Each tag stands right before the first segment it covers.
+        let lines: Vec<&str> = text.lines().collect();
+        for (n, line) in lines.iter().enumerate().filter(|(_, l)| l.starts_with("#EXT-X-KEY")) {
+            assert!(lines[n + 1].starts_with("#EXTINF"), "{line}");
+        }
+
+        // Played with each period's own key it decodes in full.
+        let key = stored_key(&pool, id).await;
+        let play = scratch_dir();
+        let local = fetch_variant(&ctx, id, &variant, &key, play.path()).await;
+        assert!(decodes_cleanly(&local), "every period opens with its own key");
+        let dir = local.parent().unwrap();
+        let periods: Vec<Vec<u8>> = (0..3).map(|p| std::fs::read(dir.join(format!("key-{p}.bin"))).unwrap()).collect();
+        for (p, period) in periods.iter().enumerate() {
+            assert_ne!(period, &key, "period {p} is not the content key");
+            assert!(periods.iter().filter(|other| *other == period).count() == 1, "period {p} has a key of its own");
+        }
+
+        // What a player does to each segment, with every key it might hold: only the segment's own period's
+        // key gives back a transport stream (ffmpeg would skip over a bad stretch and call it a success,
+        // so this is checked on the bytes).
+        let mut period = None;
+        let mut checked = 0;
+        for line in text.lines() {
+            if let Some(uri) = key_uri(line) {
+                period = Some(uri.rsplit('/').next().unwrap().parse::<usize>().unwrap());
+            } else if line.ends_with(".ts") {
+                let own = period.expect("a key tag comes before the first segment");
+                let bytes = ctx.store.get_bytes(&format!("videos/{id}/{variant}/{line}"), 64 << 20).await.unwrap();
+                let sequence = checked as u64;
+                assert!(opens(&bytes, &periods[own], sequence), "{line} opens with its own period's key");
+                for (other, wrong) in periods.iter().enumerate().filter(|(p, _)| *p != own) {
+                    assert!(!opens(&bytes, wrong, sequence), "{line} (period {own}) must not open with period {other}'s key");
+                }
+                assert!(!opens(&bytes, &key, sequence), "{line} must not open with the content key");
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 13, "75 s in 6 s segments");
+    }
+}
+
+/// Whether `bytes` decrypts (AES-128-CBC, PKCS#7, IV = the segment's number) into whole MPEG transport stream packets.
+fn opens(bytes: &[u8], key: &[u8], sequence: u64) -> bool {
+    use cbc::cipher::block_padding::Pkcs7;
+    use cbc::cipher::{BlockDecryptMut, KeyIvInit};
+    let mut iv = [0u8; 16];
+    iv[8..].copy_from_slice(&sequence.to_be_bytes());
+    let key: [u8; 16] = key.try_into().unwrap();
+    let Ok(plain) = cbc::Decryptor::<aes::Aes128>::new(&key.into(), &iv.into())
+        .decrypt_padded_vec_mut::<Pkcs7>(bytes)
+    else {
+        return false;
+    };
+    !plain.is_empty() && plain.len() % 188 == 0 && plain.chunks(188).all(|packet| packet[0] == 0x47)
+}
+
+db_test! {
+    async fn a_video_made_before_rotation_gets_its_other_renditions_with_its_one_key(pool: PgPool) {
+        let ctx = context(pool.clone()).await;
+        let scratch = scratch_dir();
+        let id = seed(&ctx, make_video(scratch.path(), "in.mp4", &Spec::default())).await;
+        run_first(&ctx).await;
+        // Make it what a video made by the worker before this change looks like to the one that finishes it.
+        sqlx::query("update video_keys set rotation_secs = null where video_id = $1").bind(id).execute(&pool).await.unwrap();
+
+        run(&ctx).await;
+        let key = stored_key(&pool, id).await;
+        let play = scratch_dir();
+        for variant in ["144p", "720p", "audio"] {
+            let text = String::from_utf8(ctx.store.get_bytes(&format!("videos/{id}/{variant}/index.m3u8"), 1 << 20).await.unwrap()).unwrap();
+            assert_eq!(text.lines().filter_map(key_uri).collect::<Vec<_>>(), ["zeno-key://video"], "{variant}");
+            let local = fetch_variant(&ctx, id, variant, &key, play.path()).await;
+            assert!(decodes_cleanly(&local), "{variant} opens with the content key, as older ones do");
+        }
+        let rotation: Option<i32> = sqlx::query_scalar("select rotation_secs from video_keys where video_id = $1").bind(id).fetch_one(&pool).await.unwrap();
+        assert_eq!(rotation, None, "finishing a video does not change how its keys work");
     }
 }
 

@@ -6,9 +6,6 @@ use std::path::Path;
 use crate::ladder::{self, Rung, AUDIO_ONLY_KBPS};
 
 pub const SEGMENT_SECS: u32 = 6;
-/// Written into every playlist's `#EXT-X-KEY`. The player never sees it: playback replaces it
-/// with a short-lived, per-viewer key URL when the playlist is served.
-pub const KEY_URI_PLACEHOLDER: &str = "zeno-key://video";
 pub const PLAYLIST_NAME: &str = "index.m3u8";
 pub const SEGMENT_PATTERN: &str = "seg_%05d.ts";
 
@@ -18,8 +15,6 @@ pub const FPS_CAP: f64 = 30.5;
 
 pub struct EncodeInput<'a> {
     pub source: &'a Path,
-    /// ffmpeg's `-hls_key_info_file`: key URI, key file path, optional IV.
-    pub key_info: &'a Path,
     pub max_duration_secs: f64,
     pub threads: u32,
 }
@@ -60,8 +55,6 @@ fn hls_output(input: &EncodeInput<'_>) -> Vec<String> {
         "mpegts".into(),
         "-hls_segment_filename".into(),
         SEGMENT_PATTERN.into(),
-        "-hls_key_info_file".into(),
-        slashed(input.key_info),
         PLAYLIST_NAME.into(),
     ]
 }
@@ -326,20 +319,16 @@ mod tests {
 
     use super::*;
 
-    fn input() -> (PathBuf, PathBuf) {
-        (
-            PathBuf::from("C:\\work\\job 1\\source"),
-            PathBuf::from("/tmp/work/keyinfo.txt"),
-        )
+    fn input() -> PathBuf {
+        PathBuf::from("C:\\work\\job 1\\source")
     }
 
     fn args_for(rung_height: u32, audio: bool, fps: bool) -> Vec<String> {
-        let (source, key_info) = input();
+        let source = input();
         let rung = ladder::choose(rung_height).pop().unwrap();
         video_args(
             &EncodeInput {
                 source: &source,
-                key_info: &key_info,
                 max_duration_secs: 3600.0,
                 threads: 2,
             },
@@ -457,10 +446,9 @@ mod tests {
     }
 
     fn audio_only() -> Vec<String> {
-        let (source, key_info) = input();
+        let source = input();
         audio_only_args(&EncodeInput {
             source: &source,
-            key_info: &key_info,
             max_duration_secs: 60.0,
             threads: 0,
         })
@@ -477,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn video_output_is_aes_encrypted_vod_hls_with_aligned_keyframes() {
+    fn video_output_is_clear_vod_hls_with_aligned_keyframes_and_is_locked_afterwards() {
         let args = args_for(480, true, false);
         let joined = args.join(" ");
         for needle in [
@@ -485,7 +473,6 @@ mod tests {
             "-hls_flags independent_segments",
             "-hls_segment_type mpegts",
             "-hls_segment_filename seg_%05d.ts",
-            "-hls_key_info_file /tmp/work/keyinfo.txt",
             "-force_key_frames expr:gte(t,n_forced*6)",
             "-sc_threshold 0",
             "-hls_time 6",
@@ -495,6 +482,8 @@ mod tests {
             assert!(joined.contains(needle), "missing {needle:?} in {joined}");
         }
         assert_eq!(args.last().unwrap(), "index.m3u8");
+        // ffmpeg can lock a playlist with one key and no more; `seal` locks it with one per period.
+        assert!(!joined.contains("hls_key_info_file"), "{joined}");
     }
 
     #[test]
@@ -528,15 +517,11 @@ mod tests {
 
     #[test]
     fn every_argument_is_a_separate_element_so_no_shell_can_reinterpret_them() {
-        let (source, key_info) = (
-            PathBuf::from("/tmp/a b; rm -rf ~/source"),
-            PathBuf::from("/tmp/k"),
-        );
+        let source = PathBuf::from("/tmp/a b; rm -rf ~/source");
         let rung = ladder::choose(720).pop().unwrap();
         let args = video_args(
             &EncodeInput {
                 source: &source,
-                key_info: &key_info,
                 max_duration_secs: 10.0,
                 threads: 1,
             },

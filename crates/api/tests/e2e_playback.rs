@@ -58,9 +58,9 @@ fn make_video(dir: &std::path::Path) -> Vec<u8> {
             "-f",
             "lavfi",
             "-i",
-            "testsrc=size=320x240:rate=25:duration=4",
+            "testsrc=size=320x240:rate=25:duration=75",
         ])
-        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=4"])
+        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=75"])
         .args([
             "-c:v",
             "libx264",
@@ -300,7 +300,11 @@ async fn an_uploaded_lecture_plays_end_to_end_and_only_with_a_live_session(pool:
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert!(fetches >= 1, "the key came from the key server");
+    // 75 s is three 30 s periods: the player needs a key for each, and the key server gave them.
+    assert!(
+        fetches >= 3,
+        "a key for each period came from the key server, got {fetches}"
+    );
 
     // A token that is not this session's own gets nowhere.
     let token = master.split("?t=").nth(1).unwrap();

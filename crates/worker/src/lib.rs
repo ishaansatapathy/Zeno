@@ -10,3 +10,4 @@ pub mod pipeline;
 pub mod preflight;
 pub mod probe;
 pub mod runner;
+pub mod seal;

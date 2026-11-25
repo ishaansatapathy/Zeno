@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use zeno_core::jobs::{self, Job};
 use zeno_core::model::VideoStatus;
+use zeno_core::segment_keys::DEFAULT_ROTATION_SECS;
 use zeno_core::storage::{S3Store, StorageError};
 
 use crate::config::WorkerConfig;
@@ -32,6 +33,7 @@ use crate::ffmpeg::{self, RunError};
 use crate::hls::{self, EncodeInput, Segment, Variant};
 use crate::ladder::{self, Rung};
 use crate::probe::{self, Probe, VideoInfo};
+use crate::seal::{self, Locking, SealFailure};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 const PROBE_MAX_OUTPUT: usize = 1024 * 1024;
@@ -61,6 +63,7 @@ struct RestRow {
     status: VideoStatus,
     renditions: serde_json::Value,
     wrapped_key: Option<Vec<u8>>,
+    rotation_secs: Option<i32>,
 }
 
 fn check(cancel: &CancellationToken) -> Result<(), JobError> {
@@ -117,11 +120,16 @@ pub async fn process(ctx: &Context, job: &Job, cancel: &CancellationToken) -> Re
     // committed alongside "ready", and a retry overwrites every object it wrote before.
     let mut key = [0u8; 16];
     OsRng.fill_bytes(&mut key);
-    let key_info = write_key_files(work.path(), &key).await?;
+    // A new video's segments are locked in periods, each with a key derived from this one (`seal`).
+    let rotation_secs = Some(DEFAULT_ROTATION_SECS);
+    let locking = Locking {
+        video_id,
+        content_key: &key,
+        rotation_secs,
+    };
 
     let input = EncodeInput {
         source: &source,
-        key_info: &key_info,
         max_duration_secs: ctx.config.limits.max_duration_secs,
         threads: ctx.config.encode_threads,
     };
@@ -132,6 +140,7 @@ pub async fn process(ctx: &Context, job: &Job, cancel: &CancellationToken) -> Re
         &probe,
         &info,
         &input,
+        locking,
         &rungs[first],
         &out,
         timeout,
@@ -166,6 +175,7 @@ pub async fn process(ctx: &Context, job: &Job, cancel: &CancellationToken) -> Re
         job,
         video_id,
         &key,
+        rotation_secs,
         &info,
         &[variant],
         duration_secs,
@@ -195,7 +205,7 @@ pub async fn process_rest(
     let started = Instant::now();
     let video_id = video_id_of(job)?;
     let row: Option<RestRow> = sqlx::query_as(
-        "select v.source_key, v.status, v.renditions, k.wrapped_key \
+        "select v.source_key, v.status, v.renditions, k.wrapped_key, k.rotation_secs \
          from videos v left join video_keys k on k.video_id = v.id \
          where v.id = $1 and v.deleted_at is null",
     )
@@ -246,10 +256,14 @@ pub async fn process_rest(
         return finish_without_work(ctx, job).await;
     }
 
-    let key_info = write_key_files(work.path(), &key).await?;
+    // A video made before keys were rotated keeps its one key; the others get the periods it was made with.
+    let locking = Locking {
+        video_id,
+        content_key: &key,
+        rotation_secs: row.rotation_secs,
+    };
     let input = EncodeInput {
         source: &source,
-        key_info: &key_info,
         max_duration_secs: ctx.config.limits.max_duration_secs,
         threads: ctx.config.encode_threads,
     };
@@ -262,11 +276,13 @@ pub async fn process_rest(
         let out = work.path().join(format!("out-{n}"));
         let variant = match rung {
             Some(rung) => {
-                encode_video_rendition(ctx, &probe, &info, &input, rung, &out, timeout, cancel)
-                    .await?
-                    .0
+                encode_video_rendition(
+                    ctx, &probe, &info, &input, locking, rung, &out, timeout, cancel,
+                )
+                .await?
+                .0
             }
-            None => encode_audio_rendition(ctx, &input, &out, timeout, cancel).await?,
+            None => encode_audio_rendition(ctx, &input, locking, &out, timeout, cancel).await?,
         };
         publish(ctx, video_id, &out, cancel).await?;
         check(cancel)?;
@@ -294,24 +310,6 @@ async fn work_dir(ctx: &Context) -> Result<tempfile::TempDir, JobError> {
     Ok(tempfile::Builder::new()
         .prefix("job-")
         .tempdir_in(&ctx.config.work_dir)?)
-}
-
-/// The key as ffmpeg wants it: a file holding it, and a file saying where that is and what to write into
-/// the playlists in its place (the API puts the real address in when it serves one).
-async fn write_key_files(work: &Path, key: &[u8; 16]) -> Result<PathBuf, JobError> {
-    let key_path = work.join("key.bin");
-    tokio::fs::write(&key_path, key).await?;
-    let key_info = work.join("keyinfo.txt");
-    tokio::fs::write(
-        &key_info,
-        format!(
-            "{}\n{}\n",
-            hls::KEY_URI_PLACEHOLDER,
-            hls::slashed(&key_path)
-        ),
-    )
-    .await?;
-    Ok(key_info)
 }
 
 async fn finish_without_work(ctx: &Context, job: &Job) -> Result<(), JobError> {
@@ -384,6 +382,7 @@ async fn encode_video_rendition(
     probe: &Probe,
     info: &VideoInfo,
     input: &EncodeInput<'_>,
+    locking: Locking<'_>,
     rung: &Rung,
     out: &Path,
     timeout: Duration,
@@ -393,7 +392,7 @@ async fn encode_video_rendition(
     let reduce_fps = info.fps.is_some_and(|fps| fps > hls::FPS_CAP);
     let dir = out.join(&rung.name);
     let args = hls::video_args(input, rung, probe.has_audio, reduce_fps);
-    let segments = encode_one(ctx, &args, &dir, timeout, cancel).await?;
+    let segments = encode_one(ctx, &args, &dir, locking, timeout, cancel).await?;
     let measured = measure_segments(&dir, &segments).await?;
     let (peak_bps, average_bps) =
         hls::measure(&measured, hls::configured_peak_bps(rung, probe.has_audio));
@@ -414,6 +413,7 @@ async fn encode_video_rendition(
 async fn encode_audio_rendition(
     ctx: &Context,
     input: &EncodeInput<'_>,
+    locking: Locking<'_>,
     out: &Path,
     timeout: Duration,
     cancel: &CancellationToken,
@@ -421,7 +421,7 @@ async fn encode_audio_rendition(
     check(cancel)?;
     let dir = out.join("audio");
     let args = hls::audio_only_args(input);
-    let segments = encode_one(ctx, &args, &dir, timeout, cancel).await?;
+    let segments = encode_one(ctx, &args, &dir, locking, timeout, cancel).await?;
     let measured = measure_segments(&dir, &segments).await?;
     let (peak_bps, average_bps) = hls::measure(&measured, hls::audio_only_configured_peak_bps());
     Ok(Variant {
@@ -439,6 +439,7 @@ async fn encode_one(
     ctx: &Context,
     args: &[String],
     dir: &Path,
+    locking: Locking<'_>,
     timeout: Duration,
     cancel: &CancellationToken,
 ) -> Result<Vec<Segment>, JobError> {
@@ -461,6 +462,13 @@ async fn encode_one(
     if segments.is_empty() {
         return Err(JobError::Encode("ffmpeg produced no segments".into()));
     }
+    // ffmpeg wrote it in the clear; what is published is locked, a key to each period.
+    seal::seal_rendition(dir, hls::PLAYLIST_NAME, locking)
+        .await
+        .map_err(|failure| match failure {
+            SealFailure::Io(err) => JobError::from(err),
+            SealFailure::Playlist(err) => JobError::Encode(err.to_string()),
+        })?;
     Ok(segments)
 }
 
@@ -619,6 +627,7 @@ async fn finalize(
     job: &Job,
     video_id: Uuid,
     key: &[u8; 16],
+    rotation_secs: Option<i32>,
     info: &VideoInfo,
     variants: &[Variant],
     duration_secs: f64,
@@ -631,11 +640,13 @@ async fn finalize(
         .map_err(|e| JobError::Transient(e.to_string()))?;
     let mut tx = ctx.db.begin().await?;
     sqlx::query(
-        "insert into video_keys (video_id, wrapped_key) values ($1, $2) \
-         on conflict (video_id) do update set wrapped_key = excluded.wrapped_key, created_at = now()",
+        "insert into video_keys (video_id, wrapped_key, rotation_secs) values ($1, $2, $3) \
+         on conflict (video_id) do update set wrapped_key = excluded.wrapped_key, \
+             rotation_secs = excluded.rotation_secs, created_at = now()",
     )
     .bind(video_id)
     .bind(&wrapped[..])
+    .bind(rotation_secs)
     .execute(&mut *tx)
     .await?;
     let updated = sqlx::query(
