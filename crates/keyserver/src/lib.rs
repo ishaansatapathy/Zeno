@@ -6,6 +6,12 @@
 //! is ready and not deleted; and the session has not already fetched the key an unreasonable
 //! number of times. Every refusal looks the same from outside.
 //!
+//! A video made after keys were rotated (`video_keys.rotation_secs` set) is locked in periods, each with a key
+//! derived from the content key (`zeno_core::segment_keys`): the request names the period (`k`), and the
+//! content key itself is never given out for such a video. A viewing that ends stops getting keys at the next
+//! one it asks for, which is how a revoke reaches a player that already holds the playlist. A video made
+//! before has one key and no `k`.
+//!
 //! A request from a browser page on any origin but the web app's is refused outright, which is
 //! the "domain lock": a key URL copied into a player on another site does not work there.
 
@@ -28,10 +34,27 @@ use uuid::Uuid;
 use zeno_core::config::{parse_or, required, ConfigError, Environment};
 use zeno_core::keyvault::KeyVault;
 use zeno_core::playback::PlaybackSigner;
+use zeno_core::segment_keys::{last_period, period_key, KeyRef};
 
 /// A player fetches the key once per rendition it plays, and again after errors or seeks into a
 /// fresh variant; far more than this from one session is somebody harvesting.
 pub const MAX_KEY_FETCHES_PER_SESSION: i32 = 60;
+/// A rotated video is asked for a key about every period of video, for each rendition played (up to seven,
+/// audio included), so its allowance grows with its length: this much for each period.
+const KEY_FETCHES_PER_PERIOD: i32 = 7;
+
+/// How many keys one viewing may ask for before it is somebody harvesting.
+pub fn fetch_cap(rotation_secs: Option<i32>, duration_secs: Option<i32>) -> i32 {
+    match rotation_secs {
+        None => MAX_KEY_FETCHES_PER_SESSION,
+        Some(rotation) => {
+            let periods = i64::from(last_period(duration_secs.unwrap_or(0), rotation)) + 1;
+            let cap = i64::from(MAX_KEY_FETCHES_PER_SESSION)
+                + periods * i64::from(KEY_FETCHES_PER_PERIOD);
+            i32::try_from(cap).unwrap_or(i32::MAX)
+        }
+    }
+}
 const MINUTE: Duration = Duration::from_secs(60);
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -57,8 +80,8 @@ impl KeyServerConfig {
                 name: "KEYSERVER_BIND_ADDR",
                 reason: e.to_string(),
             })?;
-        let ip_limit_per_minute = parse_or("KEY_IP_LIMIT_PER_MINUTE", 120u64)?;
-        let user_limit_per_day = parse_or("KEY_USER_LIMIT_PER_DAY", 1_000u64)?;
+        let ip_limit_per_minute = parse_or("KEY_IP_LIMIT_PER_MINUTE", 600u64)?;
+        let user_limit_per_day = parse_or("KEY_USER_LIMIT_PER_DAY", 5_000u64)?;
         if ip_limit_per_minute == 0 || user_limit_per_day == 0 {
             return Err(ConfigError::Invalid {
                 name: "KEY_IP_LIMIT_PER_MINUTE",
@@ -242,6 +265,20 @@ pub fn router(state: KeyServer) -> Router {
 #[derive(Deserialize)]
 struct KeyQuery {
     t: Option<String>,
+    /// The period whose key is wanted, for a video whose keys are rotated.
+    k: Option<String>,
+}
+
+/// `Ok(None)` when no period was asked for; `Err` for anything that is not a plain number.
+fn requested_period(k: Option<&str>) -> Result<Option<u32>, ()> {
+    let Some(k) = k else { return Ok(None) };
+    match KeyRef::from_placeholder(&format!(
+        "{}/{k}",
+        zeno_core::segment_keys::KEY_URI_PLACEHOLDER
+    )) {
+        Some(KeyRef::Period(period)) => Ok(Some(period)),
+        _ => Err(()),
+    }
 }
 
 fn refuse(status: StatusCode, code: &'static str) -> Response {
@@ -277,9 +314,35 @@ fn denied() -> Response {
 struct Granted {
     key_fetches: i32,
     wrapped_key: Vec<u8>,
+    rotation_secs: Option<i32>,
+    duration_seconds: Option<i32>,
 }
 
+/// Every answer to the web app's own pages (a refusal as much as a key) says that page may read it. Without
+/// that the browser hides a refusal from the player, which sees a network error instead of "no", and keeps
+/// retrying for half a minute before it stops: a revoked viewing would end that much later. Nothing is
+/// given to any other origin: it is only the one the key server already answers.
 async fn key(
+    State(state): State<KeyServer>,
+    connect: Option<ConnectInfo<SocketAddr>>,
+    path: Path<String>,
+    query: Query<KeyQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let from_the_web_app = headers
+        .get(header::ORIGIN)
+        .is_some_and(|origin| origin == state.client_origin);
+    let client_origin = state.client_origin.clone();
+    let mut response = key_answer(State(state), connect, path, query, headers).await;
+    if from_the_web_app {
+        let headers = response.headers_mut();
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, client_origin);
+        headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+    }
+    response
+}
+
+async fn key_answer(
     State(state): State<KeyServer>,
     connect: Option<ConnectInfo<SocketAddr>>,
     Path(video_id): Path<String>,
@@ -306,6 +369,9 @@ async fn key(
     let (Ok(video_id), Some(token)) = (Uuid::parse_str(&video_id), query.t) else {
         return denied();
     };
+    let Ok(period) = requested_period(query.k.as_deref()) else {
+        return denied();
+    };
     let claims = match state.tokens.verify(&token, Utc::now()) {
         Ok(claims) if claims.video_id == video_id => claims,
         Ok(_) => return denied(),
@@ -329,7 +395,7 @@ async fn key(
 
     let granted: Option<Granted> = match sqlx::query_as(
         "with candidate as materialized ( \
-             select s.id, k.wrapped_key, case \
+             select s.id, k.wrapped_key, k.rotation_secs, v.duration_seconds, case \
                  when s.expires_at <= now() then 'expired' \
                  when v.deleted_at is not null then 'video_deleted' \
                  when v.status <> 'ready' then 'access_revoked' \
@@ -345,7 +411,7 @@ async fn key(
          ) \
          update playback_sessions s set last_seen_at=now(), key_fetches=s.key_fetches+1 \
          from candidate c where s.id=c.id and c.access_state='allowed' \
-         returning s.key_fetches, c.wrapped_key",
+         returning s.key_fetches, c.wrapped_key, c.rotation_secs, c.duration_seconds",
     )
     .bind(claims.session_id)
     .bind(claims.account())
@@ -363,16 +429,32 @@ async fn key(
         tracing::debug!(session_id = %claims.session_id, %video_id, "no open session for key request");
         return denied();
     };
-    if granted.key_fetches > MAX_KEY_FETCHES_PER_SESSION {
+    if granted.key_fetches > fetch_cap(granted.rotation_secs, granted.duration_seconds) {
         tracing::warn!(session_id = %claims.session_id, user_id = %claims.user_id, fetches = granted.key_fetches, "key fetch limit hit");
         return refuse(StatusCode::TOO_MANY_REQUESTS, "too_many_key_requests");
     }
-    let key = match state.vault.open(video_id, &granted.wrapped_key) {
+    let content_key = match state.vault.open(video_id, &granted.wrapped_key) {
         Ok(key) => key,
         Err(err) => {
             // The stored key does not open under this secret: misconfiguration, not the viewer.
             tracing::error!(%err, %video_id, "stored content key could not be unwrapped");
             return refuse(StatusCode::INTERNAL_SERVER_ERROR, "internal_error");
+        }
+    };
+    // A rotated video is only ever given a period's key, and an older one only its whole key: asking the
+    // wrong way round is a player (or a person) that does not know what it is playing.
+    let key = match (granted.rotation_secs, period) {
+        (None, None) => content_key,
+        (Some(rotation), Some(period))
+            if granted
+                .duration_seconds
+                .is_none_or(|duration| period <= last_period(duration, rotation)) =>
+        {
+            period_key(&content_key, video_id, period)
+        }
+        _ => {
+            tracing::info!(session_id = %claims.session_id, %video_id, ?period, rotated = granted.rotation_secs.is_some(), "key request for a period the video does not have");
+            return denied();
         }
     };
 

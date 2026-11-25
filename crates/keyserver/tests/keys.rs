@@ -12,7 +12,8 @@ use tower::ServiceExt;
 use uuid::Uuid;
 use zeno_core::keyvault::KeyVault;
 use zeno_core::playback::{PlaybackClaims, PlaybackSigner, ANONYMOUS_VIEWER};
-use zeno_keyserver::{router, KeyLimiter, KeyServer, MAX_KEY_FETCHES_PER_SESSION};
+use zeno_core::segment_keys::period_key;
+use zeno_keyserver::{fetch_cap, router, KeyLimiter, KeyServer, MAX_KEY_FETCHES_PER_SESSION};
 
 const ORIGIN: &str = "http://localhost:3000";
 const KEY: [u8; 16] = *b"sixteen byte key";
@@ -273,7 +274,26 @@ db_test! {
             let reply = get(&app, &s.url(), Some(origin)).await;
             assert_eq!(reply.status, StatusCode::FORBIDDEN, "{origin}");
             assert!(reply.body.len() > 16 && !reply.body.windows(16).any(|w| w == KEY));
+            assert!(reply.headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(), "{origin} may not read even the refusal");
         }
+    }
+}
+
+db_test! {
+    async fn the_web_apps_page_can_read_a_refusal_so_its_player_stops_at_once(pool: PgPool) {
+        let app = app(pool.clone());
+        let s = seed(&pool).await;
+        rotate(&pool, s.video, 30, 100).await;
+        sqlx::query("update playback_sessions set ended_at = now(), end_reason = 'access_revoked' where id = $1")
+            .bind(s.session).execute(&pool).await.unwrap();
+        for uri in [period_url(&s, "1"), format!("/v1/keys/{}?t=garbage", s.video)] {
+            let reply = get(&app, &uri, Some(ORIGIN)).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN);
+            assert_eq!(reply.headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], ORIGIN, "a refusal the page cannot read looks like a broken network");
+            assert_eq!(reply.headers[header::VARY], "Origin");
+        }
+        // With no Origin (a native player) there is nothing to say.
+        assert!(get(&app, &period_url(&s, "1"), None).await.headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
     }
 }
 
@@ -396,6 +416,116 @@ db_test! {
         let reply = get(&app, &s.url(), Some(ORIGIN)).await;
         assert_eq!(reply.status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!reply.body.windows(16).any(|w| w == KEY));
+    }
+}
+
+// ---- keys that change as the video plays -------------------------------------------------------------------
+
+/// Makes the video one whose segments are locked in periods of `rotation` seconds, `duration` seconds long.
+async fn rotate(pool: &PgPool, video: Uuid, rotation: i32, duration: i32) {
+    sqlx::query("update video_keys set rotation_secs = $2 where video_id = $1")
+        .bind(video)
+        .bind(rotation)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("update videos set duration_seconds = $2 where id = $1")
+        .bind(video)
+        .bind(duration)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+fn period_url(s: &Seeded, k: &str) -> String {
+    format!("{}&k={k}", s.url())
+}
+
+db_test! {
+    async fn a_rotated_video_gives_each_period_its_own_key_and_never_the_content_key(pool: PgPool) {
+        let app = app(pool.clone());
+        let s = seed(&pool).await;
+        // 100 s in periods of 30 s: periods 0 to 3 (the last starts at 90 s).
+        rotate(&pool, s.video, 30, 100).await;
+
+        let mut seen = Vec::new();
+        for period in 0..=3u32 {
+            let reply = get(&app, &period_url(&s, &period.to_string()), Some(ORIGIN)).await;
+            assert_eq!(reply.status, StatusCode::OK, "period {period}");
+            assert_eq!(reply.body, period_key(&KEY, s.video, period), "period {period}");
+            assert_ne!(reply.body, KEY, "the content key itself is never given for a rotated video");
+            assert_eq!(reply.headers[header::CACHE_CONTROL], "no-store, private");
+            seen.push(reply.body);
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 4, "every period has its own key");
+
+        // A period the video does not have locks nothing, so there is nothing to give.
+        assert_eq!(get(&app, &period_url(&s, "4"), Some(ORIGIN)).await.status, StatusCode::FORBIDDEN);
+        assert_eq!(get(&app, &period_url(&s, "4000000"), Some(ORIGIN)).await.status, StatusCode::FORBIDDEN);
+
+        // Asking for it the old way (no period) must not hand over the content key.
+        let whole = get(&app, &s.url(), Some(ORIGIN)).await;
+        assert_eq!(whole.status, StatusCode::FORBIDDEN);
+        assert!(!whole.body.windows(16).any(|w| w == KEY));
+
+        // Anything that is not a plain number is refused the same way as everything else.
+        for bad in ["", "abc", "-1", "+1", "01", "1.5", "1%2F2", "99999999999999999999", "0x1"] {
+            let reply = get(&app, &period_url(&s, bad), Some(ORIGIN)).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "k={bad:?}");
+        }
+    }
+}
+
+db_test! {
+    async fn a_video_made_before_rotation_has_one_key_and_no_periods(pool: PgPool) {
+        let app = app(pool.clone());
+        let s = seed(&pool).await;
+        assert_eq!(get(&app, &s.url(), Some(ORIGIN)).await.body, KEY);
+        // A period of a video that has none would be a key that opens nothing: refused, not invented.
+        let reply = get(&app, &period_url(&s, "0"), Some(ORIGIN)).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
+        assert!(!reply.body.windows(16).any(|w| w == KEY));
+    }
+}
+
+db_test! {
+    async fn a_viewing_that_ends_gets_no_key_for_the_next_period(pool: PgPool) {
+        let app = app(pool.clone());
+        let s = seed(&pool).await;
+        rotate(&pool, s.video, 30, 100).await;
+        assert_eq!(get(&app, &period_url(&s, "0"), Some(ORIGIN)).await.status, StatusCode::OK);
+
+        // The owner revokes: the viewing ends. The player holds period 0 and the playlist, and wants period 1.
+        sqlx::query("update playback_sessions set ended_at = now(), end_reason = 'access_revoked' where id = $1")
+            .bind(s.session).execute(&pool).await.unwrap();
+        for period in ["1", "2", "0"] {
+            let reply = get(&app, &period_url(&s, period), Some(ORIGIN)).await;
+            assert_eq!(reply.status, StatusCode::FORBIDDEN, "period {period}");
+            assert!(!reply.body.windows(16).any(|w| w == period_key(&KEY, s.video, 1)));
+        }
+    }
+}
+
+db_test! {
+    async fn a_rotated_videos_allowance_of_keys_grows_with_its_length(pool: PgPool) {
+        assert_eq!(fetch_cap(None, Some(100)), MAX_KEY_FETCHES_PER_SESSION);
+        // 100 s in periods of 30 s: four periods, each asked for once per rendition (up to seven).
+        assert_eq!(fetch_cap(Some(30), Some(100)), MAX_KEY_FETCHES_PER_SESSION + 4 * 7);
+        assert!(fetch_cap(Some(30), Some(7200)) > 1_000, "two hours of video is more than a few keys");
+        assert!(fetch_cap(Some(30), Some(i32::MAX)) > 0, "no overflow");
+
+        let app = app(pool.clone());
+        let s = seed(&pool).await;
+        rotate(&pool, s.video, 30, 100).await;
+        let cap = fetch_cap(Some(30), Some(100));
+        sqlx::query("update playback_sessions set key_fetches = $2 where id = $1")
+            .bind(s.session).bind(cap - 1).execute(&pool).await.unwrap();
+        assert_eq!(get(&app, &period_url(&s, "1"), Some(ORIGIN)).await.status, StatusCode::OK);
+        let reply = get(&app, &period_url(&s, "1"), Some(ORIGIN)).await;
+        assert_eq!(reply.status, StatusCode::TOO_MANY_REQUESTS);
+        assert!(!reply.body.windows(16).any(|w| w == period_key(&KEY, s.video, 1)));
     }
 }
 
