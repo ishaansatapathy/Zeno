@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
 use zeno_core::model::{Role, VideoStatus};
 use zeno_core::playback::{PlaybackClaims, ANONYMOUS_VIEWER};
+use zeno_core::segment_keys::KeyRef;
 use zeno_core::storage::StorageError;
 
 use crate::auth::extractor::AuthUser;
@@ -400,11 +401,16 @@ pub async fn media(
         .to_std()
         .unwrap_or(StdDuration::from_secs(60))
         .max(StdDuration::from_secs(60));
-    let key_url = format!(
+    let key_base = format!(
         "{}/v1/keys/{}?t={token}",
         state.config.key_server_url, auth.video_id
     );
-    playlist::rewrite_media(&text, &key_url, |segment| {
+    // A rotated video has a key address for each period (`k`); an older one has the one.
+    let key_url = |key: KeyRef| match key {
+        KeyRef::Whole => key_base.clone(),
+        KeyRef::Period(period) => format!("{key_base}&k={period}"),
+    };
+    playlist::rewrite_media(&text, key_url, |segment| {
         state
             .store
             .presign_get(&format!("{prefix}/{segment}"), remaining)

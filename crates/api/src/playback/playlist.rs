@@ -9,8 +9,10 @@
 //! refused instead of passed through, so a corrupted or tampered object in storage can't turn
 //! the API into a proxy for arbitrary URLs or serve video in the clear.
 
-/// What the worker writes into every `#EXT-X-KEY`; see `zeno_worker::hls::KEY_URI_PLACEHOLDER`.
-pub const KEY_URI_PLACEHOLDER: &str = "zeno-key://video";
+use zeno_core::segment_keys::KeyRef;
+#[cfg(test)]
+use zeno_core::segment_keys::KEY_URI_PLACEHOLDER;
+
 /// Each rendition's playlist inside its directory; see `zeno_worker::hls::PLAYLIST_NAME`.
 pub const STORED_PLAYLIST_NAME: &str = "index.m3u8";
 const MAX_SEGMENT_NAME: usize = 64;
@@ -76,20 +78,19 @@ pub fn rewrite_master(
     Ok(out)
 }
 
-/// Replaces the key placeholder with `key_url` and each segment name with `segment_url(name)`.
+/// Replaces each key placeholder with `key_url(which key)` and each segment name with `segment_url(name)`.
+///
+/// A video's segments are locked in periods (`zeno_core::segment_keys`), so a playlist holds a key tag at the
+/// start of each period, every one naming its own key. Older videos have one tag for the whole of it. Any
+/// other address in a key tag is refused.
 pub fn rewrite_media(
     text: &str,
-    key_url: &str,
+    key_url: impl Fn(KeyRef) -> String,
     segment_url: impl Fn(&str) -> String,
 ) -> Result<String, RewriteError> {
     if !is_playlist(text) {
         return Err(RewriteError::NotAPlaylist);
     }
-    debug_assert!(
-        !key_url.contains('"'),
-        "the key URL is placed in a quoted attribute"
-    );
-    let placeholder = format!("URI=\"{KEY_URI_PLACEHOLDER}\"");
     let mut keyed = false;
     let mut out = String::with_capacity(text.len() * 4);
     for line in text.lines() {
@@ -101,10 +102,22 @@ pub fn rewrite_media(
             if line.contains("METHOD=NONE") || line.matches("URI=").count() != 1 {
                 return Err(RewriteError::NotEncrypted);
             }
-            if !line.contains("METHOD=AES-128,") || !line.contains(&placeholder) {
-                return Err(RewriteError::UnexpectedUri(line.to_owned()));
+            const OPEN: &str = "URI=\"";
+            let unexpected = || RewriteError::UnexpectedUri(line.to_owned());
+            if !line.contains("METHOD=AES-128,") {
+                return Err(unexpected());
             }
-            out.push_str(&line.replace(&placeholder, &format!("URI=\"{key_url}\"")));
+            let start = line.find(OPEN).ok_or_else(unexpected)? + OPEN.len();
+            let end = line[start..].find('"').ok_or_else(unexpected)? + start;
+            let key = KeyRef::from_placeholder(&line[start..end]).ok_or_else(unexpected)?;
+            let url = key_url(key);
+            debug_assert!(
+                !url.contains('"'),
+                "the key URL is placed in a quoted attribute"
+            );
+            out.push_str(&line[..start]);
+            out.push_str(&url);
+            out.push_str(&line[end..]);
             keyed = true;
         } else if line.starts_with('#') {
             if line.contains("URI=") {
@@ -149,6 +162,78 @@ mod tests {
 
     fn segment(name: &str) -> String {
         format!("https://storage/{name}?sig")
+    }
+
+    /// What `service::media` does: one address, with the period named when there is one.
+    fn key(which: KeyRef) -> String {
+        match which {
+            KeyRef::Whole => "https://keys/v1/keys/V?t=TOKEN".to_owned(),
+            KeyRef::Period(period) => format!("https://keys/v1/keys/V?t=TOKEN&k={period}"),
+        }
+    }
+
+    /// Shaped like what the worker writes now: a key tag at the start of each period, no IV.
+    const ROTATED: &str =
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:0\n\
+        #EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-KEY:METHOD=AES-128,URI=\"zeno-key://video/0\"\n\
+        #EXTINF:6.000000,\nseg_00000.ts\n#EXTINF:6.000000,\nseg_00001.ts\n\
+        #EXT-X-KEY:METHOD=AES-128,URI=\"zeno-key://video/1\"\n\
+        #EXTINF:6.000000,\nseg_00002.ts\n#EXTINF:3.500000,\nseg_00003.ts\n#EXT-X-ENDLIST\n";
+
+    #[test]
+    fn a_rotated_playlist_names_each_periods_key_in_its_own_tag() {
+        let out = rewrite_media(ROTATED, key, segment).unwrap();
+        let tags: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with("#EXT-X-KEY"))
+            .collect();
+        assert_eq!(
+            tags,
+            [
+                "#EXT-X-KEY:METHOD=AES-128,URI=\"https://keys/v1/keys/V?t=TOKEN&k=0\"",
+                "#EXT-X-KEY:METHOD=AES-128,URI=\"https://keys/v1/keys/V?t=TOKEN&k=1\"",
+            ]
+        );
+        assert!(!out.contains("zeno-key"));
+        // The second key still comes before the first segment it covers.
+        let lines: Vec<&str> = out.lines().collect();
+        let second = lines.iter().position(|l| l.contains("&k=1")).unwrap();
+        assert!(lines[second + 1].starts_with("#EXTINF"));
+        assert_eq!(lines[second + 2], "https://storage/seg_00002.ts?sig");
+    }
+
+    #[test]
+    fn a_key_address_that_is_not_exactly_one_the_worker_writes_is_refused() {
+        for uri in [
+            "zeno-key://video/",
+            "zeno-key://video/-1",
+            "zeno-key://video/01",
+            "zeno-key://video/1/2",
+            "zeno-key://video/99999999999",
+            "zeno-key://video?x=1",
+            "zeno-key://other/1",
+            "https://evil/key",
+            "",
+        ] {
+            let text = ROTATED.replace("zeno-key://video/1", uri);
+            assert!(
+                matches!(
+                    rewrite_media(&text, key, segment),
+                    Err(RewriteError::UnexpectedUri(_))
+                ),
+                "{uri:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_attribute_after_the_address_is_kept() {
+        let with_iv = ROTATED.replace(
+            "URI=\"zeno-key://video/0\"",
+            "URI=\"zeno-key://video/0\",IV=0x00000000000000000000000000000001",
+        );
+        let out = rewrite_media(&with_iv, key, segment).unwrap();
+        assert!(out.contains("&k=0\",IV=0x00000000000000000000000000000001\n"));
     }
 
     #[test]
@@ -206,7 +291,7 @@ mod tests {
 
     #[test]
     fn media_playlists_get_the_key_url_and_signed_segment_urls() {
-        let out = rewrite_media(MEDIA, "https://keys/v1/keys/V?t=TOKEN", segment).unwrap();
+        let out = rewrite_media(MEDIA, key, segment).unwrap();
         assert!(out.contains(
             "#EXT-X-KEY:METHOD=AES-128,URI=\"https://keys/v1/keys/V?t=TOKEN\",IV=0x00000000000000000000000000000000\n"
         ));
@@ -233,7 +318,7 @@ mod tests {
             "",
         );
         assert_eq!(
-            rewrite_media(&clear, "k", segment),
+            rewrite_media(&clear, key, segment),
             Err(RewriteError::NotEncrypted)
         );
         let none = MEDIA.replace(
@@ -241,13 +326,13 @@ mod tests {
             "METHOD=NONE",
         );
         assert_eq!(
-            rewrite_media(&none, "k", segment),
+            rewrite_media(&none, key, segment),
             Err(RewriteError::NotEncrypted)
         );
         // A key that only starts halfway leaves the first segments in the clear.
         let late = "#EXTM3U\n#EXTINF:6,\nseg_00000.ts\n#EXT-X-KEY:METHOD=AES-128,URI=\"zeno-key://video\"\n#EXTINF:6,\nseg_00001.ts\n";
         assert_eq!(
-            rewrite_media(late, "k", segment),
+            rewrite_media(late, key, segment),
             Err(RewriteError::NotEncrypted)
         );
     }
@@ -256,7 +341,7 @@ mod tests {
     fn a_key_uri_other_than_the_placeholder_is_refused() {
         let foreign = MEDIA.replace("zeno-key://video", "https://evil/key");
         assert!(matches!(
-            rewrite_media(&foreign, "k", segment),
+            rewrite_media(&foreign, key, segment),
             Err(RewriteError::UnexpectedUri(_))
         ));
     }
@@ -276,10 +361,10 @@ mod tests {
             let text = MEDIA.replace("seg_00001.ts", name);
             if name.is_empty() {
                 // An empty line is just skipped; that is not a segment.
-                assert!(rewrite_media(&text, "k", segment).is_ok());
+                assert!(rewrite_media(&text, key, segment).is_ok());
                 continue;
             }
-            assert!(rewrite_media(&text, "k", segment).is_err(), "{name:?}");
+            assert!(rewrite_media(&text, key, segment).is_err(), "{name:?}");
         }
     }
 
@@ -290,7 +375,7 @@ mod tests {
             "#EXT-X-MAP:URI=\"https://evil/init.mp4\"",
         );
         assert!(matches!(
-            rewrite_media(&map, "k", segment),
+            rewrite_media(&map, key, segment),
             Err(RewriteError::UnexpectedUri(_))
         ));
     }
@@ -303,7 +388,7 @@ mod tests {
                 Err(RewriteError::NotAPlaylist)
             );
             assert_eq!(
-                rewrite_media(text, "k", segment),
+                rewrite_media(text, key, segment),
                 Err(RewriteError::NotAPlaylist)
             );
         }
@@ -312,7 +397,7 @@ mod tests {
     #[test]
     fn windows_line_endings_are_tolerated() {
         let crlf = MEDIA.replace('\n', "\r\n");
-        let out = rewrite_media(&crlf, "k", segment).unwrap();
+        let out = rewrite_media(&crlf, key, segment).unwrap();
         assert!(!out.contains('\r'));
     }
 
