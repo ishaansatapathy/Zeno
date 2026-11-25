@@ -31,6 +31,11 @@ if (!apiLog) {
 }
 const BASE = option("base", "http://localhost:3000");
 const SECONDS = Number(option("seconds", "60"));
+// `--keys-only` shuts the player's own check of its link out, so what ends a revoked viewing is the key server
+// alone (the check is the second line of defence, and would hide how far the keys reach). `--wait` lets the
+// video play that many seconds before the revoke, to see where in a key period it lands.
+const KEYS_ONLY = args.includes("--keys-only");
+const WAIT = Number(option("wait", "0"));
 const out = fs.mkdtempSync(path.join(os.tmpdir(), "zeno-playback-"));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const started = Date.now();
@@ -93,6 +98,10 @@ const link = (await (await api.post(`/v1/recordings/${recording.id}/links`, { da
 
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await (await browser.newContext({ baseURL: BASE, viewport: { width: 1280, height: 800 } })).newPage();
+if (KEYS_ONLY) {
+  // Only the browser's own asks (the check is a fetch from the page); the page itself was already served.
+  await page.route(/\/v1\/s\/[A-Za-z0-9_-]+$/, (route) => (route.request().resourceType() === "fetch" || route.request().resourceType() === "xhr" ? route.abort() : route.continue()));
+}
 const requests = [];
 let playlist = null;
 page.on("response", async (response) => {
@@ -170,10 +179,12 @@ if (!commentsOk) {
   process.exit(1);
 }
 
+if (WAIT > 0) await sleep(WAIT * 1000);
 // The owner revokes the link while the visitor watches.
+const atRevoke = await page.evaluate(() => document.querySelector("video").currentTime);
 const revoked = await api.delete(`/v1/recordings/${recording.id}/links/${link.id}`);
 const revokedAt = Date.now();
-say("REVOKED, the API answered", revoked.status());
+say("REVOKED, the API answered", revoked.status(), `(the video was at ${atRevoke.toFixed(1)} s${KEYS_ONLY ? ", the player's own link check is shut out" : ""})`);
 say("the old playlist address now answers", playlist ? (await api.get(playlist)).status() : "n/a", "(a new request is refused at once)");
 let ending = "kept playing";
 for (let tries = 0; tries < Math.ceil(SECONDS * 2 + 20); tries += 1) {
@@ -195,6 +206,8 @@ const after = requests.filter((r) => r.at > revokedAt);
 const tally = {};
 for (const r of after) tally[`${r.kind} ${r.status}`] = (tally[`${r.kind} ${r.status}`] ?? 0) + 1;
 say("after the revoke:", ending);
+const endedAt = await page.evaluate(() => document.querySelector("video")?.currentTime ?? null);
+say("the video had reached", endedAt === null ? "n/a (removed)" : `${endedAt.toFixed(1)} s`, "when it ended");
 say("requests after the revoke, by kind and answer:", JSON.stringify(tally));
 console.log("\nScreenshots and the test video are in", out);
 await browser.close();

@@ -118,7 +118,7 @@ Unfinished uploads are cancelled after 24 hours. Original uploads are deleted `S
 
 ### Transcoding
 
-`zeno-worker` claims jobs from Postgres (`FOR UPDATE SKIP LOCKED` under a lease it keeps extending; updates are fenced by attempt number so a worker that lost its lease cannot touch the job). For each video it probes the file, rejects anything unsupported, then writes AES-128 encrypted VOD HLS: 144p, 240p, 360p, 480p and 720p (never above the source; rotation and non-square pixels handled; frame rate capped at 30), plus an audio-only rendition, with keyframes aligned every 6 seconds on every rung.
+`zeno-worker` claims jobs from Postgres (`FOR UPDATE SKIP LOCKED` under a lease it keeps extending; updates are fenced by attempt number so a worker that lost its lease cannot touch the job). For each video it probes the file, rejects anything unsupported, then writes AES-128 encrypted VOD HLS (ffmpeg writes it in the clear and the worker locks each segment itself, with a key that changes every 30 seconds of video; see *Revoking a viewing*): 144p, 240p, 360p, 480p and 720p (never above the source; rotation and non-square pixels handled; frame rate capped at 30), plus an audio-only rendition, with keyframes aligned every 6 seconds on every rung.
 
 **First play, then the rest.** What people wait for is the first picture, not the whole ladder, so the work is two jobs. `transcode` encodes ONE rendition (the largest up to 360p, or the smallest there is), publishes it with a master playlist that lists only it, and in one transaction seals the key, marks the video `ready` and queues `transcode_rest`. From then on the share link plays. `transcode_rest` reads the same key back and adds the other renditions one at a time, nearest above the first one first (480p, 720p), then those below it (240p, 144p), then the audio-only one. Each is published, then added to the video's row, then to the master, in that order: a master never names a rendition that is not in storage, and never more than the row lists (playback refuses a master that does). The row's update is conditional on the key still being the one the job read, so a video encoded again (new key) is never given renditions under the old one, and a deleted video is left alone. A viewer who already holds the master keeps the ladder they were given; the next one gets the larger one. A video has one live job at a time, of either kind (a unique index), so a re-encode cannot start while the rest is still being made.
 
@@ -182,7 +182,7 @@ manage someone else's links); the visitor endpoints are open to anyone holding t
 | --- | --- | --- |
 | `POST /v1/recordings/:id/links` | owner | Make a link: optional client UUID `id`, `password` (4 to 128 characters) and `expires_at` (a minute to ten years away). Repeating an id with the same details returns the same open link; a changed or closed link returns `409 link_id_conflict`. `201` includes the link and its `url`. A private recording is switched to `link` in the same transaction. At most 10 live links per recording (`409 too_many_links`) |
 | `GET /v1/recordings/:id/links` | owner | The recording's links, newest first, each `active`, `expired` or `revoked`. Never carries the password hash |
-| `DELETE /v1/recordings/:id/links/:link` | owner | Revoke. Ends the link's sessions at once, so no new playlist or key is given; a web player that already holds them stops within 30 seconds (see *What revoking does not do*). Safe to repeat |
+| `DELETE /v1/recordings/:id/links/:link` | owner | Revoke. Ends the link's sessions at once, so no new playlist or key is given; a player that already holds them stops at the next key it needs, measured 10 to 27 seconds (see *Revoking a viewing*). Safe to repeat |
 | `GET /v1/s/:code` | anyone | What the page needs: `{share: {code, requires_password, title, status, duration_seconds, expires_at}}`. A password-protected link reveals only `requires_password: true`: not even the title. Cacheable: `Cache-Control: public, max-age=15, stale-while-revalidate=45` and an `ETag` (`304` on a repeat) |
 | `POST /v1/s/:code/play` | anyone | Start watching: body `{}` or `{"password": ...}`. `201` with `{playback: {session_id, playlist_url, expires_at, watermark}}`. No heartbeat and no resume point: there is no account to remember either for. `403 password_required` / `403 wrong_password`, `409 not_ready` while the video is still processing |
 
@@ -202,7 +202,7 @@ must be live, the recording still exist and still be shared, and still be made o
 revoking a link, making the recording private, letting the link expire or deleting the recording
 ends the viewing at its next playlist or key request (and revoking, going private and deleting also
 end open sessions immediately). Segments already fetched keep playing, as for any viewer, but no
-new key is released (see *What revoking does not do*, below, for what that means in practice). A token for a link session does not work with a user's session, or the other
+new key is released (see *Revoking a viewing*, below, for what that means in practice). A token for a link session does not work with a user's session, or the other
 way round, or for another video.
 
 **Passwords.** Argon2id, checked before a session starts. Each guess costs a password hash, so it
@@ -226,21 +226,43 @@ viewing is a session row; link sessions that ended are forgotten after 7 days (a
 after 90). If one link's traffic ever outgrows that, the next step is stateless link tokens with
 the link's status cached for a few seconds, trading instant revocation for fewer writes.
 
-**What revoking does not do.** It closes the door; it does not reach into a room someone is already
-in. A player that holds the playlist and the content key never has to ask the API or the key server
-for anything again, and fetches the segments from storage, whose addresses stay valid (presigned for
-an hour, unless `S3_PUBLIC_ENDPOINT` points at a CDN). Measured in real Chrome against the real worker
-and key server (`npm run check:playback` in `web/`): a 180 second video, the link revoked 5 seconds into
-playing. A new request for the playlist was refused at once (`403`), but the unmodified player carried
-on to the end of the video, 176 seconds later, with 19 segment requests answered `200` and none to the
-playlist or key server. So the web player asks, every 30 seconds, whether its link is still open (the
-answer is cached for 15 seconds, so this is almost no load on the origin) and stops when it is not:
-measured, the viewing ended 26 seconds after the revoke. That protects against an honest player
-and removes the feeling that revoking did nothing; it does not stop someone who has taken the key and
-the playlist and fetches the segments with their own tool, which is also true of anything a viewer
-could have downloaded before the revoke. Closing that properly means keys the player must keep
-asking for (a new key every minute or so, so a revoke cuts within one key period) and short-lived
-segment addresses; it is planned work, not done.
+**Revoking a viewing.** Revoking closes the door at once: no new playlist, no new key. What it cannot do
+is reach into a room someone is already in, so how far it reaches depends on what the player still holds.
+Until Day 30 a video had one key. A player that held the playlist and that key never had to ask the API or
+the key server for anything again, and fetched segments from storage, whose addresses stay valid (presigned
+for the viewing, up to hours, unless `S3_PUBLIC_ENDPOINT` points at a CDN). Measured in real Chrome against
+the real worker and key server (`npm run check:playback` in `web/`): a 180 second video, the link revoked 5
+seconds into playing; the unmodified player carried on to the end, 176 seconds later.
+
+Now a video's segments are locked in **periods**: every 30 seconds of video has a key of its own
+(`video_keys.rotation_secs`; the key is derived from the content key with HKDF-SHA256, salted with the video
+id, and the content key itself is never given to anyone: `zeno_core::segment_keys`). The playlist has a key
+tag at the start of each period, naming it (`?k=<period>` on the key address), and the key server gives a
+period's key only to a viewing that is still allowed, so a revoked viewer plays on only through the keys
+they already hold. The key server refuses, with the same answer as for every other refusal, a period the
+video does not have, a request for a rotated video with no period (so the content key cannot be asked for by
+leaving `k` off), and a period for a video made before rotation. A refusal carries the web app's
+`Access-Control-Allow-Origin`, otherwise the browser hides the `403` and the player retries for half a
+minute before giving up (measured: that is what made the first version end 38 to 53 seconds after a revoke).
+
+Measured the same way, with the player's own check of its link shut out so that only the keys act
+(`npm run check:playback -- --api-log <file> --keys-only --wait <seconds>`; a 180 second 640x360 video, the
+revoke when the video was at 6, 20 and 33 seconds): the viewing ended **24.5, 10.2 and 27.1 seconds** after
+the revoke, each time at the first request for a key the player did not hold, which was refused (`403`).
+Three runs on one laptop, so a range and not a guarantee; the bound is the player's read-ahead plus
+the time to the next period, and a larger buffer or a longer period moves it. The web player's own check of
+its link every 30 seconds (cached for 15 seconds, so almost no load on the origin) is the second line, and
+whichever comes first ends the viewing.
+
+What this does **not** do, and is not claimed to: stop someone who asks for every period's key as soon as
+they have a viewing and keeps them (a tool, not a player). That takes one request per period, so it is
+bounded by the per-session allowance (60, plus 7 for each period of the video: a player asks once per
+period for each quality it plays) and the per-address and per-account limits (600 a minute, 5,000 a day),
+and it is no different from what a viewer could have downloaded before the revoke. Segments already fetched
+and decrypted by a player stay in its buffer. Videos made before Day 30 keep their one key (they are not
+re-encrypted); a revoke reaches them only through the player's link check. Making keys expire by themselves
+for such a tool (releasing a period's key only when the viewing has got near it) is possible and not done: it
+would break seeking ahead.
 
 **Under concurrency.** Closing a link (revoking it, making the recording private, deleting it)
 ends the viewings it can see. A viewing that was starting at that moment could slip in after the
@@ -623,7 +645,7 @@ Who may watch is decided by one database access rule. Creators and admins may pr
 
 The playback token (HMAC-SHA256, `PLAYBACK_TOKEN_SECRET`, shared by API and key server) names one session, video and user and expires with the session (twice the video's length plus an hour, between 2 and 12 hours). A token is never enough on its own: every playlist, heartbeat and key request re-checks both the open session and the current entitlement. Revocation ends inaccessible sessions with `access_revoked`; expiration ends them with `expired`; another valid course or free-preview path keeps the shared video playable.
 
-An account may have `MAX_CONCURRENT_STREAMS` (default 2) sessions open. A screen silent for 3 minutes gives up its slot to the next one to press play and is told why when it returns; simultaneous presses are serialised per account, so the limit can't be overshot. The key server only answers browser requests from the web app's origin (a key URL pasted into a player on another site is refused), caps key fetches per session, and applies Redis-backed per-address and per-user limits before releasing a key. It fails closed if that limiter is unavailable. The content key is unwrapped only at that moment. Stored playlists are rewritten strictly: an unknown rendition, a foreign URI, a segment name with a path in it or a playlist without encryption is refused rather than passed on.
+An account may have `MAX_CONCURRENT_STREAMS` (default 2) sessions open. A screen silent for 3 minutes gives up its slot to the next one to press play and is told why when it returns; simultaneous presses are serialised per account, so the limit can't be overshot. The key server only answers browser requests from the web app's origin (a key URL pasted into a player on another site is refused), caps key fetches per session, and applies Redis-backed per-address and per-user limits before releasing a key (600 a minute per address and 5,000 a day per account by default: a video asks for a key about twice a minute for each quality it plays, so a classroom behind one address needs far more than it did when a video had one key). It fails closed if that limiter is unavailable. The content key is unwrapped only at that moment. Stored playlists are rewritten strictly: an unknown rendition, a foreign URI, a segment name with a path in it or a playlist without encryption is refused rather than passed on.
 
 Playback and key responses are private, `no-store`, and carry `Referrer-Policy: no-referrer`; request tracing records paths but never query strings, so playback tokens are not written to application logs. For zero-downtime secret rotation, configure the versioned `PLAYBACK_TOKEN_SECRETS` and `CONTENT_KEY_SECRETS` keyrings documented in `.env.example`: new material uses the active version while retained versions continue to verify/open existing sessions and videos.
 

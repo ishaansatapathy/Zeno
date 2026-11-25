@@ -187,8 +187,8 @@ tracks sync only if the user chooses, because they are the big files.
   health numbers (bitrate, dropped frames, reconnects) and never content.
 - Installers are code-signed; updates are signed and checked before they run.
 - A share link is a capability, and revoking it has limits that are written down, not hidden: see
-  *What revoking does not do* in [backend.md](backend.md). Closing the gap (keys that rotate about every
-  minute of video) is planned work.
+  *Revoking a viewing* in [backend.md](backend.md). A key that changes every 30 seconds of video ends a
+  viewing in progress within about half a minute; a tool that collects every period's key is not stopped.
 
 ## 9. How the server side scales
 

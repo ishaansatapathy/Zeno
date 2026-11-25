@@ -141,8 +141,10 @@ What it found, on a laptop: a 60 second 640x360 clip was ready 9 seconds after u
 was on screen 2.6 seconds after pressing play, at the full 640x360 (hls.js is told to assume a decent
 connection and to fetch no more picture than the player can show, because by default it started at
 144p and, at the speed a clip downloads, the whole clip arrived in 144p); the watermark showed; and a
-link revoked mid-play stops the viewing within 30 seconds. Without that last check, a viewer who had
-the key played the whole video to the end (see *What revoking does not do* in backend.md).
+link revoked mid-play ends the viewing within about half a minute (24.5, 10.2 and 27.1 seconds in three
+runs with only the keys acting, the player's own link check shut out with `--keys-only`; see *Revoking a
+viewing* in backend.md). Before keys changed as the video plays, a viewer who had the key played the whole
+video to the end.
 Recent Chrome plays HLS by itself (`canPlayType` says "maybe"), but its own player failed on our key
 flow, so hls.js is used wherever it runs, and the browser's own HLS only where it does not (an iPhone
 before iOS 17.1). The cause of Chrome's failure was not chased down.
