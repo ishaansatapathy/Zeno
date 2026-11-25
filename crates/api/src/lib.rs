@@ -25,6 +25,7 @@ pub mod payouts;
 pub mod playback;
 pub mod profiles;
 pub mod progress;
+pub mod quota;
 pub mod ratelimit;
 pub mod reconcile;
 pub mod recordings;
@@ -101,7 +102,8 @@ pub fn build_app(state: AppState) -> Router {
             "/v1/me",
             enrollments::routes::me_router()
                 .merge(profiles::routes::me_router())
-                .merge(progress::routes::me_router()),
+                .merge(progress::routes::me_router())
+                .merge(quota::routes::me_router()),
         )
         .nest("/v1/lessons", courses::lessons::routes::item_router())
         .nest("/v1/videos", videos::routes::router())

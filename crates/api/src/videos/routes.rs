@@ -68,6 +68,7 @@ async fn create(
         (status = 401, description = "`unauthenticated`", body = ErrorBody),
         (status = 403, description = "`forbidden` (only creator and admin accounts upload) or `forbidden_origin`.", body = ErrorBody),
         (status = 409, description = "`streaming_id_conflict`: that client id belongs to a different or finished upload.", body = ErrorBody),
+        (status = 413, description = "`storage_quota_exceeded`: the account has no storage left (`GET /v1/me/storage` says how much it has), or `payload_too_large`.", body = ErrorBody),
         (status = 422, description = "`validation_failed` (see `fields`) or `invalid_request`.", body = ErrorBody),
         (status = 429, description = "`too_many_uploads` (ten are unfinished: finish or abort one) or `too_many_requests` (which carries `Retry-After`).", body = ErrorBody),
     )
@@ -106,6 +107,7 @@ pub(crate) async fn create_streaming(
         (status = 403, description = "`forbidden` or `forbidden_origin`.", body = ErrorBody),
         (status = 404, description = "`not_found`", body = ErrorBody),
         (status = 409, description = "`not_streaming`: this upload is finished, or was started with a size.", body = ErrorBody),
+        (status = 413, description = "`storage_quota_exceeded`: this part would take the recording past the account's storage. The recorder still has the whole recording; nothing is lost by this answer. Or `payload_too_large`.", body = ErrorBody),
         (status = 422, description = "`validation_failed` (see `fields`: the number or the size) or `invalid_request`.", body = ErrorBody),
         (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
     )

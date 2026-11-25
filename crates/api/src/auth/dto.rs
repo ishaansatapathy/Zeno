@@ -109,6 +109,25 @@ pub struct ResetPasswordRequest {
     pub new_password: Secret,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangePasswordRequest {
+    /// The password in use now. Asked for again because a stolen session must not be enough to take the account.
+    #[schema(value_type = String, format = Password)]
+    pub current_password: Secret,
+    /// Not a common password, not made from the account's email address, and not the one in use now.
+    #[schema(value_type = String, format = Password, min_length = 10, max_length = 128)]
+    pub new_password: Secret,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateAccountRequest {
+    /// What the person is called. Shown beside their comments.
+    #[schema(min_length = 1, max_length = 80)]
+    pub name: String,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct MessageResponse {
     pub message: &'static str,

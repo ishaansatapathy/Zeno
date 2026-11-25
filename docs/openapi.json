@@ -55,6 +55,151 @@
         ]
       }
     },
+    "/v1/auth/change-password": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Changes the password of the signed-in account, and signs it out everywhere.",
+        "description": "The current password is asked for again, so a session someone else holds is not enough to take the account over.\nFive tries an hour per account. On success every session of the account ends, this one included, and so does\nevery viewing it had open: the cookies are cleared and the person signs in again with the new password.",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Changed. Every session is over; sign in again.",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Both cookies, expired."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`wrong_password`: that is not the current password, or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed` (see `fields`: the new password is not allowed, or is the current one) or `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests` (five tries an hour), with `Retry-After`.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "`unavailable`: fails closed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/auth/forgot-password": {
       "post": {
         "tags": [
@@ -377,6 +522,130 @@
           },
           "401": {
             "description": "`unauthenticated`: no session, or it expired. Refresh and retry once.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Renames the signed-in account.",
+        "operationId": "update_me",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Renamed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden_origin`: the request came from a site that is not the web app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`validation_failed` (see `fields`) or `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -934,6 +1203,73 @@
           },
           "404": {
             "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/me/storage": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "How much of their storage the signed-in person has used.",
+        "description": "Every video they have uploaded and still have counts at the size it was sent, whatever stage it has reached;\ndeleted and failed ones do not. The limit is the account's own, or the service's default. When an upload would\nnot fit it is refused with `413 storage_quota_exceeded`.",
+        "operationId": "storage_show",
+        "responses": {
+          "200": {
+            "description": "Used, allowed and left, in bytes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2695,7 +3031,7 @@
             }
           },
           "413": {
-            "description": "`payload_too_large`",
+            "description": "`storage_quota_exceeded`: the account has no storage left (`GET /v1/me/storage` says how much it has), or `payload_too_large`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2990,7 +3326,7 @@
             }
           },
           "413": {
-            "description": "`payload_too_large`",
+            "description": "`storage_quota_exceeded`: this part would take the recording past the account's storage. The recorder still has the whole recording; nothing is lost by this answer. Or `payload_too_large`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3190,6 +3526,28 @@
             }
           }
         }
+      },
+      "ChangePasswordRequest": {
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "format": "password",
+            "description": "The password in use now. Asked for again because a stolen session must not be enough to take the account."
+          },
+          "new_password": {
+            "type": "string",
+            "format": "password",
+            "description": "Not a common password, not made from the account's email address, and not the one in use now.",
+            "maxLength": 128,
+            "minLength": 10
+          }
+        },
+        "additionalProperties": false
       },
       "CommentAuthor": {
         "type": "object",
@@ -4095,6 +4453,48 @@
           "creator"
         ]
       },
+      "StorageEnvelope": {
+        "type": "object",
+        "required": [
+          "storage"
+        ],
+        "properties": {
+          "storage": {
+            "$ref": "#/components/schemas/StorageUsage"
+          }
+        }
+      },
+      "StorageUsage": {
+        "type": "object",
+        "required": [
+          "used_bytes",
+          "quota_bytes",
+          "remaining_bytes",
+          "videos"
+        ],
+        "properties": {
+          "quota_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What they may keep."
+          },
+          "remaining_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "`quota_bytes` less `used_bytes`, never below zero."
+          },
+          "used_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What the person has kept: the size of every video they have uploaded and still have, as it was sent.\nDeleted and failed videos are not counted; one still uploading is."
+          },
+          "videos": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many videos make up `used_bytes`."
+          }
+        }
+      },
       "TokenRequest": {
         "type": "object",
         "required": [
@@ -4104,6 +4504,21 @@
           "token": {
             "type": "string",
             "description": "The one-time token from the emailed link."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateAccountRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "What the person is called. Shown beside their comments.",
+            "maxLength": 80,
+            "minLength": 1
           }
         },
         "additionalProperties": false
@@ -4340,6 +4755,10 @@
     {
       "name": "auth",
       "description": "Accounts and sessions."
+    },
+    {
+      "name": "account",
+      "description": "What a signed-in person can see about their own account."
     },
     {
       "name": "recordings",

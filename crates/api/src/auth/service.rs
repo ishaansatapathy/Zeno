@@ -1,5 +1,6 @@
 use std::net::IpAddr;
 
+use axum::http::StatusCode;
 use chrono::{DateTime, Duration, Utc};
 use sqlx::types::ipnetwork::IpNetwork;
 use uuid::Uuid;
@@ -518,6 +519,66 @@ pub async fn reset_password(
         }
     }
     Ok(())
+}
+
+/// Changes the password of someone who is signed in and knows the one in use. Every session of the account ends,
+/// this one included, and so does every viewing it had open: whoever else had the password (or the session) is out
+/// with it, and the person signs in again with the new one.
+pub async fn change_password(
+    state: &AppState,
+    user_id: Uuid,
+    current_password: String,
+    new_password: String,
+    ctx: &ClientContext,
+) -> Result<(), ApiError> {
+    let user = repo::find_user_by_id(&state.db, user_id)
+        .await?
+        .ok_or_else(|| ApiError::unauthorized("unauthenticated", "Sign in to continue."))?;
+    let right = state
+        .passwords
+        .verify(current_password, Some(user.password_hash.clone()))
+        .await?;
+    if !right {
+        audit::record(
+            state,
+            Event::new(Kind::PasswordChangeFailed, ctx).user(user_id),
+        );
+        return Err(ApiError::Http {
+            status: StatusCode::FORBIDDEN,
+            code: "wrong_password",
+            message: "That is not your current password.".into(),
+        });
+    }
+    let new_hash = state.passwords.hash(new_password).await?;
+    let mut tx = state.db.begin().await?;
+    repo::update_password(&mut *tx, user_id, &new_hash).await?;
+    let families = repo::revoke_user_sessions(&mut *tx, user_id).await?;
+    crate::playback::repo::end_all_for_user(&mut *tx, user_id, "password_reset").await?;
+    tx.commit().await?;
+    for family_id in families {
+        revocation::mark_revoked(&*state.counters, family_id).await;
+    }
+    audit::record(state, Event::new(Kind::PasswordChanged, ctx).user(user_id));
+    if let Some(to) = &user.email {
+        if let Err(err) =
+            outbox::enqueue(state, emails::password_changed(to), Duration::days(1)).await
+        {
+            tracing::error!(error = ?err, "could not queue password-changed notice");
+        }
+    }
+    Ok(())
+}
+
+/// Renames the account.
+pub async fn rename(
+    state: &AppState,
+    user_id: Uuid,
+    name: &str,
+    ctx: &ClientContext,
+) -> Result<UserRow, ApiError> {
+    let updated = repo::update_name(&state.db, user_id, name).await?;
+    audit::record(state, Event::new(Kind::NameChanged, ctx).user(user_id));
+    updated.ok_or_else(|| ApiError::unauthorized("unauthenticated", "Sign in to continue."))
 }
 
 pub async fn me(state: &AppState, user_id: Uuid) -> Result<UserRow, ApiError> {

@@ -60,6 +60,18 @@ pub fn build(pool: PgPool, cookie_secure: bool, trusted_proxy_hops: usize) -> Ap
     }
 }
 
+/// An app whose configuration is changed first (the provider-less sibling of `app_with_config`).
+pub fn app_with_tweaked_config(pool: PgPool, tweak: impl FnOnce(&mut ApiConfig)) -> App {
+    let mailer = MemoryMailer::default();
+    let state = make_state_with(pool.clone(), false, 0, Arc::new(mailer.clone()), tweak);
+    App {
+        router: zeno_api::build_app(state.clone()),
+        mailer,
+        pool,
+        state,
+    }
+}
+
 /// An app whose real mail transport is `send`, while `record` is what tests inspect.
 pub fn build_with_mailer(pool: PgPool, send: Arc<dyn Mailer>, record: MemoryMailer) -> App {
     let state = make_state(pool.clone(), false, 0, send);
@@ -155,6 +167,7 @@ pub fn make_state_with(
         trusted_proxy_hops,
         storage: storage_config(),
         max_upload_bytes: MAX_UPLOAD_BYTES,
+        default_storage_quota_bytes: DEFAULT_STORAGE_QUOTA_BYTES,
         source_retention_days: SOURCE_RETENTION_DAYS,
         playback: zeno_core::playback::PlaybackSigner::new(PLAYBACK_SECRET).unwrap(),
         key_server_url: KEY_SERVER_URL.into(),
@@ -180,6 +193,8 @@ pub fn make_state_with(
 }
 
 pub const MAX_UPLOAD_BYTES: u64 = 64 * 1024 * 1024;
+/// Far more than any test uploads, so only a test about the limit meets it.
+pub const DEFAULT_STORAGE_QUOTA_BYTES: u64 = 100 * 1024 * 1024 * 1024;
 pub const SOURCE_RETENTION_DAYS: u32 = 7;
 pub const PLAYBACK_SECRET: &str = "playback-secret-for-tests-only-0123456789";
 pub const KEY_SERVER_URL: &str = "https://keys.test";

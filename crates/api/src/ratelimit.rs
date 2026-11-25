@@ -194,6 +194,13 @@ pub mod policies {
         rule: Rule::per_minute(120),
         fail: Fail::Open,
     };
+
+    /// Reading one's own storage use, per account. The library asks after every upload and delete.
+    pub const STORAGE_READ: Policy = Policy {
+        name: "storage_read",
+        rule: Rule::per_minute(120),
+        fail: Fail::Open,
+    };
 }
 
 fn refuse(retry_after_secs: u64) -> ApiError {

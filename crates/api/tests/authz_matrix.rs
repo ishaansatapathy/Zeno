@@ -569,6 +569,8 @@ fn rows() -> Vec<Row> {
         row(post.clone(), "/v1/auth/forgot-password", Public).json(|_, _| json!({"email": "nobody@matrix.in"})),
         row(post.clone(), "/v1/auth/reset-password", Public).json(|_, _| json!({"token": "nope", "password": PASSWORD})),
         row(get.clone(), "/v1/auth/me", Signed),
+        row(patch.clone(), "/v1/auth/me", Signed).json(|_, _| json!({"name": "Matrix Person"})),
+        row(post.clone(), "/v1/auth/change-password", Signed).json(|_, _| json!({"current_password": "irrelevant", "new_password": "short"})),
         row(get.clone(), "/v1/auth/activity", Signed),
         // Public catalogue
         row(get.clone(), "/v1/public/courses", Public),
@@ -629,6 +631,7 @@ fn rows() -> Vec<Row> {
         // Progress
         row(get.clone(), "/v1/courses/{course}/progress", EnrolledOnly),
         row(get.clone(), "/v1/me/continue-watching", Signed),
+        row(get.clone(), "/v1/me/storage", Signed),
         // Profile
         row(get.clone(), "/v1/me/profile", Creator),
         row(put.clone(), "/v1/me/profile", Creator).json(|_, a| {

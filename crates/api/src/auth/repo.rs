@@ -14,6 +14,20 @@ pub struct UserRow {
     pub email_verified_at: Option<DateTime<Utc>>,
 }
 
+pub async fn update_name<'e>(
+    db: impl PgExecutor<'e>,
+    id: Uuid,
+    name: &str,
+) -> Result<Option<UserRow>, sqlx::Error> {
+    sqlx::query_as(
+        "update users set name = $2, updated_at = now() where id = $1          returning id, name, email, password_hash, role, email_verified_at",
+    )
+    .bind(id)
+    .bind(name)
+    .fetch_optional(db)
+    .await
+}
+
 pub async fn find_user_by_email<'e>(
     db: impl PgExecutor<'e>,
     email: &str,

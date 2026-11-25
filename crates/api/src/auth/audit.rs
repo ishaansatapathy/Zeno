@@ -25,6 +25,9 @@ pub enum Kind {
     LoggedOut,
     PasswordResetRequested,
     PasswordResetCompleted,
+    PasswordChanged,
+    PasswordChangeFailed,
+    NameChanged,
 }
 
 impl Kind {
@@ -40,6 +43,9 @@ impl Kind {
             Kind::LoggedOut => "logged_out",
             Kind::PasswordResetRequested => "password_reset_requested",
             Kind::PasswordResetCompleted => "password_reset_completed",
+            Kind::PasswordChanged => "password_changed",
+            Kind::PasswordChangeFailed => "password_change_failed",
+            Kind::NameChanged => "name_changed",
         }
     }
 }

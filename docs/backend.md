@@ -58,6 +58,9 @@ Cookie-based (`HttpOnly`, `SameSite=Lax`): a 15-minute access JWT plus a rotatin
 | `POST /v1/auth/logout` | End this device's session |
 | `POST /v1/auth/forgot-password` / `reset-password` | Emailed single-use link; reset signs out every device |
 | `GET /v1/auth/me` | The signed-in user |
+| `PATCH /v1/auth/me` | Rename the account (`{"name"}`, 2 to 80 characters, trimmed). 20 an hour |
+| `POST /v1/auth/change-password` | `{"current_password", "new_password"}`. The current one is asked for again, so a session someone else holds is not enough; five tries an hour per account, right or wrong. On success every session of the account ends, this one included (the cookies are cleared), every playback session it had open ends, and a notice goes to the account's address. A wrong password is `403 wrong_password` (not 401, which a client reads as a lapsed session and renews) |
+| `GET /v1/me/storage` | What the account has used, may use and has left, in bytes (see *Storage quota*) |
 | `GET /v1/auth/activity` | The signed-in user's last 20 security events (sign-ins, failures, resets) |
 
 Sessions end immediately on logout, password reset and detected token theft: each access token carries its session family, and revoking a family marks it in Redis for the token's remaining lifetime. Anything that differs between "account exists" and "doesn't" (token writes, email) runs after the response, so timing doesn't reveal accounts. Expired sessions and tokens are purged hourly.
@@ -67,6 +70,30 @@ Passwords must be 10-128 characters and are rejected if they are on a common-pas
 Security-relevant events (sign-up, verification, sign-in success/failure/lockout, token theft, resets, logout) are written to `auth_events` for a year; addresses are stored only as a SHA-256. Emails go through a durable outbox (`email_outbox`): they are retried with backoff if the provider is down, a link stops being retried once it would have expired, and the body (which holds a live link) is blanked as soon as the row is sent or abandoned.
 
 Every response carries an `x-request-id` (a caller-supplied one is kept) that is attached to all log lines for that request. Set `LOG_FORMAT=json` for structured logs.
+
+### Storage quota
+
+An account may keep a limited amount: `users.storage_quota_bytes` if it has one of its own (an operator sets it
+by hand for now), otherwise `DEFAULT_STORAGE_QUOTA_BYTES` (25 GiB). What counts is the size of each video the
+account has uploaded and still has, **as it was sent** (the original), whatever stage it has reached; deleted
+and failed videos do not. It is not the size of what is stored: the encoded renditions, which come to roughly
+the original again, are not counted, and the original is deleted a week after the video is ready while the
+video stays counted. The limit is therefore a limit on uploads, not an invoice for storage.
+
+An upload that would not fit is refused with `413 storage_quota_exceeded` before anything is made in storage,
+and the message says what it needed and what is left. The count that decides is made inside the transaction that
+adds the video, under a lock on the account's row (`for no key update`, which does not hold up anything that
+only refers to the account), so uploads started at the same moment cannot all be told there is room for the
+last of it: eight at once for room for two made exactly two (and five without the lock, which is how the test
+was shown to catch the race). A recording that is still being made has no size yet, so it is checked as it
+comes: starting needs one byte of room, and each part is asked for with where it ends in the recording, which
+must still fit beside what else the account keeps. The extension keeps its own copy, so a refusal part way
+loses nothing, and the recording is finished later (*Finishing what was cut short*, in extension.md) once room
+is made. Parts of recordings made at once are not serialised (a part a second could not afford it), so several
+long recordings can together pass the limit by a part or two each.
+
+`GET /v1/me/storage` returns `{"storage": {"used_bytes", "quota_bytes", "remaining_bytes", "videos"}}`. The
+sum reads one covering index (`videos_owner_usage`) and never the rows.
 
 ## Video API
 

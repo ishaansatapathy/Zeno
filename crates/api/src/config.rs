@@ -20,6 +20,8 @@ pub struct ApiConfig {
     pub storage: StorageConfig,
     /// Largest video a creator may upload, in bytes.
     pub max_upload_bytes: u64,
+    /// What an account may keep unless it has a limit of its own (`users.storage_quota_bytes`).
+    pub default_storage_quota_bytes: u64,
     /// Days the original upload is kept once a video is ready (or has failed), in case it needs
     /// re-encoding. After that only the encrypted renditions remain.
     pub source_retention_days: u32,
@@ -61,6 +63,14 @@ impl ApiConfig {
         let trusted_proxy_hops = parse_or("TRUSTED_PROXY_HOPS", 0usize)?;
         let storage = StorageConfig::from_env()?;
         let max_upload_bytes = parse_or("MAX_UPLOAD_BYTES", 10u64 * 1024 * 1024 * 1024)?;
+        let default_storage_quota_bytes =
+            parse_or("DEFAULT_STORAGE_QUOTA_BYTES", 25u64 * 1024 * 1024 * 1024)?;
+        if i64::try_from(default_storage_quota_bytes).is_err() {
+            return Err(ConfigError::Invalid {
+                name: "DEFAULT_STORAGE_QUOTA_BYTES",
+                reason: "is more than a database number can hold".into(),
+            });
+        }
         let source_retention_days = parse_or("SOURCE_RETENTION_DAYS", 7u32)?;
         let playback = PlaybackSigner::from_env()?;
         let key_server_url = parse_public_url("KEY_SERVER_URL", &required("KEY_SERVER_URL")?)?;
@@ -145,6 +155,7 @@ impl ApiConfig {
             trusted_proxy_hops,
             storage,
             max_upload_bytes,
+            default_storage_quota_bytes,
             source_retention_days,
             playback,
             key_server_url,

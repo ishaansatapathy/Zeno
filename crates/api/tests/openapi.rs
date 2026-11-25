@@ -85,6 +85,7 @@ const ROUTERS: &[(&str, &[(&str, &str)])] = &[
             ("router", "/v1/comments"),
         ],
     ),
+    ("crates/api/src/quota/routes.rs", &[("me_router", "/v1/me")]),
 ];
 
 /// Routes that exist and are not in the document yet. The list is explicit so that a new route
@@ -359,7 +360,70 @@ db_test! {
             }
         }
 
-        contract.provoke_common_errors(&app, "/v1/auth/", None, &[]).await;
+        // Changing the password and the name: signed in, so the common errors are provoked with a session.
+        // The password was reset above.
+        let now = "a brand new passphrase";
+        let mut jar = Jar::of(&login(&app, email, now).await);
+        let change = "/v1/auth/change-password";
+        let name = |name: &str| json!({"name": name});
+        let renamed = app.req(axum::http::Method::PATCH, me_uri).jar(&jar).json(name("Asha R")).send().await;
+        assert_eq!(renamed.status, StatusCode::OK, "{:?}", renamed.body);
+        contract.check("patch", me_uri, &renamed);
+        let blank = app.req(axum::http::Method::PATCH, me_uri).jar(&jar).json(name("   ")).send().await;
+        assert_eq!(blank.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("patch", me_uri, &blank);
+        contract.check("patch", me_uri, &app.req(axum::http::Method::PATCH, me_uri).json(name("x")).send().await);
+        let mut limited = None;
+        for _ in 0..25 {
+            let res = app.req(axum::http::Method::PATCH, me_uri).jar(&jar).json(name("Asha R")).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("patch", me_uri, &limited.expect("renaming runs out"));
+        let attempt = |current: &str, new: &str, jar: &Jar| {
+            app.post(change).jar(jar).json(json!({"current_password": current, "new_password": new})).send()
+        };
+        let wrong = attempt("not the password at all", "a-completely-new-passphrase", &jar).await;
+        assert_eq!(wrong.code(), "wrong_password");
+        contract.check("post", change, &wrong);
+        let same = attempt(now, now, &jar).await;
+        assert_eq!(same.status, StatusCode::UNPROCESSABLE_ENTITY, "{:?}", same.body);
+        contract.check("post", change, &same);
+        contract.check("post", change, &app.post(change).json(json!({"current_password": now, "new_password": "a-completely-new-passphrase"})).send().await);
+        // What can go wrong on any route that needs a session.
+        contract.provoke_common_errors(&app, me_uri, Some(&jar), &[]).await;
+        contract.provoke_common_errors(&app, "/v1/auth/activity", Some(&jar), &[]).await;
+        contract.provoke_common_errors(&app, change, Some(&jar), &[]).await;
+        let changed = attempt(now, "a-completely-new-passphrase", &jar).await;
+        assert_eq!(changed.status, StatusCode::OK, "{:?}", changed.body);
+        contract.check("post", change, &changed);
+        // Five tries an hour, right or wrong.
+        jar = Jar::of(&login(&app, email, "a-completely-new-passphrase").await);
+        let mut limited = None;
+        for _ in 0..8 {
+            let res = attempt("still not the password", "another-new-passphrase!", &jar).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("post", change, &limited.expect("changing runs out"));
+
+        // What can go wrong on any route that needs no session.
+        for path in [
+            "/v1/auth/register",
+            "/v1/auth/verify-email",
+            "/v1/auth/resend-verification",
+            "/v1/auth/login",
+            "/v1/auth/refresh",
+            "/v1/auth/logout",
+            "/v1/auth/forgot-password",
+            "/v1/auth/reset-password",
+        ] {
+            contract.provoke_common_errors(&app, path, None, &[]).await;
+        }
 
         let unseen = contract.unseen("/v1/auth/");
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
@@ -849,6 +913,31 @@ db_test! {
         }
         contract.check("post", parts, &limited.expect("asking for parts runs out"));
 
+        // No storage left: told when a recording starts, and when its next part would not fit.
+        let full = signup_creator(&app, "full@example.com").await;
+        let made = app.post(start).jar(&full).json(started.clone()).send().await;
+        assert_eq!(made.status, StatusCode::CREATED, "{:?}", made.body);
+        let full_id = made.body["video"]["id"].as_str().unwrap().to_owned();
+        sqlx::query("update users set storage_quota_bytes = $2 where email = $1")
+            .bind("full@example.com")
+            .bind(5 * MIB as i64)
+            .execute(&app.pool)
+            .await
+            .unwrap();
+        let no_room = app.post(&format!("/v1/videos/{full_id}/parts")).jar(&full).json(json!({"number": 2, "size": 5 * MIB})).send().await;
+        assert_eq!(no_room.status, StatusCode::PAYLOAD_TOO_LARGE, "{:?}", no_room.body);
+        assert_eq!(no_room.code(), "storage_quota_exceeded");
+        contract.check("post", parts, &no_room);
+        sqlx::query("update users set storage_quota_bytes = 0 where email = $1")
+            .bind("full@example.com")
+            .execute(&app.pool)
+            .await
+            .unwrap();
+        let cannot_start = app.post(start).jar(&full).json(started.clone()).send().await;
+        assert_eq!(cannot_start.status, StatusCode::PAYLOAD_TOO_LARGE, "{:?}", cannot_start.body);
+        assert_eq!(cannot_start.code(), "storage_quota_exceeded");
+        contract.check("post", start, &cannot_start);
+
         // What can go wrong on any route.
         contract
             .provoke_common_errors(&app, "/v1/videos", Some(&owner), &[("id", &nobody.to_string())])
@@ -990,5 +1079,38 @@ db_test! {
             let unseen = contract.unseen(prefix);
             assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
         }
+    }
+}
+
+db_test! {
+    async fn the_account_api_keeps_its_promises(pool: PgPool) {
+        let app = app(pool);
+        let contract = Contract::new();
+        let owner = signup_creator(&app, "keeper@example.com").await;
+        let storage = "/v1/me/storage";
+
+        let signed_out = app.get(storage).send().await;
+        assert_eq!(signed_out.status, StatusCode::UNAUTHORIZED, "{:?}", signed_out.body);
+        contract.check("get", storage, &signed_out);
+
+        let shown = app.get(storage).jar(&owner).send().await;
+        assert_eq!(shown.status, StatusCode::OK, "{:?}", shown.body);
+        assert_eq!(shown.body["storage"]["used_bytes"], 0);
+        contract.check("get", storage, &shown);
+
+        // The library asks after every upload and delete, but not without end.
+        let mut limited = None;
+        for _ in 0..130 {
+            let res = app.get(storage).jar(&owner).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("get", storage, &limited.expect("reading it runs out"));
+
+        contract.provoke_common_errors(&app, storage, Some(&owner), &[]).await;
+        let unseen = contract.unseen(storage);
+        assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }

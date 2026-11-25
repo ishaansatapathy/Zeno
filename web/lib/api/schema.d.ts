@@ -19,6 +19,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/auth/change-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Changes the password of the signed-in account, and signs it out everywhere.
+         * @description The current password is asked for again, so a session someone else holds is not enough to take the account over.
+         *     Five tries an hour per account. On success every session of the account ends, this one included, and so does
+         *     every viewing it had open: the cookies are cleared and the person signs in again with the new password.
+         */
+        post: operations["change_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/forgot-password": {
         parameters: {
             query?: never;
@@ -84,7 +106,8 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** Renames the signed-in account. */
+        patch: operations["update_me"];
         trace?: never;
     };
     "/v1/auth/refresh": {
@@ -195,6 +218,28 @@ export interface paths {
          *     For anyone else it does not exist.
          */
         delete: operations["comments_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How much of their storage the signed-in person has used.
+         * @description Every video they have uploaded and still have counts at the size it was sent, whatever stage it has reached;
+         *     deleted and failed ones do not. The limit is the account's own, or the service's default. When an upload would
+         *     not fit it is refused with `413 storage_quota_exceeded`.
+         */
+        get: operations["storage_show"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -476,6 +521,18 @@ export interface components {
         };
         ActivityResponse: {
             events: components["schemas"]["ActivityItem"][];
+        };
+        ChangePasswordRequest: {
+            /**
+             * Format: password
+             * @description The password in use now. Asked for again because a stolen session must not be enough to take the account.
+             */
+            current_password: string;
+            /**
+             * Format: password
+             * @description Not a common password, not made from the account's email address, and not the one in use now.
+             */
+            new_password: string;
         };
         CommentAuthor: {
             /** @description The name on their account. */
@@ -809,9 +866,39 @@ export interface components {
          * @enum {string}
          */
         SignupRole: "student" | "creator";
+        StorageEnvelope: {
+            storage: components["schemas"]["StorageUsage"];
+        };
+        StorageUsage: {
+            /**
+             * Format: int64
+             * @description What they may keep.
+             */
+            quota_bytes: number;
+            /**
+             * Format: int64
+             * @description `quota_bytes` less `used_bytes`, never below zero.
+             */
+            remaining_bytes: number;
+            /**
+             * Format: int64
+             * @description What the person has kept: the size of every video they have uploaded and still have, as it was sent.
+             *     Deleted and failed videos are not counted; one still uploading is.
+             */
+            used_bytes: number;
+            /**
+             * Format: int64
+             * @description How many videos make up `used_bytes`.
+             */
+            videos: number;
+        };
         TokenRequest: {
             /** @description The one-time token from the emailed link. */
             token: string;
+        };
+        UpdateAccountRequest: {
+            /** @description What the person is called. Shown beside their comments. */
+            name: string;
         };
         UpdateRecordingRequest: {
             /** @description Whether people watching may leave comments and reactions. Turning it off keeps what is there but hides it. */
@@ -914,6 +1001,115 @@ export interface operations {
             };
             /** @description `internal_error`: our fault; safe to retry. */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    change_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Changed. Every session is over; sign in again. */
+            200: {
+                headers: {
+                    /** @description Both cookies, expired. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `wrong_password`: that is not the current password, or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (see `fields`: the new password is not allowed, or is the current one) or `invalid_request`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` (five tries an hour), with `Retry-After`. */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unavailable`: fails closed. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1189,6 +1385,104 @@ export interface operations {
             /** @description `unauthenticated`: no session, or it expired. Refresh and retry once. */
             401: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    update_me: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Renamed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserEnvelope"];
+                };
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden_origin`: the request came from a site that is not the web app. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `validation_failed` (see `fields`) or `invalid_request`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -1646,6 +1940,55 @@ export interface operations {
             };
             /** @description `not_found` */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    storage_show: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Used, allowed and left, in bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageEnvelope"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3054,7 +3397,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `payload_too_large` */
+            /** @description `storage_quota_exceeded`: this part would take the recording past the account's storage. The recorder still has the whole recording; nothing is lost by this answer. Or `payload_too_large`. */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -3229,7 +3572,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `payload_too_large` */
+            /** @description `storage_quota_exceeded`: the account has no storage left (`GET /v1/me/storage` says how much it has), or `payload_too_large`. */
             413: {
                 headers: {
                     [name: string]: unknown;

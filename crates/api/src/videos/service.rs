@@ -11,6 +11,7 @@ use zeno_core::storage::StorageError;
 use crate::auth::extractor::AuthUser;
 use crate::auth::limits::{self, HOUR};
 use crate::error::ApiError;
+use crate::quota::service::{self as quota, InsertError};
 use crate::state::AppState;
 use crate::videos::dto::{NewStreaming, NewVideo, PartUrl, UploadResponse};
 use crate::videos::plan::PartPlan;
@@ -134,6 +135,11 @@ pub async fn create(
         });
     }
 
+    // Before anything is made in storage: a file that cannot fit is told so now. The count that decides is the
+    // one made under the person's lock when the row is added, below.
+    let size = i64::try_from(input.size_bytes).unwrap_or(i64::MAX);
+    quota::check_room(state, user.id, size).await?;
+
     let id = Uuid::new_v4();
     let key = source_key(id);
     let plan = PartPlan::new(input.size_bytes);
@@ -155,14 +161,17 @@ pub async fn create(
         source_key: &key,
         upload_id: &upload_id,
     };
-    let video = match repo::insert(&state.db, &row).await {
+    let video = match quota::insert_within_room(state, &row, size).await {
         Ok(video) => video,
-        Err(err) => {
+        Err(failure) => {
             // Don't leave a multipart upload (which storage bills for) with no row pointing at it.
             if let Err(abort_err) = state.store.abort_multipart(&key, &upload_id).await {
                 tracing::error!(error = ?abort_err, "could not abort orphaned upload");
             }
-            return Err(err.into());
+            return Err(match failure {
+                InsertError::Full(usage) => quota::exceeded(&usage, size),
+                InsertError::Db(err) => err.into(),
+            });
         }
     };
     let numbers: Vec<u16> = plan.numbers().collect();
@@ -197,6 +206,9 @@ pub async fn create_streaming(
             message: "Finish or cancel your unfinished uploads before starting another.".into(),
         });
     }
+    // The size is not known until the recording ends, but a person with no room at all is told now, not at the
+    // first part; each part is checked as it comes (`part_url`).
+    quota::check_room(state, user.id, 1).await?;
     let id = input.id.unwrap_or_else(Uuid::new_v4);
     let key = source_key(id);
     let upload_id = state
@@ -216,9 +228,15 @@ pub async fn create_streaming(
         source_key: &key,
         upload_id: &upload_id,
     };
-    let video = match repo::insert(&state.db, &row).await {
+    let video = match quota::insert_within_room(state, &row, 1).await {
         Ok(video) => video,
-        Err(err) => {
+        Err(InsertError::Full(usage)) => {
+            if let Err(abort_err) = state.store.abort_multipart(&key, &upload_id).await {
+                tracing::error!(error = ?abort_err, "could not abort orphaned upload");
+            }
+            return Err(quota::exceeded(&usage, 1));
+        }
+        Err(InsertError::Db(err)) => {
             if let Err(abort_err) = state.store.abort_multipart(&key, &upload_id).await {
                 tracing::error!(error = ?abort_err, "could not abort orphaned upload");
             }
@@ -329,6 +347,18 @@ pub async fn part_url(
     if !problems.is_empty() {
         return Err(ApiError::validation(problems));
     }
+    // Where this part ends in the recording: the parts before it are all full, so it is known. The recorder is
+    // told while it still has the whole recording on its own disk.
+    let end = (u64::from(number) - 1)
+        .saturating_mul(part_size)
+        .saturating_add(size);
+    quota::check_part(
+        state,
+        user.id,
+        video.id,
+        i64::try_from(end).unwrap_or(i64::MAX),
+    )
+    .await?;
     let url = state
         .store
         .presign_part(&video.source_key, &upload_id, number, size, URL_TTL);

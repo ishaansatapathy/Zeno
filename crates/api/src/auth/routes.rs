@@ -8,8 +8,9 @@ use axum_extra::extract::CookieJar;
 use crate::auth::audit;
 use crate::auth::cookies::{self, ACCESS_COOKIE, REFRESH_COOKIE};
 use crate::auth::dto::{
-    ActivityItem, ActivityResponse, EmailRequest, LoginRequest, MessageResponse, RegisterRequest,
-    ResetPasswordRequest, TokenRequest, UserEnvelope, UserResponse,
+    ActivityItem, ActivityResponse, ChangePasswordRequest, EmailRequest, LoginRequest,
+    MessageResponse, RegisterRequest, ResetPasswordRequest, TokenRequest, UpdateAccountRequest,
+    UserEnvelope, UserResponse,
 };
 use crate::auth::extractor::{ApiJson, AuthUser, Client};
 use crate::auth::limits::{self, HOUR};
@@ -34,7 +35,8 @@ pub fn router() -> Router<AppState> {
         .route("/logout", post(logout))
         .route("/forgot-password", post(forgot_password))
         .route("/reset-password", post(reset_password))
-        .route("/me", get(me))
+        .route("/me", get(me).patch(update_me))
+        .route("/change-password", post(change_password))
         .route("/activity", get(activity))
 }
 
@@ -304,6 +306,111 @@ pub(crate) async fn reset_password(
     .await?;
     Ok(Json(MessageResponse {
         message: "Password updated. Sign in with your new password.",
+    }))
+}
+
+/// Changes the password of the signed-in account, and signs it out everywhere.
+///
+/// The current password is asked for again, so a session someone else holds is not enough to take the account over.
+/// Five tries an hour per account. On success every session of the account ends, this one included, and so does
+/// every viewing it had open: the cookies are cleared and the person signs in again with the new password.
+#[utoipa::path(
+    post,
+    path = "/v1/auth/change-password",
+    tag = "auth",
+    security(("session" = [])),
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 200, description = "Changed. Every session is over; sign in again.", body = MessageResponse, headers(("Set-Cookie" = String, description = "Both cookies, expired."))),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`wrong_password`: that is not the current password, or `forbidden_origin`.", body = ErrorBody),
+        (status = 422, description = "`validation_failed` (see `fields`: the new password is not allowed, or is the current one) or `invalid_request`.", body = ErrorBody),
+        (status = 429, description = "`too_many_requests` (five tries an hour), with `Retry-After`.", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+        (status = 503, description = "`unavailable`: fails closed.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn change_password(
+    State(state): State<AppState>,
+    Client(ctx): Client,
+    user: AuthUser,
+    jar: CookieJar,
+    ApiJson(body): ApiJson<ChangePasswordRequest>,
+) -> Result<(CookieJar, Json<MessageResponse>), ApiError> {
+    // Every try counts, right or wrong: whoever holds the session is guessing the password otherwise.
+    limits::enforce(
+        &*state.counters,
+        &format!("password:change:{}", user.id),
+        5,
+        HOUR,
+    )
+    .await?;
+    let account = service::me(&state, user.id).await?;
+    let mut problems = Vec::new();
+    if let Err(problem) = validation::password(body.new_password.expose(), "new_password") {
+        problems.push(problem);
+    } else if let Some(email) = account.email.as_deref() {
+        if let Err(problem) =
+            validation::password_not_from_email(body.new_password.expose(), email, "new_password")
+        {
+            problems.push(problem);
+        }
+    }
+    if problems.is_empty() && body.new_password.expose() == body.current_password.expose() {
+        problems.push(crate::error::FieldError::new(
+            "new_password",
+            "Choose a password you are not using now.",
+        ));
+    }
+    if !problems.is_empty() {
+        return Err(ApiError::validation(problems));
+    }
+    service::change_password(
+        &state,
+        user.id,
+        body.current_password.into_inner(),
+        body.new_password.into_inner(),
+        &ctx,
+    )
+    .await?;
+    Ok((
+        cookies::clear_session(jar, state.config.cookie_secure),
+        Json(MessageResponse {
+            message: "Password changed. Sign in with your new password.",
+        }),
+    ))
+}
+
+/// Renames the signed-in account.
+#[utoipa::path(
+    patch,
+    path = "/v1/auth/me",
+    tag = "auth",
+    security(("session" = [])),
+    request_body = UpdateAccountRequest,
+    responses(
+        (status = 200, description = "Renamed.", body = UserEnvelope),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 422, description = "`validation_failed` (see `fields`) or `invalid_request`.", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn update_me(
+    State(state): State<AppState>,
+    Client(ctx): Client,
+    user: AuthUser,
+    ApiJson(body): ApiJson<UpdateAccountRequest>,
+) -> Result<Json<UserEnvelope>, ApiError> {
+    limits::enforce(
+        &*state.counters,
+        &format!("account:rename:{}", user.id),
+        20,
+        HOUR,
+    )
+    .await?;
+    let name = validation::name(&body.name).map_err(|e| ApiError::validation(vec![e]))?;
+    let renamed = service::rename(&state, user.id, &name, &ctx).await?;
+    Ok(Json(UserEnvelope {
+        user: UserResponse::from(&renamed),
     }))
 }
 
