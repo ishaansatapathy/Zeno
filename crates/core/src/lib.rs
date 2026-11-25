@@ -9,5 +9,6 @@ pub mod payments;
 pub mod playback;
 pub mod ratelimit;
 pub mod secret;
+pub mod segment_keys;
 pub mod storage;
 pub mod views;
