@@ -18,6 +18,8 @@ interface SessionApi {
   session: Session;
   /** Asks the API who is signed in. */
   reload: () => Promise<void>;
+  /** Leaves the session as it is but for the person: a rename has just been kept, and no one needs to ask again. */
+  setUser: (user: User) => void;
   /** Ends this session, here and on the server, and goes to the sign-in page. */
   signOut: () => Promise<void>;
 }
@@ -49,7 +51,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     router.replace("/login?arrival=signed-out");
   }, [router]);
 
-  const value = useMemo(() => ({ session, reload, signOut }), [session, reload, signOut]);
+  const setUser = useCallback((user: User) => setSession((now) => (now.status === "signed-in" ? { status: "signed-in", user } : now)), []);
+
+  const value = useMemo(() => ({ session, reload, setUser, signOut }), [session, reload, setUser, signOut]);
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 

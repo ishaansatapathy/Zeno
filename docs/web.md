@@ -131,6 +131,14 @@ that cannot play HLS) is a sentence, never a dead end.
 link's says nothing about the video). `SITE_URL` makes the image address absolute. The page is
 `noindex` and sent with `Referrer-Policy: no-referrer`: the address is a capability.
 
+**Settings** (`/settings`, behind sign-in; the person's name in the bar leads to it): how much storage is used
+(a meter with its numbers in words for a screen reader, any use at all showing as at least 1%, the way out
+when it is full), the name (kept, and shown in the bar at once), and a new password (the old one asked for;
+it signs the person out everywhere and sends them to sign in, with a note saying why). Checked in a browser
+(`e2e/settings.spec.ts`, 7 tests, axe at desktop and phone size with and without problems on screen). The
+full and unavailable states are tested by answering the storage request with a made-up response, since a
+test cannot give an account a smaller allowance through the API.
+
 **Real playback, and why the browser tests do not cover the picture.** Playwright's Chromium cannot
 decode H.264, so the suite checks the whole way up to the segment (the page, the viewing, the playlists,
 the watermark, every way the server can refuse) against recorded answers. The picture itself is checked

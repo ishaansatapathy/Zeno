@@ -12,12 +12,13 @@ import { checkLogin, firstProblem, type Problems } from "./validate";
 const ORDER = ["email", "password"];
 
 /** Notices that arrive with the page: the person was sent here by another screen. */
-export type Arrival = "reset" | "expired" | "signed-out" | null;
+export type Arrival = "reset" | "expired" | "signed-out" | "password-changed" | null;
 
 const ARRIVALS: Record<Exclude<Arrival, null>, string> = {
   reset: "Your password is updated. Sign in with the new one.",
   expired: "Your session ended. Sign in to continue.",
   "signed-out": "You're signed out.",
+  "password-changed": "Your password is changed, and you're signed out everywhere. Sign in with the new one.",
 };
 
 export function LoginForm({ next, arrival }: { next: string; arrival: Arrival }) {

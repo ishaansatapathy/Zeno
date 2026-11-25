@@ -152,6 +152,15 @@ export function createApi(options: ClientOptions = {}) {
       resetPassword: (token: string, newPassword: string) =>
         call(() => client.POST("/v1/auth/reset-password", { body: { token, new_password: newPassword } })),
       me: () => call(() => client.GET("/v1/auth/me")),
+      /** Renames the account. */
+      rename: (name: string) => call(() => client.PATCH("/v1/auth/me", { body: { name } })),
+      /** Needs the password in use now. On success every session is over, this one included. */
+      changePassword: (currentPassword: string, newPassword: string) =>
+        call(() => client.POST("/v1/auth/change-password", { body: { current_password: currentPassword, new_password: newPassword } })),
+    },
+    /** What a signed-in person can see about their own account. */
+    account: {
+      storage: () => call(() => client.GET("/v1/me/storage")),
     },
     recordings: {
       list: (query: { cursor?: string; limit?: number; source?: string } = {}) => call(() => client.GET("/v1/recordings", { params: { query } })),

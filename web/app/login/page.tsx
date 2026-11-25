@@ -7,7 +7,7 @@ import { safeNext } from "@/lib/next-path";
 
 export const metadata: Metadata = { title: "Sign in · Zeno", robots: noindex };
 
-const ARRIVALS: Arrival[] = ["reset", "expired", "signed-out"];
+const ARRIVALS: Arrival[] = ["reset", "expired", "signed-out", "password-changed"];
 
 export default async function Page({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const query = await searchParams;

@@ -53,9 +53,16 @@ export function AppFrame({ children }: { children: ReactNode }) {
           <Mark />
         </Link>
         <div className="ml-auto flex items-stretch">
-          <p className="label hidden items-center px-5 sm:flex" title={user.email ?? undefined}>
-            {user.name}
-          </p>
+          <Link
+            href="/settings"
+            aria-current={pathname === "/settings" ? "page" : undefined}
+            aria-label={`Settings, ${user.name}`}
+            title={user.email ?? undefined}
+            className="caps fillup flex items-center border-l border-line px-5 text-paper/80"
+          >
+            <span className="hidden sm:inline">{user.name}</span>
+            <span className="sm:hidden">Settings</span>
+          </Link>
           <button
             type="button"
             onClick={() => {
