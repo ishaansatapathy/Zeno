@@ -257,6 +257,29 @@ describe("when the network or Zeno misbehaves", () => {
     expect(view).toMatchObject({ phase: "off", reason: "refused" });
   });
 
+  it("says plainly when Zeno has no room, at the start and part way through, and goes on recording", async () => {
+    const atStart = setup();
+    atStart.zeno.script["startUpload"] = [[413, "storage_quota_exceeded"]];
+    atStart.uploader.start();
+    atStart.disk.append(30);
+    const first = await atStart.uploader.end(30);
+    expect(first).toMatchObject({ phase: "failed" });
+    expect(first.message).toContain("storage is full");
+    expect(first.message).not.toContain("413");
+
+    // Part of it is in Zeno when the room runs out: what is held is not thrown away, and the account may try again.
+    const partWay = setup();
+    partWay.zeno.script["partUrl"] = [0, [413, "storage_quota_exceeded"]];
+    partWay.uploader.start();
+    partWay.disk.append(30);
+    const second = await partWay.uploader.end(30);
+    expect(second).toMatchObject({ phase: "failed" });
+    expect(second.message).toContain("storage is full");
+    expect(partWay.zeno.calls.filter((call) => call === "partUrl")).toHaveLength(2);
+    // It stopped: no more asks after a refusal that waiting cannot fix.
+    expect(partWay.zeno.calls.at(-1)).toBe("partUrl");
+  });
+
   it("stops at a refusal that waiting cannot fix", async () => {
     const { zeno, disk, uploader } = setup();
     zeno.script["complete"] = [409];

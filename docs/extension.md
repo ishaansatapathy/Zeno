@@ -150,7 +150,7 @@ files.
 **The uploader** (`src/offscreen/uploader.ts`) is plain logic over four things it is given (the API, the
 disk, a way to send a part, a way to wait), so it is tested without a browser: which part is next
 (`nextPart`, with a test that every byte is covered exactly once for any size), a part that fails is
-tried again and never skipped or doubled, a person who is signed out is not uploaded for, and it gives up
+tried again and never skipped or doubled, a person who is signed out is not uploaded for, an account whose storage is full is told so (`413`, said in words; what is held is kept and the rest goes up once room is made), and it gives up
 only some time after the recording has ended. Picking an upload up again asks Zeno what storage holds
 (`GET /v1/videos/{id}/upload`), carries on after the parts it holds without a gap (a part past a gap is sent
 again: sending twice is harmless, skipping one would leave a hole), and treats an upload that is no longer

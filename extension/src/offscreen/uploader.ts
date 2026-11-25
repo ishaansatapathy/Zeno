@@ -183,6 +183,8 @@ export class Uploader {
       // An account that may not upload (a student's) is not a failure to apologise for: it is just not uploaded.
       if (error instanceof Fatal && error.status === 403) this.unavailable("refused", "This account cannot upload recordings.");
       else if (error instanceof Fatal && error.status === 401) this.show({ phase: "failed", reason: "signed_out", message: "Sign in to Zeno, then try the upload again." });
+      // The account has no storage left: the recording is whole on this computer, and goes up when there is room.
+      else if (error instanceof Fatal && error.code === "storage_quota_exceeded") this.show({ phase: "failed", message: "Your Zeno storage is full. Delete recordings you no longer need in Zeno, then try the upload again." });
       else this.show({ phase: "failed", message });
       return this.view;
     }
