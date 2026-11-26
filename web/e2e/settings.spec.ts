@@ -4,10 +4,20 @@ import { PASSWORD, alertOf, confirmedAccount, processingVideo, signIn, signInQui
 
 const NEW_PASSWORD = "a different long passphrase";
 
-/** A person of their own (these tests change the account), signed in and looking at their settings. */
-async function settings(page: Page, request: Parameters<typeof confirmedAccount>[0]) {
-  const email = await confirmedAccount(request, { name: "Asha Rao" });
+let sharedEmail: Promise<string> | null = null;
+
+/**
+ * Signing up is limited to ten a hour from one address, and a suite that made an account for each test would spend
+ * the allowance of every spec after it. So the tests here share one account, put back to its name each time, and
+ * only the one that changes the password makes its own.
+ */
+async function settings(page: Page, request: Parameters<typeof confirmedAccount>[0], options: { own?: boolean } = {}) {
+  const email = options.own ? await confirmedAccount(request, { name: "Asha Rao" }) : await (sharedEmail ??= confirmedAccount(request, { name: "Asha Rao" }));
   await signInQuietly(page, email);
+  if (!options.own) {
+    const named = await page.request.patch("/v1/auth/me", { data: { name: "Asha Rao" } });
+    expect(named.status()).toBe(200);
+  }
   await page.goto("/settings");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("settings.");
   return email;
@@ -96,7 +106,7 @@ test("a name that cannot be kept is said so before anything is sent", async ({ p
 });
 
 test("changing the password asks for the old one, then signs the person out everywhere", async ({ page, request, browser }) => {
-  const email = await settings(page, request);
+  const email = await settings(page, request, { own: true });
   // Somewhere else the same account is signed in.
   const elsewhere = await browser.newContext({ baseURL: "http://localhost:3000" });
   const other = await elsewhere.newPage();
