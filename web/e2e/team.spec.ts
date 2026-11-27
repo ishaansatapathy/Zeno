@@ -5,6 +5,9 @@ import { mailedCount, mailedLink } from "./mail";
 
 type Playwright = PlaywrightWorkerArgs["playwright"];
 
+// A test may wait out a minute's budget (see `patiently`), so the usual half minute is not enough here.
+test.setTimeout(120_000);
+
 // Signing up is limited to ten an hour from one address, and the other specs have spent most of it, so these tests
 // make no accounts of their own. The owner is the creator the other specs share; the person invited is the shared
 // student, given a name of their own so the two can be told apart on the screen. (This spec runs last, so the new
@@ -58,7 +61,7 @@ async function another(browser: Browser, email: string): Promise<Page> {
 async function workspaceOf(page: Page, playwright: Playwright, name = unique("Maths")) {
   const email = await ownerEmail(playwright);
   await signInQuietly(page, email);
-  const made = await page.request.post("/v1/workspaces", { data: { name } });
+  const made = await patiently(() => page.request.post("/v1/workspaces", { data: { name } }));
   expect(made.status(), await made.text()).toBe(201);
   const { workspace } = await made.json();
   return { id: workspace.id as string, name, email };
@@ -67,7 +70,7 @@ async function workspaceOf(page: Page, playwright: Playwright, name = unique("Ma
 /** Invites `email` through the page and returns the path of the emailed link. */
 async function invite(page: Page, workspace: string, email: string, role = "member") {
   const before = mailedCount(email, "invite");
-  const sent = await page.request.post(`/v1/workspaces/${workspace}/invites`, { data: { email, role } });
+  const sent = await patiently(() => page.request.post(`/v1/workspaces/${workspace}/invites`, { data: { email, role } }));
   expect(sent.status(), await sent.text()).toBe(201);
   return mailedLink(email, "invite", before);
 }
