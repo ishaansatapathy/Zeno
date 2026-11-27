@@ -27,7 +27,7 @@ describe("site content", () => {
     }
   });
 
-  it("walks one lesson through four distinct steps, each adding to the canvas", () => {
+  it("walks one recording through four distinct steps, each adding to the canvas", () => {
     const ids = site.bench.steps.map((s) => s.id);
     expect(new Set(ids).size).toBe(4);
     site.bench.steps.forEach((_, i) => {
@@ -52,7 +52,23 @@ describe("site content", () => {
     expect(text).not.toMatch(/1080p|4k|unlimited|three devices|3 devices/i);
   });
 
-  it("is written for teachers everywhere, not one country or currency", () => {
+  it("never states something that is not built as if it were here", () => {
+    // The studio, live streaming to other platforms, the editor and live meetings are planned (README.md).
+    // Wherever the site names one, the same sentence says it is coming.
+    const planned = /desktop studio|go(ing)? live|the editor|an editor|live meetings|meetings are/i;
+    const coming = /soon|on the way|is next|being built|until it is ready/i;
+    const offenders = strings(site).filter((s) => planned.test(s) && !coming.test(s));
+    expect(offenders).toEqual([]);
+  });
+
+  it("is not written for one kind of person only", () => {
+    const text = strings(site).join(" ");
+    expect(text).toMatch(/creators/i);
+    expect(text).toMatch(/teams?/i);
+    expect(text).not.toMatch(/start teaching/i);
+  });
+
+  it("is written for people everywhere, not one country or currency", () => {
     const text = strings(site).join(" ");
     expect(text).not.toMatch(/india|indian|rupee|₹|\binr\b|paise|gst|razorpay/i);
     expect(text).not.toMatch(/[$€£¥]/);

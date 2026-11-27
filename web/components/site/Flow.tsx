@@ -284,7 +284,7 @@ function Canvas({ active, p, pinned }: { active: number; p: number; pinned: bool
 }
 
 /**
- * One lesson through Zeno, as a flow. On the left: the four steps, what the current one does, and
+ * One recording through Zeno, as a flow. On the left: the four steps, what the current one does, and
  * the line it runs. On the right: a canvas where each step adds its cards and draws its links. On
  * a wide, tall enough screen the section holds still and the scroll drives it; elsewhere it steps
  * through on its own until someone picks a step.

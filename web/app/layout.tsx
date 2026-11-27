@@ -40,9 +40,9 @@ const siteUrl = process.env.SITE_URL ?? "http://localhost:3000";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: "Zeno: teach what you know, keep what you earn",
+  title: "Zeno: record it once, share it anywhere",
   description:
-    "Video courses and live classes for independent educators. Every lesson locked segment by segment, every sale counted once, every payout to your bank.",
+    "One place to record, share, host and sell video, for creators, teachers and teams. A link before you stop recording, encrypted playback on any connection, and courses with payouts. Live streaming, an editor and meetings are on the way.",
 };
 
 export const viewport: Viewport = { themeColor: "#000000", colorScheme: "dark" };

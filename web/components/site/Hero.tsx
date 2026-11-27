@@ -3,7 +3,7 @@
 import { m, useScroll, useTransform } from "motion/react";
 import { useRef } from "react";
 
-import { hero, links } from "@/content/site";
+import { cta, hero, links } from "@/content/site";
 
 import { Bloom } from "./Bloom";
 import { Button, Container, Label } from "./frame";
@@ -30,7 +30,7 @@ export function Hero() {
         <Container className="flex h-full flex-col justify-center pb-14 pt-24 lg:pb-16 lg:pt-28">
           <m.div style={{ opacity: wordsOpacity, y: wordsY }} className="relative z-10">
             <div className="rise">
-              <Label>Video courses · live classes</Label>
+              <Label>{hero.label}</Label>
             </div>
             <h1 id="hero-title" className="display mt-6 text-[clamp(3.4rem,min(12.4vw,20svh),13rem)] leading-[0.94] lg:mt-8">
               <span className="rise block" style={{ ["--delay" as string]: "0.06s" }}>
@@ -46,10 +46,10 @@ export function Hero() {
               </p>
               <div className="flex flex-wrap gap-3">
                 <Button href={links.start} out>
-                  Start teaching
+                  {cta.start}
                 </Button>
                 <Button href="#bench" tone="line">
-                  See how it works
+                  {cta.how}
                 </Button>
               </div>
             </div>

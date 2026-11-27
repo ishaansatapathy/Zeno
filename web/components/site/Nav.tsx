@@ -1,6 +1,6 @@
 import Link from "next/link";
 
-import { links, nav } from "@/content/site";
+import { cta, links, nav } from "@/content/site";
 
 import { ArrowUpRight } from "./frame";
 import { Mark } from "./Mark";
@@ -33,7 +33,7 @@ export function Nav() {
           Log in
         </Link>
         <Link href={links.start} prefetch={false} className="caps fillup fillup-ink ml-auto flex items-center gap-6 whitespace-nowrap bg-silver px-5 text-ink sm:ml-0 lg:gap-10">
-          Start teaching
+          {cta.start}
           <ArrowUpRight />
         </Link>
       </div>

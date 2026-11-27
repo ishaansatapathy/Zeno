@@ -1,10 +1,13 @@
 /**
- * Every word on the public site. Claims are things the backend does today, with the numbers it
- * uses by default: five qualities from 144p to 720p, two screens at a time, uploads up to 10 GB
- * and 6 hours, originals deleted 7 days after encoding, refunds capped at what was paid, each
- * payment applied exactly once. Nothing is tied to one country or one currency.
+ * Every word on the public site. Zeno is one place to record, stream, edit, host and share video, for
+ * creators, teachers and the teams they work with (README.md, "Surfaces"). What the site states as fact
+ * is built and measured: a link at stop in about 0.2 s, at most a second lost to a crash, five qualities
+ * from 144p to 720p, a key that changes every 30 seconds of video so a revoked link ends a viewing within
+ * about half a minute, uploads up to 10 GB and 6 hours, each payment applied exactly once. What is not built
+ * yet (the desktop studio, live streaming to other platforms, the editor, live meetings) is always said
+ * to be on the way, never as if it were here. Nothing is tied to one country or one currency.
  *
- * A title is [plain, accent]: the accent is set in the serif's italic, in signal orange.
+ * A title is [plain, accent]: the accent is its second half, set apart on the page.
  */
 
 export type Title = readonly [string, string];
@@ -14,51 +17,58 @@ export const links = {
   login: "/login",
 } as const;
 
+/** The words on the buttons that lead into the app, wherever they appear. */
+export const cta = {
+  start: "Get started",
+  how: "See how it works",
+} as const;
+
 export const nav = [
   { label: "How it works", href: "#bench" },
-  { label: "For teachers", href: "#sides" },
+  { label: "Who it's for", href: "#sides" },
   { label: "Promises", href: "#promises" },
   { label: "FAQ", href: "#faq" },
 ] as const;
 
 export const hero = {
-  title: ["Teach what you know.", "Keep what you earn."] as Title,
+  label: "Record · Share · Host · Stream",
+  title: ["Record it once.", "Share it anywhere."] as Title,
   lines: [
-    "For teachers, Zeno turns a video into a course that is hard to steal.",
-    "For students, it plays on any connection.",
+    "Zeno records your screen and camera, has the link ready before you stop, and plays it on any connection.",
+    "Share it with a link, sell it as a course, or keep it in your team's workspace.",
   ],
-  accentLine: "Both on one ledger that has to balance.",
+  accentLine: "Live streaming, the editor and meetings are on the way.",
   scroll: "Scroll",
 } as const;
 
 export const flip = {
-  label: "The school behind your lessons",
-  title: ["Every lesson locked.", "Every sale counted."] as Title,
-  body: "Upload once. Zeno encodes it, locks it segment by segment, sells it, and pays you out, the same way every time.",
-  primary: "Start teaching",
+  label: "One place for your video",
+  title: ["Record, share,", "teach and stream."] as Title,
+  body: "Record in the browser, send a link, let people comment on the exact moment, sell your best ones as a course, and work on it all with your team. Going live from the desktop studio to the platforms you choose is next.",
+  primary: cta.start,
   secondary: "See it work",
-  ticker: ["Video courses", "Live classes", "Five qualities", "Applied once", "Refunds capped", "Paid to your bank"],
+  ticker: ["Screen and camera", "Link at stop", "Comments on the moment", "Encrypted playback", "Courses and payouts", "Team workspaces", "Desktop studio · soon", "Live meetings · soon"],
 } as const;
 
 export const sides = {
-  label: "Two sides, one school",
-  title: ["Made for teachers.", "Fair to students."] as Title,
-  aside: "The same platform does two jobs: it protects and pays the person teaching, and it plays smoothly and refunds honestly for the person learning.",
+  label: "Who it's for",
+  title: ["Made for creators.", "Built for teams."] as Title,
+  aside: "The same library does both jobs: it gets a recording to the people who need it, quickly and privately, and it turns the ones worth keeping into something you can teach or sell.",
   panels: [
     {
-      tag: "For teachers",
-      word: "Teachers.",
-      line: ["Upload once. Set a price.", "Get paid to your bank."],
-      cta: { label: "Start teaching", href: links.start, external: true },
+      tag: "Creators and teachers",
+      word: "Creators.",
+      line: ["Record, share, sell.", "Get paid to your bank."],
+      cta: { label: cta.start, href: links.start, external: true },
     },
     {
-      tag: "For students",
-      word: "Students.",
-      line: ["Any phone, any connection.", "Pick up where you stopped."],
-      cta: { label: "See how it plays", href: "#bench", external: false },
+      tag: "Teams",
+      word: "Teams.",
+      line: ["Invite by email.", "Owners, admins and members."],
+      cta: { label: cta.how, href: "#bench", external: false },
     },
   ],
-  foot: { left: "One platform", right: "Upload · Encode · Lock · Pay out" },
+  foot: { left: "One library", right: "Record · Share · Play · Sell" },
 } as const;
 
 export type Step = {
@@ -89,56 +99,56 @@ export type FlowNode = {
 export type FlowEdge = { from: string; to: string; step: number; badge: string };
 
 /**
- * One lesson's way through Zeno, drawn as a flow: what each step does, and the nodes and links it
+ * One recording's way through Zeno, drawn as a flow: what each step does, and the nodes and links it
  * adds to the canvas. The canvas is a simulation; the limits and numbers are the platform's own.
  */
 export const bench = {
-  label: "One lesson, end to end",
-  canvas: "Lesson canvas",
-  canvasMeta: "4 steps · 1 lesson",
+  label: "One recording, end to end",
+  canvas: "Recording canvas",
+  canvasMeta: "4 steps · 1 recording",
   steps: [
     {
-      id: "upload",
+      id: "record",
       n: "01",
-      name: "Upload",
-      claim: ["Up from the browser,", "in parts."],
-      desc: "A dropped connection costs one part, not the whole file, and the upload picks up where it stopped. Up to 10 GB, up to 6 hours.",
+      name: "Record",
+      claim: ["Screen and camera,", "kept safe."],
+      desc: "In Chrome, Edge or Brave. Screen and camera are kept as separate tracks and written to disk every second, so a crash costs at most a second. Pausing leaves no gap, and a 3-2-1 count starts it.",
       stats: [
-        { k: "Up to", v: "10 GB" },
-        { k: "Length", v: "6 h" },
-        { k: "A drop costs", v: "1 part" },
+        { k: "Tracks", v: "2" },
+        { k: "A crash costs", v: "≤ 1 s" },
+        { k: "A pause leaves", v: "no gap" },
       ],
     },
     {
-      id: "encode",
+      id: "share",
       n: "02",
-      name: "Encode",
-      claim: ["One file,", "five qualities."],
-      desc: "144p to 720p, never upscaled, with audio alone to fall back on, so a slow connection gets a picture instead of a spinner.",
+      name: "Share",
+      claim: ["The link exists", "before you stop."],
+      desc: "It uploads while you record, so when you stop the link is already on your clipboard. Anyone with it can watch, with no account; add a password or an expiry if you want one.",
+      stats: [
+        { k: "Link at stop", v: "0.2 s" },
+        { k: "Account to watch", v: "none" },
+        { k: "Password", v: "optional" },
+      ],
+    },
+    {
+      id: "play",
+      n: "03",
+      name: "Play",
+      claim: ["Five qualities,", "keys that change."],
+      desc: "Encoded from 144p to 720p and playable seconds after you stop. Every segment is encrypted and the key changes every 30 seconds of video, so revoking a link ends a viewing within about half a minute.",
       stats: [
         { k: "Qualities", v: "5" },
-        { k: "Lowest", v: "144p" },
-        { k: "Highest", v: "720p" },
+        { k: "Key every", v: "30 s" },
+        { k: "Revoke ends it", v: "≈ 30 s" },
       ],
     },
     {
-      id: "lock",
-      n: "03",
-      name: "Lock",
-      claim: ["Every segment,", "sealed."],
-      desc: "Each few seconds is encrypted on its own. Keys come only from the key server, and only for a student who paid.",
-      stats: [
-        { k: "Cipher", v: "AES-128" },
-        { k: "Screens", v: "2" },
-        { k: "Keys for", v: "paid" },
-      ],
-    },
-    {
-      id: "paid",
+      id: "sell",
       n: "04",
-      name: "Get paid",
+      name: "Sell",
       claim: ["Counted once,", "paid out."],
-      desc: "A payment reported three times is applied once, written twice in a ledger that has to balance, and paid out to your bank.",
+      desc: "Turn recordings into a course. A payment reported three times is applied once, written twice in a ledger that has to balance, and paid out to your bank.",
       stats: [
         { k: "Applied", v: "1×" },
         { k: "Entries", v: "2" },
@@ -147,44 +157,44 @@ export const bench = {
     },
   ] satisfies Step[],
   nodes: [
-    { id: "upload", step: 0, icon: "upload", meta: "Upload · resumable", title: "lesson-07.mp4", line: "1.24 GB in 24 parts", chip: "Part 13 retried", x: 80, y: 235, w: 230 },
-    { id: "encode", step: 1, icon: "layers", meta: "Encode · 5 qualities", title: "144p → 720p", line: "Never upscaled · audio fallback", chip: "Ladder ready", x: 395, y: 50, w: 240 },
-    { id: "lock", step: 2, icon: "lock", meta: "Lock · AES-128", title: "24 segments sealed", line: "Key wrapped, never stored plain", chip: "Keys for paid students", x: 395, y: 355, w: 240 },
+    { id: "record", step: 0, icon: "upload", meta: "Record · 2 tracks", title: "screen.webm + camera.webm", line: "Written to disk every second", chip: "Paused, no gap", x: 80, y: 235, w: 230 },
+    { id: "share", step: 1, icon: "layers", meta: "Share · link", title: "Link on the clipboard", line: "Uploaded while recording", chip: "0.2 s after stop", x: 395, y: 50, w: 240 },
+    { id: "play", step: 2, icon: "lock", meta: "Play · AES-128", title: "144p → 720p", line: "A new key every 30 s of video", chip: "Revoke ends it", x: 395, y: 355, w: 240 },
     { id: "checkout", step: 3, icon: "card", meta: "Checkout · payment", title: "Received ×3, applied once", line: "Same payment, counted one time", chip: "Captured", x: 725, y: 25, w: 250 },
     { id: "ledger", step: 3, icon: "ledger", meta: "Ledger · double entry", title: "Sale, fee and share", line: "Every entry written twice", chip: "Off by 0.00", x: 725, y: 230, w: 250 },
     { id: "payout", step: 3, icon: "bank", meta: "Payout · your bank", title: "Ready to pay out", line: "Once the refund window closes", chip: "Ready to pay out", x: 725, y: 435, w: 250 },
   ] satisfies FlowNode[],
   edges: [
-    { from: "upload", to: "encode", step: 1, badge: "1" },
-    { from: "encode", to: "lock", step: 2, badge: "2" },
-    { from: "lock", to: "checkout", step: 3, badge: "3" },
-    { from: "lock", to: "ledger", step: 3, badge: "4" },
-    { from: "lock", to: "payout", step: 3, badge: "5" },
+    { from: "record", to: "share", step: 1, badge: "1" },
+    { from: "share", to: "play", step: 2, badge: "2" },
+    { from: "play", to: "checkout", step: 3, badge: "3" },
+    { from: "play", to: "ledger", step: 3, badge: "4" },
+    { from: "play", to: "payout", step: 3, badge: "5" },
   ] satisfies FlowEdge[],
 } as const;
 
 export const pillars = {
   label: "Underneath",
-  title: ["Three parts,", "one promise."] as Title,
-  aside: "What happens under every lesson: how it plays, how it is locked, and how the money is counted.",
+  title: ["Three parts,", "one library."] as Title,
+  aside: "What happens under every recording: how it is captured, how it reaches people, and how it is kept private.",
   items: [
     {
       n: "01 / 03",
-      word: "Stream.",
-      name: "Adaptive streaming",
-      body: "Five qualities from 144p to 720p. The player picks what the connection can carry, a few seconds at a time.",
+      word: "Capture.",
+      name: "Recording",
+      body: "The browser extension records screen, camera and voice as separate tracks and uploads while it records. The desktop studio, for Windows first and then macOS, is on the way.",
     },
     {
       n: "02 / 03",
-      word: "Lock.",
-      name: "Encrypted segments",
-      body: "Every few seconds is its own encrypted segment. Keys come from a separate key server, and only for a student who paid.",
+      word: "Share.",
+      name: "Links and comments",
+      body: "A link anyone can open, with a password or an expiry if you want one. Viewers leave comments and reactions pinned to the moment they are about.",
     },
     {
       n: "03 / 03",
-      word: "Count.",
-      name: "Double-entry ledger",
-      body: "Every sale, fee, refund and payout is written twice. A payment is applied once, however many times it is reported.",
+      word: "Lock.",
+      name: "Encrypted playback",
+      body: "Every segment is encrypted. The key changes every 30 seconds of video and comes only from a key server that checks, each time, that the viewing is still allowed.",
     },
   ],
 } as const;
@@ -192,30 +202,40 @@ export const pillars = {
 export const promises = {
   label: "Why Zeno",
   title: ["Five promises,", "kept in code."] as Title,
-  aside: "Not features. Rules the backend refuses to break, and tests that break things on purpose to prove it.",
+  aside: "Not features. Rules the backend refuses to break, measured, and tests that break things on purpose to prove it.",
   rows: [
     {
       n: "01",
-      tag: "Exact",
-      word: "once.",
-      title: "Every payment applied once",
-      body: "A payment provider can send the same news three times. Zeno applies it once, even if the database restarts halfway.",
-      more: "Tested by killing the database in the middle of a payment.",
-      big: "1×",
-      unit: "applied",
+      tag: "Fast",
+      word: "instant.",
+      title: "A link before you stop",
+      body: "The recording goes up while you make it, so the link is on your clipboard the moment you stop.",
+      more: "Measured: about 0.2 seconds from stop to link.",
+      big: "0.2",
+      unit: "seconds",
     },
     {
       n: "02",
-      tag: "Fair",
-      word: "capped.",
-      title: "Refunds never exceed the sale",
-      body: "A refund can never be bigger than what was paid, however it is asked for.",
-      more: "Checked by the app, and again by the database itself.",
-      big: "≤",
-      unit: "what was paid",
+      tag: "Safe",
+      word: "kept.",
+      title: "A crash does not lose the recording",
+      body: "Written to disk every second. A recording cut short is finished later, under the same link.",
+      more: "At most the last second is lost.",
+      big: "≤ 1",
+      unit: "second lost",
     },
     {
       n: "03",
+      tag: "Private",
+      word: "revocable.",
+      title: "Revoking a link means it",
+      body: "New viewings stop at once. One already playing ends within about half a minute, because the key changes every 30 seconds of video.",
+      more: "Measured in a real browser: 10 to 27 seconds.",
+      big: "30",
+      unit: "seconds",
+    },
+    {
+      n: "04",
       tag: "Smooth",
       word: "adapt.",
       title: "Quality follows the connection",
@@ -225,24 +245,14 @@ export const promises = {
       unit: "qualities",
     },
     {
-      n: "04",
-      tag: "Private",
-      word: "locked.",
-      title: "Keys only for students who paid",
-      body: "Every segment is encrypted. One account streams on two screens at a time, so a shared password stops being a free course.",
-      more: "A silent screen gives up its slot after three minutes.",
-      big: "2",
-      unit: "screens",
-    },
-    {
       n: "05",
       tag: "Exact",
-      word: "balanced.",
-      title: "A ledger that has to add up",
-      body: "Every sale, fee, refund and payout is written twice, in a double-entry ledger.",
-      more: "Integrity checks flag anything that does not add up.",
-      big: "0",
-      unit: "off",
+      word: "once.",
+      title: "Every payment applied once",
+      body: "A payment provider can send the same news three times. Zeno applies it once and writes it twice, in a ledger that has to balance.",
+      more: "Tested by killing the database in the middle of a payment.",
+      big: "1×",
+      unit: "applied",
     },
   ],
 } as const;
@@ -253,32 +263,36 @@ export const faq = {
   aside: "Short, honest answers. If one of them is not good enough for you, better to know now.",
   items: [
     {
-      q: "Can students screen-record my lessons?",
-      a: "Honestly, yes. Nobody can stop a phone pointed at a screen. What Zeno stops is the easy part: the files are encrypted, the keys only go to students who paid, and one account can only stream on two screens at once.",
+      q: "What is Zeno, exactly?",
+      a: "One place to record, stream, edit, host and share video. Today: a browser recorder with a link at stop, hosting with share links and comments, courses with checkout and payouts, and team workspaces. On the way: the desktop studio for going live to the platforms you choose, an editor for clips, and live meetings.",
     },
     {
-      q: "What if a payment is sent twice?",
-      a: "It is applied once. Payment providers retry their notifications; Zeno records each one exactly once, even if the database restarts halfway through.",
+      q: "Do the people I share with need an account?",
+      a: "No. Anyone with the link watches in a browser, with nothing to install. A link can have a password or an expiry, and you can revoke it at any time.",
     },
     {
-      q: "Can a refund be bigger than the payment?",
-      a: "No. A refund is capped at what was paid. The app checks it, and the database checks it again on its own.",
+      q: "Which browsers does the recorder work in?",
+      a: "Chrome, Edge and Brave on a computer. It records the screen, the camera and the microphone, and keeps your own copy on your computer as well.",
     },
     {
-      q: "What do my students need?",
-      a: "A browser. Nothing to install. Video adjusts between 144p and 720p to fit their connection, and every lesson resumes where they stopped.",
+      q: "Can people screen-record what I share?",
+      a: "Honestly, yes. Nobody can stop a phone pointed at a screen. What Zeno stops is the easy part: the files are encrypted, the keys change as the video plays, and a revoked link stops giving them out.",
     },
     {
-      q: "When do I get paid?",
-      a: "Once a sale's refund window closes, your share moves to your payout balance. Past the minimum, you request a payout to your bank.",
+      q: "Can I sell what I record?",
+      a: "Yes. Put recordings in a course and set a price. Each payment is applied once, refunds are capped at what was paid, and your share is paid out to your bank once the refund window closes.",
+    },
+    {
+      q: "When can I go live with Zeno?",
+      a: "The desktop studio is being built, Windows first and then macOS. It will stream to only the platforms you tick for that stream. Until it is ready, Zeno records, shares and hosts.",
     },
   ],
 } as const;
 
 export const finale = {
-  title: ["Teach what you know.", "Start with one lesson."] as Title,
+  title: ["Record something.", "Send the link."] as Title,
   ctas: [
-    { tag: "01 · Start", label: "Start teaching", sub: "Upload your first lesson.", href: links.start },
+    { tag: "01 · Start", label: cta.start, sub: "Make an account and your library is ready.", href: links.start },
     { tag: "02 · Account", label: "Log in", sub: "Pick up where you left off.", href: links.login },
   ],
 } as const;
@@ -289,12 +303,12 @@ export const footer = {
     {
       title: "Account",
       links: [
-        { label: "Start teaching", href: links.start },
+        { label: cta.start, href: links.start },
         { label: "Log in", href: links.login },
       ],
     },
   ],
   rights: "Zeno",
-  made: "Made for teachers everywhere",
+  made: "Made for creators and teams everywhere",
   top: "Back to top",
 } as const;

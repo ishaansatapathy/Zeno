@@ -25,7 +25,7 @@ const icons: ReactNode[] = [
 ];
 
 /**
- * The three parts under every lesson, as three columns. The one being looked at fills with silver
+ * The three parts under every recording, as three columns. The one being looked at fills with silver
  * from the bottom up, its name re-settling out of noise.
  */
 export function Pillars() {

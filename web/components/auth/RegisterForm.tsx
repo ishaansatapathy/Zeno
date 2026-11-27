@@ -14,7 +14,7 @@ const ORDER = ["name", "email", "password"];
 type Role = "creator" | "student";
 
 const ROLES: { value: Role; title: string; line: string }[] = [
-  { value: "creator", title: "Record and share", line: "Make recordings, streams and courses." },
+  { value: "creator", title: "Record and share", line: "Make recordings, share them, sell courses." },
   { value: "student", title: "Watch and learn", line: "Follow what others share with you." },
 ];
 
