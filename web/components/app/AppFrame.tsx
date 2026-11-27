@@ -54,6 +54,13 @@ export function AppFrame({ children }: { children: ReactNode }) {
         </Link>
         <div className="ml-auto flex items-stretch">
           <Link
+            href="/team"
+            aria-current={pathname.startsWith("/team") ? "page" : undefined}
+            className="caps fillup flex items-center border-l border-line px-5 text-paper/80"
+          >
+            Team
+          </Link>
+          <Link
             href="/settings"
             aria-current={pathname === "/settings" ? "page" : undefined}
             aria-label={`Settings, ${user.name}`}

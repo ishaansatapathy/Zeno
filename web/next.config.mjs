@@ -38,6 +38,7 @@ const nextConfig = {
     return [
       { source: "/verify-email/:token", headers: private_ },
       { source: "/reset-password/:token", headers: private_ },
+      { source: "/invite/:token", headers: private_ },
       { source: "/s/:code", headers: capability },
       { source: "/s/:code/:path*", headers: capability },
     ];

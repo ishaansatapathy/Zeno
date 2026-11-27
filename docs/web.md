@@ -131,6 +131,19 @@ that cannot play HLS) is a sentence, never a dead end.
 link's says nothing about the video). `SITE_URL` makes the image address absolute. The page is
 `noindex` and sent with `Referrer-Policy: no-referrer`: the address is a capability.
 
+**Team** (`/team`, `/team/<id>`, and `/invite/<token>`, all behind sign-in; the bar's "Team" leads to the first):
+the workspaces a person is in with what they are in each, starting one, and in one: its people (an owner picks each
+one's role from a list and removes anyone; an admin removes members; anyone leaves), inviting by email (an admin
+can only offer *member*), the invitations waiting (each can be taken back), renaming, and ending it (two presses,
+the second saying what it does). The screens offer only what the person's role can do (`lib/team.ts`, tested), and
+the API refuses the rest on its own. An invitation's link opens a page that does nothing until *Accept invitation*
+is pressed, because mail scanners and previews open links; it is served `no-referrer` and `no-store` like the other
+token pages. Somebody who is not signed in is sent to sign in and brought back to it; **somebody with no account yet
+has to register with the address the invitation was sent to and then open the link again** (the registration does
+not carry the link through), which the page does not say yet. Seven browser tests (`e2e/team.spec.ts`: starting,
+inviting and accepting, the wrong account, roles and removal, the only owner, leaving and taking an invitation back,
+ending it, axe at desktop and phone).
+
 **Settings** (`/settings`, behind sign-in; the person's name in the bar leads to it): how much storage is used
 (a meter with its numbers in words for a screen reader, any use at all showing as at least 1%, the way out
 when it is full), the name (kept, and shown in the bar at once), and a new password (the old one asked for;

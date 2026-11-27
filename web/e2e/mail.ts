@@ -6,7 +6,7 @@ interface LogLine {
   fields?: { message?: string; to?: string; subject?: string };
 }
 
-type Kind = "verify-email" | "reset-password";
+type Kind = "verify-email" | "reset-password" | "invite";
 
 /** Every link of this kind the API has "emailed" to `email`, oldest first. */
 function linksTo(email: string, kind: Kind): string[] {

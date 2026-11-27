@@ -162,6 +162,27 @@ export function createApi(options: ClientOptions = {}) {
     account: {
       storage: () => call(() => client.GET("/v1/me/storage")),
     },
+    /** Teams: who is in one, what each may do, and the invitations that bring people in. */
+    workspaces: {
+      list: () => call(() => client.GET("/v1/workspaces")),
+      create: (name: string) => call(() => client.POST("/v1/workspaces", { body: { name } })),
+      get: (id: string) => call(() => client.GET("/v1/workspaces/{id}", { params: { path: { id } } })),
+      rename: (id: string, name: string) => call(() => client.PATCH("/v1/workspaces/{id}", { params: { path: { id } }, body: { name } })),
+      remove: (id: string) => call(() => client.DELETE("/v1/workspaces/{id}", { params: { path: { id } } })),
+      setRole: (id: string, user: string, role: Schemas["WorkspaceRole"]) =>
+        call(() => client.PATCH("/v1/workspaces/{id}/members/{user}", { params: { path: { id, user } }, body: { role } })),
+      /** Removes a member, or leaves when `user` is the caller. */
+      removeMember: (id: string, user: string) => call(() => client.DELETE("/v1/workspaces/{id}/members/{user}", { params: { path: { id, user } } })),
+      invites: (id: string) => call(() => client.GET("/v1/workspaces/{id}/invites", { params: { path: { id } } })),
+      invite: (id: string, email: string, role: Schemas["WorkspaceRole"]) =>
+        call(() => client.POST("/v1/workspaces/{id}/invites", { params: { path: { id } }, body: { email, role } })),
+      revokeInvite: (id: string, invite: string) =>
+        call(() => client.DELETE("/v1/workspaces/{id}/invites/{invite}", { params: { path: { id, invite } } })),
+    },
+    invites: {
+      /** Joins the workspace an emailed link is for. */
+      accept: (token: string) => call(() => client.POST("/v1/invites/accept", { body: { token } })),
+    },
     recordings: {
       list: (query: { cursor?: string; limit?: number; source?: string } = {}) => call(() => client.GET("/v1/recordings", { params: { query } })),
       get: (id: string) => call(() => client.GET("/v1/recordings/{id}", { params: { path: { id } } })),
