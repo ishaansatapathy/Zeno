@@ -5,10 +5,11 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::auth::extractor::{ApiJson, AuthUser, Client};
-use crate::error::ApiError;
+use crate::error::{ApiError, ErrorBody};
 use crate::playback::service::{self, HEARTBEAT_SECS};
 use crate::ratelimit::{self, policies};
 use crate::state::AppState;
@@ -23,25 +24,30 @@ pub fn router() -> Router<AppState> {
         .route("/:session/:file", get(media))
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct WatermarkResponse {
+    /// Draw this over the video, moving it around, for the whole viewing.
     pub text: String,
+    /// Short code for this viewing, also in the text. Quote it to support.
     pub session_code: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PlaybackResponse {
     pub session_id: Uuid,
     /// Relative to the API's origin; hand it to the HLS player as is.
     pub playlist_url: String,
+    /// When the viewing runs out; after that the keys stop.
     pub expires_at: DateTime<Utc>,
+    /// Send `POST /v1/play/{session}/heartbeat` this often while it plays.
     pub heartbeat_interval_seconds: u64,
+    /// Where the viewer left off, to start from.
     pub resume_from_seconds: i32,
     /// Draw this over the video, moving it around, for the whole session.
     pub watermark: WatermarkResponse,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct PlaybackEnvelope {
     pub playback: PlaybackResponse,
 }
@@ -68,7 +74,28 @@ fn started_response(started: service::Started) -> (StatusCode, Json<PlaybackEnve
     )
 }
 
-/// `POST /v1/videos/:id/play` — the owner, an admin, or someone in a workspace that holds a recording of it.
+/// Starts a viewing of a video: for its owner, an admin, or anyone in a workspace that holds a recording
+/// made of it.
+///
+/// Gives back the playlist address and what the player needs to keep the viewing alive. A student who is
+/// enrolled in a course plays through the lesson instead, never through a video's own id. An account may
+/// watch on a few screens at once; starting one more is `409 stream_limit`.
+#[utoipa::path(
+    post,
+    path = "/v1/videos/{id}/play",
+    operation_id = "videos_play",
+    tag = "playback",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The video.")),
+    responses(
+        (status = 201, description = "A viewing started.", body = PlaybackEnvelope),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`playback_denied`: not yours, and not in a workspace that holds it; or `forbidden_origin`.", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 409, description = "`not_ready` (still being processed) or `stream_limit` (already watching on as many screens as an account may).", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
 pub async fn start_video(
     State(state): State<AppState>,
     user: AuthUser,
@@ -177,13 +204,34 @@ fn session_id(raw: &str) -> Result<Uuid, ApiError> {
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct HeartbeatRequest {
+pub struct HeartbeatRequest {
+    /// Where the player is now, in whole seconds. Kept for resuming; never past the end of the video.
     position_seconds: Option<u32>,
 }
 
-async fn heartbeat(
+/// Says the viewing is still going, and where it is. Send it every `heartbeat_interval_seconds`.
+///
+/// This is also where a viewing finds out it is over: the answer is `409 session_ended` when it was closed
+/// (the access it rested on has gone, it was started on another screen, or it ran out), and the body says why.
+#[utoipa::path(
+    post,
+    path = "/v1/play/{session}/heartbeat",
+    operation_id = "play_heartbeat",
+    tag = "playback",
+    security(("session" = [])),
+    params(("session" = Uuid, Path, description = "The viewing, from `session_id`.")),
+    request_body = HeartbeatRequest,
+    responses(
+        (status = 204, description = "Noted. It is still going."),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 404, description = "`not_found`: not your viewing, or none.", body = ErrorBody),
+        (status = 409, description = "`session_ended`: it is over, and the message says why. Start another to watch more.", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn heartbeat(
     State(state): State<AppState>,
     user: AuthUser,
     Path(session): Path<String>,
@@ -194,7 +242,22 @@ async fn heartbeat(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn stop(
+/// Ends the viewing. Safe to call on one that has already ended.
+#[utoipa::path(
+    delete,
+    path = "/v1/play/{session}",
+    operation_id = "play_stop",
+    tag = "playback",
+    security(("session" = [])),
+    params(("session" = Uuid, Path, description = "The viewing.")),
+    responses(
+        (status = 204, description = "Ended."),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`forbidden_origin`", body = ErrorBody),
+        (status = 404, description = "`not_found`: not your viewing, or none.", body = ErrorBody),
+    )
+)]
+pub(crate) async fn stop(
     State(state): State<AppState>,
     user: AuthUser,
     Path(session): Path<String>,

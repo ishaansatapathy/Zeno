@@ -78,6 +78,9 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::workspaces::routes::team_recordings,
         crate::workspaces::routes::add_rec,
         crate::workspaces::routes::take_out,
+        crate::playback::routes::start_video,
+        crate::playback::routes::heartbeat,
+        crate::playback::routes::stop,
     ),
     components(schemas(
         crate::auth::dto::RegisterRequest,
@@ -141,6 +144,10 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::workspaces::dto::WorkspaceListEnvelope,
         crate::workspaces::dto::TeamRecordingResponse,
         crate::workspaces::dto::TeamRecordingListEnvelope,
+        crate::playback::routes::PlaybackEnvelope,
+        crate::playback::routes::PlaybackResponse,
+        crate::playback::routes::WatermarkResponse,
+        crate::playback::routes::HeartbeatRequest,
         crate::workspaces::dto::WorkspaceDetailEnvelope,
         crate::workspaces::dto::InviteEnvelope,
         crate::workspaces::dto::InviteListEnvelope,
@@ -149,6 +156,7 @@ use crate::auth::cookies::ACCESS_COOKIE;
     tags(
         (name = "auth", description = "Accounts and sessions."),
         (name = "account", description = "What a signed-in person can see about their own account."),
+        (name = "playback", description = "Watching a video you are allowed to see, signed in: starting a viewing, keeping it alive, ending it. (A share link starts its own, under /v1/s.)"),
         (name = "workspaces", description = "Teams: who is in one, what each may do, and the invitations that bring people in."),
         (name = "recordings", description = "A person's library, and the links that share its recordings."),
         (name = "videos", description = "Uploading video. A recording is uploaded while it is made: parts go straight to storage, never through the API."),

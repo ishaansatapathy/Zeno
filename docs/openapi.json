@@ -1453,6 +1453,229 @@
         ]
       }
     },
+    "/v1/play/{session}": {
+      "delete": {
+        "tags": [
+          "playback"
+        ],
+        "summary": "Ends the viewing. Safe to call on one that has already ended.",
+        "operationId": "play_stop",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "path",
+            "description": "The viewing.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Ended."
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden_origin`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not your viewing, or none.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/play/{session}/heartbeat": {
+      "post": {
+        "tags": [
+          "playback"
+        ],
+        "summary": "Says the viewing is still going, and where it is. Send it every `heartbeat_interval_seconds`.",
+        "description": "This is also where a viewing finds out it is over: the answer is `409 session_ended` when it was closed\n(the access it rested on has gone, it was started on another screen, or it ran out), and the body says why.",
+        "operationId": "play_heartbeat",
+        "parameters": [
+          {
+            "name": "session",
+            "in": "path",
+            "description": "The viewing, from `session_id`.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Noted. It is still going."
+          },
+          "400": {
+            "description": "`invalid_request`: the body is not valid JSON for this route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden_origin`: the request came from a site that is not the web app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`: not your viewing, or none.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`session_ended`: it is over, and the message says why. Start another to watch more.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "`payload_too_large`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "`unsupported_media_type`: send `Content-Type: application/json`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "`invalid_request`: valid JSON, but not the shape this route takes (or an unknown field).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/v1/recordings": {
       "get": {
         "tags": [
@@ -3484,6 +3707,115 @@
           },
           "422": {
             "description": "`validation_failed` (see `fields`: the number or the size) or `invalid_request`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/videos/{id}/play": {
+      "post": {
+        "tags": [
+          "playback"
+        ],
+        "summary": "Starts a viewing of a video: for its owner, an admin, or anyone in a workspace that holds a recording\nmade of it.",
+        "description": "Gives back the playlist address and what the player needs to keep the viewing alive. A student who is\nenrolled in a course plays through the lesson instead, never through a video's own id. An account may\nwatch on a few screens at once; starting one more is `409 stream_limit`.",
+        "operationId": "videos_play",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The video.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "A viewing started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`playback_denied`: not yours, and not in a workspace that holds it; or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`not_ready` (still being processed) or `stream_limit` (already watching on as many screens as an account may).",
             "content": {
               "application/json": {
                 "schema": {
@@ -5615,6 +5947,21 @@
           }
         }
       },
+      "HeartbeatRequest": {
+        "type": "object",
+        "properties": {
+          "position_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Where the player is now, in whole seconds. Kept for resuming; never past the end of the video.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "InviteEnvelope": {
         "type": "object",
         "required": [
@@ -5906,6 +6253,58 @@
           }
         },
         "additionalProperties": false
+      },
+      "PlaybackEnvelope": {
+        "type": "object",
+        "required": [
+          "playback"
+        ],
+        "properties": {
+          "playback": {
+            "$ref": "#/components/schemas/PlaybackResponse"
+          }
+        }
+      },
+      "PlaybackResponse": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "playlist_url",
+          "expires_at",
+          "heartbeat_interval_seconds",
+          "resume_from_seconds",
+          "watermark"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the viewing runs out; after that the keys stop."
+          },
+          "heartbeat_interval_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Send `POST /v1/play/{session}/heartbeat` this often while it plays.",
+            "minimum": 0
+          },
+          "playlist_url": {
+            "type": "string",
+            "description": "Relative to the API's origin; hand it to the HLS player as is."
+          },
+          "resume_from_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Where the viewer left off, to start from."
+          },
+          "session_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "watermark": {
+            "$ref": "#/components/schemas/WatermarkResponse",
+            "description": "Draw this over the video, moving it around, for the whole session."
+          }
+        }
       },
       "RecordingEnvelope": {
         "type": "object",
@@ -6612,6 +7011,23 @@
           }
         }
       },
+      "WatermarkResponse": {
+        "type": "object",
+        "required": [
+          "text",
+          "session_code"
+        ],
+        "properties": {
+          "session_code": {
+            "type": "string",
+            "description": "Short code for this viewing, also in the text. Quote it to support."
+          },
+          "text": {
+            "type": "string",
+            "description": "Draw this over the video, moving it around, for the whole viewing."
+          }
+        }
+      },
       "WorkspaceDetailEnvelope": {
         "type": "object",
         "required": [
@@ -6715,6 +7131,10 @@
     {
       "name": "account",
       "description": "What a signed-in person can see about their own account."
+    },
+    {
+      "name": "playback",
+      "description": "Watching a video you are allowed to see, signed in: starting a viewing, keeping it alive, ending it. (A share link starts its own, under /v1/s.)"
     },
     {
       "name": "workspaces",
