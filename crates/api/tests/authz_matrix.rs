@@ -145,6 +145,9 @@ enum Class {
     /// else is told it is not there. (There is no workspace admin among these actors: the platform's own admin is
     /// not in the workspace, so is no more than a stranger to it.)
     WorkspaceManager,
+    /// Putting a recording in a workspace: only the person who made it (the owner here, who is in the workspace);
+    /// the student, who is in it too, is told there is no such recording, as is everyone else.
+    WorkspaceMaker,
     /// Authorised by the playback token alone (players send no cookies).
     TokenValid,
     /// No token, or one that does not belong to the session.
@@ -201,6 +204,9 @@ fn expect(class: Class, actor: Actor) -> Out {
         (Class::WorkspaceManager, Owner) => Out::Allowed,
         (Class::WorkspaceManager, Student) => Out::Forbidden,
         (Class::WorkspaceManager, _) => Out::Hidden,
+        (Class::WorkspaceMaker, Anonymous) => Out::Unauthorized,
+        (Class::WorkspaceMaker, Owner) => Out::Allowed,
+        (Class::WorkspaceMaker, _) => Out::Hidden,
         (Class::TokenValid, _) => Out::TokenAccepted,
         (Class::TokenRefused, _) => Out::Forbidden,
     }
@@ -527,6 +533,12 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
         .execute(pool)
         .await
         .unwrap();
+    sqlx::query("update recordings set workspace_id = $1 where id = $2")
+        .bind(workspace)
+        .bind(recording)
+        .execute(pool)
+        .await
+        .unwrap();
     for (user, role) in [(actors.owner_id, "owner"), (actors.student_id, "member")] {
         sqlx::query("insert into workspace_members (workspace_id, user_id, role) values ($1, $2, $3::workspace_role)")
             .bind(workspace)
@@ -691,6 +703,9 @@ fn rows() -> Vec<Row> {
         row(get.clone(), "/v1/workspaces/{workspace}/invites", WorkspaceManager),
         row(post.clone(), "/v1/workspaces/{workspace}/invites", WorkspaceManager).json(|_, _| json!({"email": "new@matrix.in", "role": "member"})),
         row(delete.clone(), "/v1/workspaces/{workspace}/invites/{invite}", WorkspaceManager),
+        row(get.clone(), "/v1/workspaces/{workspace}/recordings", WorkspaceMember),
+        row(put.clone(), "/v1/workspaces/{workspace}/recordings/{recording}", WorkspaceMaker),
+        row(delete.clone(), "/v1/workspaces/{workspace}/recordings/{recording}", WorkspaceManager),
         row(post.clone(), "/v1/invites/accept", Signed).json(|_, _| json!({"token": "not-a-token"})),
         // Profile
         row(get.clone(), "/v1/me/profile", Creator),

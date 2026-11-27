@@ -1179,7 +1179,7 @@ db_test! {
 
         // Signed out: every route says so.
         for (method, path, _) in contract.operations("/v1/workspaces").into_iter().chain(contract.operations("/v1/invites")) {
-            let fill = [("id", nobody.to_string()), ("user", nobody.to_string()), ("invite", nobody.to_string())];
+            let fill = [("id", nobody.to_string()), ("user", nobody.to_string()), ("invite", nobody.to_string()), ("recording", nobody.to_string())];
             let (m, p, res) = send(&method, &path, None, &fill, body_of(&path, &method)).await;
             assert_eq!(res.status, StatusCode::UNAUTHORIZED, "{m} {p}: {:?}", res.body);
             contract.check(&m, &p, &res);
@@ -1383,8 +1383,123 @@ db_test! {
         }
 
         for prefix in ["/v1/workspaces", "/v1/invites"] {
-            let unseen = contract.unseen(prefix);
+            // The recordings routes have a test of their own.
+            let unseen: Vec<String> = contract.unseen(prefix).into_iter().filter(|key| !key.contains("/recordings")).collect();
             assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
         }
+    }
+}
+
+db_test! {
+    async fn the_team_recordings_api_keeps_its_promises(pool: PgPool) {
+        use axum::http::Method;
+        let app = app(pool.clone());
+        let contract = Contract::new();
+        let (recs, one) = ("/v1/workspaces/{id}/recordings", "/v1/workspaces/{id}/recordings/{recording}");
+        let owner = signup_creator(&app, "owner@example.com").await;
+        let pupil = signup_verified_as(&app, "pupil@example.com", "student").await;
+        let stranger = signup_verified_as(&app, "stranger@example.com", "student").await;
+        let user = |email: &'static str| {
+            let pool = pool.clone();
+            async move { sqlx::query_scalar::<_, uuid::Uuid>("select id from users where email = $1").bind(email).fetch_one(&pool).await.unwrap() }
+        };
+        let (owner_id, pupil_id) = (user("owner@example.com").await, user("pupil@example.com").await);
+
+        let ws = uuid::Uuid::new_v4();
+        sqlx::query("insert into workspaces (id, name) values ($1, 'Contract team')").bind(ws).execute(&pool).await.unwrap();
+        for (who, role) in [(owner_id, "owner"), (pupil_id, "member")] {
+            sqlx::query("insert into workspace_members (workspace_id, user_id, role) values ($1, $2, $3::workspace_role)")
+                .bind(ws).bind(who).bind(role).execute(&pool).await.unwrap();
+        }
+        let made = app.post("/v1/recordings").jar(&owner).json(json!({"source": "upload", "title": "Lesson 1"})).send().await;
+        assert_eq!(made.status, StatusCode::CREATED, "{:?}", made.body);
+        let rec = made.body["recording"]["id"].as_str().unwrap().to_owned();
+        let nobody = uuid::Uuid::new_v4().to_string();
+
+        let call = |method: &str, template: &str, jar: Option<&Jar>, recording: &str| {
+            let uri = template.replace("{id}", &ws.to_string()).replace("{recording}", recording);
+            let mut req = app.req(method.to_uppercase().parse::<Method>().unwrap(), &uri);
+            if let Some(jar) = jar {
+                req = req.jar(jar);
+            }
+            req.send()
+        };
+
+        // Signed out: every route says so.
+        for (method, path, _) in contract.operations(recs) {
+            let res = call(&method, &path, None, &rec).await;
+            assert_eq!(res.status, StatusCode::UNAUTHORIZED, "{method} {path}: {:?}", res.body);
+            contract.check(&method, &path, &res);
+        }
+
+        // Putting one in: not yours, not there, not a workspace of yours, and then yours.
+        let not_yours = call("put", one, Some(&pupil), &rec).await;
+        assert_eq!(not_yours.status, StatusCode::NOT_FOUND, "{:?}", not_yours.body);
+        contract.check("put", one, &not_yours);
+        let not_there = call("put", one, Some(&owner), &nobody).await;
+        assert_eq!(not_there.status, StatusCode::NOT_FOUND, "{:?}", not_there.body);
+        contract.check("put", one, &not_there);
+        let not_theirs = call("put", one, Some(&stranger), &rec).await;
+        assert_eq!(not_theirs.status, StatusCode::NOT_FOUND, "{:?}", not_theirs.body);
+        contract.check("put", one, &not_theirs);
+        let put = call("put", one, Some(&owner), &rec).await;
+        assert_eq!(put.status, StatusCode::NO_CONTENT, "{:?}", put.body);
+        contract.check("put", one, &put);
+
+        // Reading the list: a member sees it, a stranger is told there is no such workspace, a bad cursor is refused.
+        let listed = call("get", recs, Some(&pupil), &rec).await;
+        assert_eq!(listed.status, StatusCode::OK, "{:?}", listed.body);
+        assert_eq!(listed.body["recordings"][0]["title"], "Lesson 1");
+        assert_eq!(listed.body["recordings"][0]["mine"], false);
+        contract.check("get", recs, &listed);
+        let hidden = call("get", recs, Some(&stranger), &rec).await;
+        assert_eq!(hidden.status, StatusCode::NOT_FOUND);
+        contract.check("get", recs, &hidden);
+        let bad_cursor = app.get(&format!("/v1/workspaces/{ws}/recordings?cursor=!!")).jar(&owner).send().await;
+        assert_eq!(bad_cursor.status, StatusCode::BAD_REQUEST, "{:?}", bad_cursor.body);
+        contract.check("get", recs, &bad_cursor);
+
+        // Taking it out: a member may not take out somebody else's, the owner may, and a second time it is not there.
+        let may_not = call("delete", one, Some(&pupil), &rec).await;
+        assert_eq!(may_not.status, StatusCode::FORBIDDEN, "{:?}", may_not.body);
+        contract.check("delete", one, &may_not);
+        let out_of_sight = call("delete", one, Some(&stranger), &rec).await;
+        assert_eq!(out_of_sight.status, StatusCode::NOT_FOUND);
+        contract.check("delete", one, &out_of_sight);
+        let out = call("delete", one, Some(&owner), &rec).await;
+        assert_eq!(out.status, StatusCode::NO_CONTENT, "{:?}", out.body);
+        contract.check("delete", one, &out);
+        let again = call("delete", one, Some(&owner), &rec).await;
+        assert_eq!(again.status, StatusCode::NOT_FOUND, "{:?}", again.body);
+        contract.check("delete", one, &again);
+
+        // What can go wrong on any route.
+        contract.provoke_common_errors(&app, recs, Some(&owner), &[("id", &ws.to_string()), ("recording", &rec)]).await;
+
+        // The budgets run out: writes a few a minute, reads more.
+        let mut limited = None;
+        for _ in 0..40 {
+            let res = call("put", one, Some(&owner), &rec).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("put", one, &limited.expect("changing runs out"));
+        let spent = call("delete", one, Some(&owner), &rec).await;
+        assert_eq!(spent.status, StatusCode::TOO_MANY_REQUESTS, "{:?}", spent.body);
+        contract.check("delete", one, &spent);
+        let mut limited = None;
+        for _ in 0..130 {
+            let res = call("get", recs, Some(&owner), &rec).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("get", recs, &limited.expect("reading runs out"));
+
+        let unseen = contract.unseen(recs);
+        assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }
