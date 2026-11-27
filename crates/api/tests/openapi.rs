@@ -87,6 +87,10 @@ const ROUTERS: &[(&str, &[(&str, &str)])] = &[
     ),
     ("crates/api/src/quota/routes.rs", &[("me_router", "/v1/me")]),
     (
+        "crates/api/src/playback/routes.rs",
+        &[("router", "/v1/play")],
+    ),
+    (
         "crates/api/src/workspaces/routes.rs",
         &[
             ("router", "/v1/workspaces"),
@@ -105,7 +109,9 @@ const NOT_DESCRIBED_YET: &[&str] = &[
     "get /v1/videos/{id}",
     "delete /v1/videos/{id}",
     "post /v1/videos/{id}/abort",
-    "post /v1/videos/{id}/play",
+    // Playlists, authorised by the token in the address alone; read by players, never called by a screen.
+    "get /v1/play/{session}/master.m3u8",
+    "get /v1/play/{session}/{file}",
 ];
 
 /// The routes the routers declare, read from their source: `.route("/:id/links", post(create))`
@@ -800,7 +806,8 @@ db_test! {
         let started = json!({"filename": "Zeno.webm", "content_type": "video/webm", "part_size_bytes": 5 * MIB});
 
         // Signed out, and signed in without the right to upload: every route says so.
-        for (method, path, _) in contract.operations("/v1/videos") {
+        // (Watching a video has its own test.)
+        for (method, path, _) in contract.operations("/v1/videos").into_iter().filter(|(_, path, _)| !path.ends_with("/play")) {
             let uri = path.replace("{id}", &nobody.to_string());
             for (jar, status, code) in [(None, 401, "unauthenticated"), (Some(&student), 403, "forbidden")] {
                 let mut req = app.req(method.to_uppercase().parse().unwrap(), &uri);
@@ -950,7 +957,7 @@ db_test! {
             .provoke_common_errors(&app, "/v1/videos", Some(&owner), &[("id", &nobody.to_string())])
             .await;
 
-        let unseen = contract.unseen("/v1/videos");
+        let unseen: Vec<String> = contract.unseen("/v1/videos").into_iter().filter(|route| !route.contains("/play")).collect();
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
     }
 }
@@ -1501,5 +1508,119 @@ db_test! {
 
         let unseen = contract.unseen(recs);
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+    }
+}
+
+db_test! {
+    async fn the_playback_api_keeps_its_promises(pool: PgPool) {
+        use axum::http::Method;
+        use common::media::ready_video;
+        let app = app(pool.clone());
+        let contract = Contract::new();
+        let (start, beat, end) = ("/v1/videos/{id}/play", "/v1/play/{session}/heartbeat", "/v1/play/{session}");
+        let owner = signup_creator(&app, "owner@example.com").await;
+        let stranger = signup_verified_as(&app, "stranger@example.com", "student").await;
+        let nobody = uuid::Uuid::new_v4().to_string();
+        let video = ready_video(&app, &owner, &pool).await.to_string();
+        let call = |method: &str, path: &str, fill: &[(&str, &str)], jar: Option<&Jar>, body: Option<Value>| {
+            let uri = fill.iter().fold(path.to_owned(), |uri, (name, value)| uri.replace(&format!("{{{name}}}"), value));
+            let mut req = app.req(method.to_uppercase().parse::<Method>().unwrap(), &uri);
+            if let Some(jar) = jar {
+                req = req.jar(jar);
+            }
+            if let Some(body) = body {
+                req = req.json(body);
+            }
+            req.send()
+        };
+
+        // Signed out: every route says so.
+        for (method, path, has_body) in contract.operations("/v1/videos/{id}/play").into_iter().chain(contract.operations("/v1/play")) {
+            let res = call(&method, &path, &[("id", &video), ("session", &nobody)], None, has_body.then(|| json!({}))).await;
+            assert_eq!(res.status, StatusCode::UNAUTHORIZED, "{method} {path}: {:?}", res.body);
+            contract.check(&method, &path, &res);
+        }
+
+        // Starting: the owner may, somebody else may not, and what is not there is not there.
+        let started = call("post", start, &[("id", &video)], Some(&owner), None).await;
+        assert_eq!(started.status, StatusCode::CREATED, "{:?}", started.body);
+        contract.check("post", start, &started);
+        let session = started.body["playback"]["session_id"].as_str().unwrap().to_owned();
+        let refused = call("post", start, &[("id", &video)], Some(&stranger), None).await;
+        assert_eq!((refused.status, refused.code()), (StatusCode::FORBIDDEN, "playback_denied"));
+        contract.check("post", start, &refused);
+        let missing = call("post", start, &[("id", &nobody)], Some(&owner), None).await;
+        assert_eq!(missing.status, StatusCode::NOT_FOUND);
+        contract.check("post", start, &missing);
+        // A video that is still being uploaded cannot be watched yet.
+        let unfinished = app.post("/v1/videos/streaming").jar(&owner).json(json!({"filename": "Zeno.webm", "content_type": "video/webm", "part_size_bytes": 5 * 1024 * 1024})).send().await;
+        assert_eq!(unfinished.status, StatusCode::CREATED, "{:?}", unfinished.body);
+        let not_ready = call("post", start, &[("id", unfinished.body["video"]["id"].as_str().unwrap())], Some(&owner), None).await;
+        assert_eq!((not_ready.status, not_ready.code()), (StatusCode::CONFLICT, "not_ready"));
+        contract.check("post", start, &not_ready);
+
+        // Keeping it alive: yours, not somebody else's, and not one that is not there.
+        let alive = call("post", beat, &[("session", &session)], Some(&owner), Some(json!({"position_seconds": 12}))).await;
+        assert_eq!(alive.status, StatusCode::NO_CONTENT, "{:?}", alive.body);
+        contract.check("post", beat, &alive);
+        for (jar, who) in [(&stranger, "another account"), (&owner, "no such session")] {
+            let id = if who == "no such session" { nobody.as_str() } else { session.as_str() };
+            let res = call("post", beat, &[("session", id)], Some(jar), Some(json!({}))).await;
+            assert_eq!(res.status, StatusCode::NOT_FOUND, "{who}: {:?}", res.body);
+            contract.check("post", beat, &res);
+        }
+
+        // Stopping it, and then finding out it is over.
+        let other_stop = call("delete", end, &[("session", &session)], Some(&stranger), None).await;
+        assert_eq!(other_stop.status, StatusCode::NOT_FOUND);
+        contract.check("delete", end, &other_stop);
+        let stopped = call("delete", end, &[("session", &session)], Some(&owner), None).await;
+        assert_eq!(stopped.status, StatusCode::NO_CONTENT, "{:?}", stopped.body);
+        contract.check("delete", end, &stopped);
+        let over = call("post", beat, &[("session", &session)], Some(&owner), Some(json!({}))).await;
+        assert_eq!((over.status, over.code()), (StatusCode::CONFLICT, "session_ended"));
+        contract.check("post", beat, &over);
+
+        // What can go wrong on any route.
+        contract.provoke_common_errors(&app, "/v1/videos/{id}/play", Some(&owner), &[("id", &video)]).await;
+        contract.provoke_common_errors(&app, "/v1/play", Some(&owner), &[("session", &session)]).await;
+
+        // An account watches on so many screens at once, and no more.
+        let mut limit = None;
+        for _ in 0..8 {
+            let res = call("post", start, &[("id", &video)], Some(&owner), None).await;
+            if res.status == StatusCode::CONFLICT {
+                limit = Some(res);
+                break;
+            }
+        }
+        let limit = limit.expect("an account watches on a few screens only");
+        assert_eq!(limit.code(), "stream_limit");
+        contract.check("post", start, &limit);
+
+        // The budgets run out: starting a few a minute, heartbeats more.
+        let mut slow = None;
+        for _ in 0..30 {
+            let res = call("post", start, &[("id", &video)], Some(&owner), None).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                slow = Some(res);
+                break;
+            }
+        }
+        contract.check("post", start, &slow.expect("starting runs out"));
+        let mut slow = None;
+        for _ in 0..40 {
+            let res = call("post", beat, &[("session", &nobody)], Some(&owner), Some(json!({}))).await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                slow = Some(res);
+                break;
+            }
+        }
+        contract.check("post", beat, &slow.expect("heartbeats run out"));
+
+        for prefix in ["/v1/videos/{id}/play", "/v1/play"] {
+            let unseen = contract.unseen(prefix);
+            assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+        }
     }
 }
