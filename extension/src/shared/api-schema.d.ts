@@ -266,6 +266,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/play/{session}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Ends the viewing. Safe to call on one that has already ended. */
+        delete: operations["play_stop"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/play/{session}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Says the viewing is still going, and where it is. Send it every `heartbeat_interval_seconds`.
+         * @description This is also where a viewing finds out it is over: the answer is `409 session_ended` when it was closed
+         *     (the access it rested on has gone, it was started on another screen, or it ran out), and the body says why.
+         */
+        post: operations["play_heartbeat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/recordings": {
         parameters: {
             query?: never;
@@ -477,6 +515,29 @@ export interface paths {
          *     just asks. Every part but the last is exactly the part size; the last is 1 up to the part size.
          */
         post: operations["videos_part"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/videos/{id}/play": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Starts a viewing of a video: for its owner, an admin, or anyone in a workspace that holds a recording
+         *     made of it.
+         * @description Gives back the playlist address and what the player needs to keep the viewing alive. A student who is
+         *     enrolled in a course plays through the lesson instead, never through a video's own id. An account may
+         *     watch on a few screens at once; starting one more is `409 stream_limit`.
+         */
+        post: operations["videos_play"];
         delete?: never;
         options?: never;
         head?: never;
@@ -879,6 +940,13 @@ export interface components {
             field: string;
             message: string;
         };
+        HeartbeatRequest: {
+            /**
+             * Format: int32
+             * @description Where the player is now, in whole seconds. Kept for resuming; never past the end of the video.
+             */
+            position_seconds?: number | null;
+        };
         InviteEnvelope: {
             invite: components["schemas"]["InviteResponse"];
         };
@@ -971,6 +1039,32 @@ export interface components {
             /** Format: int64 */
             size: number;
             url: string;
+        };
+        PlaybackEnvelope: {
+            playback: components["schemas"]["PlaybackResponse"];
+        };
+        PlaybackResponse: {
+            /**
+             * Format: date-time
+             * @description When the viewing runs out; after that the keys stop.
+             */
+            expires_at: string;
+            /**
+             * Format: int64
+             * @description Send `POST /v1/play/{session}/heartbeat` this often while it plays.
+             */
+            heartbeat_interval_seconds: number;
+            /** @description Relative to the API's origin; hand it to the HLS player as is. */
+            playlist_url: string;
+            /**
+             * Format: int32
+             * @description Where the viewer left off, to start from.
+             */
+            resume_from_seconds: number;
+            /** Format: uuid */
+            session_id: string;
+            /** @description Draw this over the video, moving it around, for the whole session. */
+            watermark: components["schemas"]["WatermarkResponse"];
         };
         PlayRequest: {
             /**
@@ -1228,6 +1322,12 @@ export interface components {
             title: string;
             /** Format: int32 */
             width?: number | null;
+        };
+        WatermarkResponse: {
+            /** @description Short code for this viewing, also in the text. Quote it to support. */
+            session_code: string;
+            /** @description Draw this over the video, moving it around, for the whole viewing. */
+            text: string;
         };
         WorkspaceDetailEnvelope: {
             /** @description In the order they joined. */
@@ -2390,6 +2490,180 @@ export interface operations {
             };
             /** @description `unauthenticated` */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    play_stop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The viewing. */
+                session: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ended. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden_origin` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found`: not your viewing, or none. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    play_heartbeat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The viewing, from `session_id`. */
+                session: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HeartbeatRequest"];
+            };
+        };
+        responses: {
+            /** @description Noted. It is still going. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_request`: the body is not valid JSON for this route. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden_origin`: the request came from a site that is not the web app. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found`: not your viewing, or none. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `session_ended`: it is over, and the message says why. Start another to watch more. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `payload_too_large` */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unsupported_media_type`: send `Content-Type: application/json`. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `invalid_request`: valid JSON, but not the shape this route takes (or an unknown field). */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -3818,6 +4092,85 @@ export interface operations {
             };
             /** @description `validation_failed` (see `fields`: the number or the size) or `invalid_request`. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    videos_play: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The video. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A viewing started. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaybackEnvelope"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `playback_denied`: not yours, and not in a workspace that holds it; or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_ready` (still being processed) or `stream_limit` (already watching on as many screens as an account may). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

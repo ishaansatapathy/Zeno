@@ -278,6 +278,119 @@ test("a creator puts a recording in, the team sees it, and only those who may ta
   }
 });
 
+/** What the API says about a team's recordings, with one that is ready to watch. */
+const READY_ROW = (title: string) => ({
+  id: "44444444-4444-4444-8444-444444444444",
+  title,
+  source: "upload",
+  made_by: "Asha Rao",
+  mine: true,
+  status: "ready",
+  video_id: "55555555-5555-4555-8555-555555555555",
+  duration_seconds: 125,
+  created_at: new Date().toISOString(),
+});
+
+const PLAYBACK = (session: string, playlist: string, seconds = 1) => ({
+  playback: {
+    session_id: session,
+    playlist_url: `/v1/play/${playlist}/master.m3u8?t=abc`,
+    expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    heartbeat_interval_seconds: seconds,
+    resume_from_seconds: 0,
+    watermark: { text: "Asha Rao · TEAM1234", session_code: "TEAM1234" },
+  },
+});
+
+/** The page's own team list, played back with a ready recording in it. */
+async function withReadyRecording(page: Page, workspace: string, title: string) {
+  await page.route(`**/v1/workspaces/${workspace}/recordings?*`, (route) =>
+    route.fulfill({ json: { recordings: [READY_ROW(title)], next_cursor: null } }),
+  );
+}
+
+test("a team recording plays, says it is still going, stops when the server ends it, and a refusal is a sentence", async ({ page, playwright }) => {
+  test.setTimeout(90_000);
+  const { id } = await workspaceOf(page, playwright);
+  const title = unique("Week 3");
+  const session = "66666666-6666-4666-8666-666666666666";
+  await withReadyRecording(page, id, title);
+
+  const beats: unknown[] = [];
+  let over = false;
+  let stopped = 0;
+  await page.route("**/v1/videos/55555555-5555-4555-8555-555555555555/play", (route) => route.fulfill({ status: 201, json: PLAYBACK(session, "team") }));
+  await page.route(`**/v1/play/${session}/heartbeat`, (route) => {
+    beats.push(route.request().postDataJSON());
+    if (!over) return route.fulfill({ status: 204 });
+    return route.fulfill({ status: 409, json: { error: { code: "session_ended", message: "Your access to this was taken away." } } });
+  });
+  await page.route(`**/v1/play/${session}`, (route) => {
+    if (route.request().method() === "DELETE") {
+      stopped += 1;
+      return route.fulfill({ status: 204 });
+    }
+    return route.continue();
+  });
+  // The playlist is given, the picture never arrives: the viewing stays on screen long enough to look at.
+  await page.route("**/v1/play/team/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("master.m3u8")) {
+      return route.fulfill({ contentType: "application/vnd.apple.mpegurl", body: "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=300000,RESOLUTION=256x144\n144p.m3u8\n" });
+    }
+    if (path.endsWith("144p.m3u8")) {
+      return route.fulfill({ contentType: "application/vnd.apple.mpegurl", body: "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:6,\nseg0.ts\n#EXT-X-ENDLIST\n" });
+    }
+    return new Promise(() => undefined);
+  });
+
+  await page.goto(`/team/${id}`);
+  await page.getByRole("button", { name: `Watch ${title}` }).click();
+  await expect(page.getByLabel(title, { exact: true })).toBeVisible();
+  await expect(page.getByText("Asha Rao · TEAM1234")).toBeVisible();
+
+  // The player is as accessible as the page around it, at desktop and phone size, and does not widen the page.
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await page.addScriptTag({ path: require.resolve("axe-core/axe.min.js") });
+    const result = await page.evaluate(() =>
+      // @ts-expect-error axe is added to the page by the script above
+      window.axe.run(document, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"] } }),
+    );
+    expect(result.violations.map((v: { id: string }) => v.id), `the player at ${viewport.width}px`).toEqual([]);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow, `the player at ${viewport.width}px overflows`).toBeLessThanOrEqual(0);
+  }
+
+  // It says it is still going, and where it is.
+  await expect.poll(() => beats.length, { timeout: 15_000 }).toBeGreaterThan(0);
+  expect(beats[0]).toEqual({ position_seconds: 0 });
+
+  // The server says it is over (the access it rested on has gone): the viewing stops, with the reason, and offers again.
+  over = true;
+  await expect(alertOf(page)).toContainText("Your access to this was taken away.", { timeout: 15_000 });
+  await expect(page.getByLabel(title, { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Watch again" })).toBeVisible();
+
+  // Closing it ends the viewing it had.
+  over = false;
+  await page.getByRole("button", { name: "Watch again" }).click();
+  await expect(page.getByLabel(title, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect.poll(() => stopped).toBeGreaterThan(0);
+  await expect(page.getByLabel(title, { exact: true })).toHaveCount(0);
+
+  // A viewing that is refused is a sentence, not a dead end. (Same workspace: an account may start ten an hour.)
+  await page.route("**/v1/videos/55555555-5555-4555-8555-555555555555/play", (route) =>
+    route.fulfill({ status: 409, json: { error: { code: "stream_limit", message: "You are already watching on 2 screens. Stop playback on one of them to watch here." } } }),
+  );
+  await page.getByRole("button", { name: `Watch ${title}` }).click();
+  await expect(alertOf(page)).toContainText("already watching on 2 screens");
+  await expect(page.getByRole("button", { name: "Watch again" })).toBeVisible();
+  await page.getByRole("button", { name: "Close" }).click();
+  await expect(alertOf(page)).toHaveCount(0);
+});
+
 test("the team screens pass axe at desktop and phone size", async ({ page, browser, playwright }) => {
   const { id } = await workspaceOf(page, playwright);
   const guestAddress = await guestEmail(playwright);

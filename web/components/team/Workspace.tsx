@@ -9,6 +9,7 @@ import { describeFailure } from "@/components/auth/messages";
 import { checkEmail, checkName } from "@/components/auth/validate";
 import { api, type ApiFailure, type Schemas } from "@/lib/api/client";
 import { clock, statusName } from "@/components/library/rows";
+import { Watch } from "@/components/team/Watch";
 import { ROLE_LABEL, canManage, canRemove, canTakeOut, inviteRoles, isOwner, type Role } from "@/lib/team";
 
 type Workspace = Schemas["WorkspaceResponse"];
@@ -390,6 +391,8 @@ function Recordings({ id, role }: { id: string; role: Role }) {
   const [alert, setAlert] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [pending, setPending] = useState(false);
+  // The recording being watched, if any: one at a time.
+  const [watching, setWatching] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const [team, mine] = await Promise.all([api.workspaces.recordings(id, { limit: PAGE }), api.recordings.list({ limit: 50 })]);
@@ -438,7 +441,7 @@ function Recordings({ id, role }: { id: string; role: Role }) {
     <Panel
       id="recordings"
       title={`Recordings${rows ? ` · ${rows.length}${next ? "+" : ""}` : ""}`}
-      intro="What people have put in this workspace. A recording stays its maker's: only they can edit or delete it, and taking it out here only stops sharing it."
+      intro="What people have put in this workspace, for anyone in it to watch. A recording stays its maker's: only they can edit or delete it, and taking it out here only stops sharing it."
     >
       {alert ? (
         <div className="mb-4">
@@ -467,6 +470,12 @@ function Recordings({ id, role }: { id: string; role: Role }) {
                   {row.duration_seconds ? ` · ${clock(row.duration_seconds)}` : ""} · {day(row.created_at)}
                 </p>
               </div>
+              <div className="flex flex-wrap items-center gap-3">
+                {row.status === "ready" && row.video_id ? (
+                  <button type="button" aria-label={`Watch ${row.title}`} aria-expanded={watching === row.id} className={quiet} onClick={() => setWatching(watching === row.id ? null : row.id)}>
+                    Watch
+                  </button>
+                ) : null}
               {canTakeOut(role, row.mine) ? (
                 <button
                   type="button"
@@ -477,6 +486,12 @@ function Recordings({ id, role }: { id: string; role: Role }) {
                 >
                   Take out
                 </button>
+              ) : null}
+              </div>
+              {watching === row.id && row.video_id ? (
+                <div className="w-full">
+                  <Watch video={row.video_id} title={row.title} onClose={() => setWatching(null)} />
+                </div>
               ) : null}
             </li>
           ))}

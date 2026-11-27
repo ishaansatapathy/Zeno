@@ -203,6 +203,14 @@ export function createApi(options: ClientOptions = {}) {
       setComments: (id: string, version: number, enabled: boolean) =>
         call(() => client.PATCH("/v1/recordings/{id}", { params: { path: { id } }, body: { version, comments_enabled: enabled } })),
     },
+    /** Watching a video you may see, signed in. (A share link starts its own viewing, under `share`.) */
+    playback: {
+      start: (video: string) => call(() => client.POST("/v1/videos/{id}/play", { params: { path: { id: video } } })),
+      /** Says it is still going; `position` is where the player is, in whole seconds. */
+      heartbeat: (session: string, position?: number) =>
+        call(() => client.POST("/v1/play/{session}/heartbeat", { params: { path: { session } }, body: position === undefined ? {} : { position_seconds: position } })),
+      stop: (session: string) => call(() => client.DELETE("/v1/play/{session}", { params: { path: { session } } })),
+    },
     /** What anyone holding a share link can do: no account, no cookie. */
     share: {
       resolve: (code: string) => call(() => client.GET("/v1/s/{code}", { params: { path: { code } } })),
