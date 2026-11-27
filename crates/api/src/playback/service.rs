@@ -263,8 +263,9 @@ pub async fn start_link(
     }))
 }
 
-/// Direct video playback is a creator/admin preview surface. Student entitlements are resolved
-/// only through the lesson route so raw video identifiers never become an access API.
+/// Direct video playback is for the video's owner, an admin, and the people in a workspace that holds a
+/// recording of it. Student entitlements are resolved only through the lesson route so raw video identifiers
+/// never become an access API.
 pub async fn start_video(
     state: &AppState,
     user: &AuthUser,
@@ -274,7 +275,10 @@ pub async fn start_video(
     let video = videos::find(&state.db, video_id)
         .await?
         .ok_or_else(not_found)?;
-    if video.owner_id != user.id && user.role != Role::Admin {
+    if video.owner_id != user.id
+        && user.role != Role::Admin
+        && !access::via_workspace(&state.db, user.id, video_id).await?
+    {
         return Err(denied());
     }
     start_with_video(state, user, video, None, ctx).await

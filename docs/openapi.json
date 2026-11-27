@@ -4772,6 +4772,328 @@
           }
         ]
       }
+    },
+    "/v1/workspaces/{id}/recordings": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "The recordings in the workspace, newest first, a page at a time.",
+        "description": "Anyone in it can see this list and watch what is in it. Somebody who is not in the workspace gets `404`.",
+        "operationId": "workspaces_recordings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The workspace.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "`next_cursor` from the previous page.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 50; default 20.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 50,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamRecordingListEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`invalid_cursor`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/workspaces/{id}/recordings/{recording}": {
+      "put": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "Puts one of your recordings in the workspace, so everyone in it can see and watch it.",
+        "description": "It stays yours: you edit it, share it and delete it. A recording is in one workspace at a time, so putting it\nin another moves it. Repeating the call changes nothing. A recording that is not yours, or is deleted, is\n`404`, as is a workspace you are not in.",
+        "operationId": "workspaces_add_recording",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The workspace.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "recording",
+            "in": "path",
+            "description": "One of your recordings.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "It is in the workspace."
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden_origin`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "Takes a recording out of the workspace. It stays in its maker's library.",
+        "description": "Its maker may, and so may the workspace's owners and admins; a member may not take out somebody else's.",
+        "operationId": "workspaces_take_out_recording",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The workspace.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "recording",
+            "in": "path",
+            "description": "A recording in it.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "It is out. Viewings of it by the workspace's people end at their next request."
+          },
+          "401": {
+            "description": "`unauthenticated`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: a member may not take out somebody else's, or `forbidden_origin`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`not_found`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "`too_many_requests`",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer",
+                  "format": "int64",
+                  "minimum": 0
+                },
+                "description": "Seconds until the budget is available again."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "`internal_error`: our fault; safe to retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -5708,6 +6030,14 @@
               "link",
               "public"
             ]
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The workspace it is shared with: everyone in it can see and watch it. Absent when it is only yours."
           }
         }
       },
@@ -5942,6 +6272,83 @@
             "type": "integer",
             "format": "int64",
             "description": "How many videos make up `used_bytes`."
+          }
+        }
+      },
+      "TeamRecordingListEnvelope": {
+        "type": "object",
+        "required": [
+          "recordings"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `cursor` for the next page; absent on the last."
+          },
+          "recordings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TeamRecordingResponse"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "TeamRecordingResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "source",
+          "made_by",
+          "mine",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "made_by": {
+            "type": "string",
+            "description": "Who made it, by name."
+          },
+          "mine": {
+            "type": "boolean",
+            "description": "Is it the person asking who made it. Those are theirs to take out, to edit and to delete."
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "Where it is in its life: `capturing`, `uploading`, `processing`, `ready` or `failed`."
+          },
+          "title": {
+            "type": "string"
+          },
+          "video_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "What to play, when it has a video: `POST /v1/videos/{video_id}/play` starts a viewing for anyone in the\nworkspace."
           }
         }
       },

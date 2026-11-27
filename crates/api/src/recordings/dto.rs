@@ -190,6 +190,8 @@ pub struct RecordingResponse {
     pub visibility: String,
     /// Whether people watching may leave comments and reactions.
     pub comments_enabled: bool,
+    /// The workspace it is shared with: everyone in it can see and watch it. Absent when it is only yours.
+    pub workspace_id: Option<Uuid>,
     /// Read from the video underneath; never stored.
     pub status: &'static str,
     pub video_id: Option<Uuid>,
@@ -212,6 +214,7 @@ impl From<RecordingRow> for RecordingResponse {
             source: row.source,
             visibility: row.visibility,
             comments_enabled: row.comments_enabled,
+            workspace_id: row.workspace_id,
             video_id: row.video_id,
             duration_seconds: row.duration_seconds,
             version: row.version,

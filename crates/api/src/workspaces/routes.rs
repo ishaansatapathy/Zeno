@@ -1,17 +1,19 @@
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use uuid::Uuid;
 
 use crate::auth::extractor::{ApiJson, AuthUser};
+use crate::cursor::TimeCursor;
 use crate::error::{ApiError, ErrorBody};
 use crate::ratelimit::{self, policies};
 use crate::state::AppState;
 use crate::workspaces::dto::{
     AcceptInviteRequest, ChangeRoleRequest, CreateInviteRequest, CreateWorkspaceRequest,
-    InviteEnvelope, InviteListEnvelope, InviteResponse, UpdateWorkspaceRequest,
-    WorkspaceDetailEnvelope, WorkspaceEnvelope, WorkspaceListEnvelope, WorkspaceResponse,
+    InviteEnvelope, InviteListEnvelope, InviteResponse, TeamRecordingListEnvelope,
+    TeamRecordingsQuery, UpdateWorkspaceRequest, WorkspaceDetailEnvelope, WorkspaceEnvelope,
+    WorkspaceListEnvelope, WorkspaceResponse,
 };
 use crate::workspaces::service;
 
@@ -23,6 +25,8 @@ pub fn router() -> Router<AppState> {
         .route("/:id/members/:user", patch(set_role).delete(drop_member))
         .route("/:id/invites", get(list_invites).post(invite))
         .route("/:id/invites/:invite", delete(revoke_invite))
+        .route("/:id/recordings", get(team_recordings))
+        .route("/:id/recordings/:recording", put(add_rec).delete(take_out))
 }
 
 /// Mounted at `/v1/invites`: the one thing a person does with an invitation they were sent.
@@ -392,4 +396,112 @@ pub(crate) async fn accept(
     Ok(one(
         service::accept(&state, &user, body.token.expose()).await?
     ))
+}
+
+/// The recordings in the workspace, newest first, a page at a time.
+///
+/// Anyone in it can see this list and watch what is in it. Somebody who is not in the workspace gets `404`.
+#[utoipa::path(
+    get,
+    path = "/v1/workspaces/{id}/recordings",
+    operation_id = "workspaces_recordings",
+    tag = "workspaces",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The workspace."), TeamRecordingsQuery),
+    responses(
+        (status = 200, description = "One page.", body = TeamRecordingListEnvelope),
+        (status = 400, description = "`invalid_cursor`", body = ErrorBody),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn team_recordings(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<String>,
+    Query(query): Query<TeamRecordingsQuery>,
+) -> Result<Json<TeamRecordingListEnvelope>, ApiError> {
+    reading(&state, &user).await?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(TimeCursor::decode)
+        .transpose()?;
+    let (recordings, next) =
+        service::recordings(&state, &user, parse(&id, "Workspace")?, cursor, query.limit).await?;
+    Ok(Json(TeamRecordingListEnvelope {
+        recordings,
+        next_cursor: next.map(TimeCursor::encode),
+    }))
+}
+
+/// Puts one of your recordings in the workspace, so everyone in it can see and watch it.
+///
+/// It stays yours: you edit it, share it and delete it. A recording is in one workspace at a time, so putting it
+/// in another moves it. Repeating the call changes nothing. A recording that is not yours, or is deleted, is
+/// `404`, as is a workspace you are not in.
+#[utoipa::path(
+    put,
+    path = "/v1/workspaces/{id}/recordings/{recording}",
+    operation_id = "workspaces_add_recording",
+    tag = "workspaces",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The workspace."), ("recording" = Uuid, Path, description = "One of your recordings.")),
+    responses(
+        (status = 204, description = "It is in the workspace."),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`forbidden_origin`", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn add_rec(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, rec)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    writing(&state, &user).await?;
+    service::add_recording(
+        &state,
+        &user,
+        parse(&id, "Workspace")?,
+        parse(&rec, "Recording")?,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Takes a recording out of the workspace. It stays in its maker's library.
+///
+/// Its maker may, and so may the workspace's owners and admins; a member may not take out somebody else's.
+#[utoipa::path(
+    delete,
+    path = "/v1/workspaces/{id}/recordings/{recording}",
+    operation_id = "workspaces_take_out_recording",
+    tag = "workspaces",
+    security(("session" = [])),
+    params(("id" = Uuid, Path, description = "The workspace."), ("recording" = Uuid, Path, description = "A recording in it.")),
+    responses(
+        (status = 204, description = "It is out. Viewings of it by the workspace's people end at their next request."),
+        (status = 401, description = "`unauthenticated`", body = ErrorBody),
+        (status = 403, description = "`forbidden`: a member may not take out somebody else's, or `forbidden_origin`.", body = ErrorBody),
+        (status = 404, description = "`not_found`", body = ErrorBody),
+        (status = 429, description = "`too_many_requests`", body = ErrorBody, headers(("Retry-After" = u64, description = "Seconds until the budget is available again."))),
+    )
+)]
+pub(crate) async fn take_out(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, rec)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    writing(&state, &user).await?;
+    service::take_out_recording(
+        &state,
+        &user,
+        parse(&id, "Workspace")?,
+        parse(&rec, "Recording")?,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

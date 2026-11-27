@@ -16,6 +16,8 @@ pub struct RecordingRow {
     pub visibility: String,
     /// Whether people watching may leave comments and reactions.
     pub comments_enabled: bool,
+    /// The team it is shared with, if any.
+    pub workspace_id: Option<Uuid>,
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -27,7 +29,7 @@ pub struct RecordingRow {
 
 /// One join on the video's primary key; no stored status to drift out of step with it.
 const SELECT: &str = "select r.id, r.owner_id, r.video_id, r.source, r.title, r.visibility, \
-    r.comments_enabled, r.version, r.created_at, r.updated_at, r.view_count, v.status as video_status, \
+    r.comments_enabled, r.workspace_id, r.version, r.created_at, r.updated_at, r.view_count, v.status as video_status, \
     v.duration_seconds \
     from recordings r left join videos v on v.id = r.video_id";
 

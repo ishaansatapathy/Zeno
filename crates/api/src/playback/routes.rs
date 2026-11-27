@@ -68,7 +68,7 @@ fn started_response(started: service::Started) -> (StatusCode, Json<PlaybackEnve
     )
 }
 
-/// `POST /v1/videos/:id/play` — owner/admin preview only.
+/// `POST /v1/videos/:id/play` — the owner, an admin, or someone in a workspace that holds a recording of it.
 pub async fn start_video(
     State(state): State<AppState>,
     user: AuthUser,

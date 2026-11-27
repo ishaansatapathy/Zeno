@@ -75,6 +75,9 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::workspaces::routes::list_invites,
         crate::workspaces::routes::revoke_invite,
         crate::workspaces::routes::accept,
+        crate::workspaces::routes::team_recordings,
+        crate::workspaces::routes::add_rec,
+        crate::workspaces::routes::take_out,
     ),
     components(schemas(
         crate::auth::dto::RegisterRequest,
@@ -136,6 +139,8 @@ use crate::auth::cookies::ACCESS_COOKIE;
         crate::workspaces::dto::InviteResponse,
         crate::workspaces::dto::WorkspaceEnvelope,
         crate::workspaces::dto::WorkspaceListEnvelope,
+        crate::workspaces::dto::TeamRecordingResponse,
+        crate::workspaces::dto::TeamRecordingListEnvelope,
         crate::workspaces::dto::WorkspaceDetailEnvelope,
         crate::workspaces::dto::InviteEnvelope,
         crate::workspaces::dto::InviteListEnvelope,

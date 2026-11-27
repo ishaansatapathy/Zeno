@@ -372,3 +372,114 @@ pub async fn claim_invite<'e>(db: impl PgExecutor<'e>, invite: Uuid) -> Result<b
     .rows_affected()
         == 1)
 }
+
+// ---- recordings ------------------------------------------------------------------------------------------
+
+/// A recording in the team's list: what people in the workspace need to see it and press play, and nothing of
+/// its maker's own controls (visibility, links, version, views).
+#[derive(Debug, sqlx::FromRow)]
+pub struct TeamRecordingRow {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+    pub owner_name: String,
+    pub title: String,
+    pub source: String,
+    pub video_id: Option<Uuid>,
+    pub video_status: Option<zeno_core::model::VideoStatus>,
+    pub duration_seconds: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Holds the workspace still against changes to who is in it, without making the people who put recordings in
+/// it wait for each other: a shared lock. Membership changes take the same row `for update`, so a recording
+/// cannot be put in by somebody who is being removed at that moment. `false`: it is gone.
+pub async fn lock_shared<'e>(
+    db: impl PgExecutor<'e>,
+    workspace: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let found: Option<i32> = sqlx::query_scalar(
+        "select 1 from workspaces where id = $1 and deleted_at is null for share",
+    )
+    .bind(workspace)
+    .fetch_optional(db)
+    .await?;
+    Ok(found.is_some())
+}
+
+/// The team's recordings, newest first, a page at a time.
+pub async fn recordings<'e>(
+    db: impl PgExecutor<'e>,
+    workspace: Uuid,
+    cursor: Option<crate::cursor::TimeCursor>,
+    limit: i64,
+) -> Result<Vec<TeamRecordingRow>, sqlx::Error> {
+    sqlx::query_as(
+        "select r.id, r.owner_id, u.name as owner_name, r.title, r.source, r.video_id, \
+                v.status as video_status, v.duration_seconds, r.created_at \
+         from recordings r \
+         join users u on u.id = r.owner_id \
+         left join videos v on v.id = r.video_id \
+         where r.workspace_id = $1 and r.deleted_at is null \
+           and ($2::timestamptz is null or (r.created_at, r.id) < ($2, $3)) \
+         order by r.created_at desc, r.id desc limit $4",
+    )
+    .bind(workspace)
+    .bind(cursor.map(|c| c.created_at))
+    .bind(cursor.map(|c| c.id))
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
+/// Puts the recording in the workspace if it is its maker's and not already there. `false`: nothing changed.
+pub async fn place_recording<'e>(
+    db: impl PgExecutor<'e>,
+    recording: Uuid,
+    maker: Uuid,
+    workspace: Uuid,
+) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query(
+        "update recordings set workspace_id = $3, version = version + 1, updated_at = now() \
+         where id = $1 and owner_id = $2 and deleted_at is null and workspace_id is distinct from $3",
+    )
+    .bind(recording)
+    .bind(maker)
+    .bind(workspace)
+    .execute(db)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+/// Who made a recording that is in this workspace, or `None` if it is not in it (or is gone).
+pub async fn recording_maker<'e>(
+    db: impl PgExecutor<'e>,
+    workspace: Uuid,
+    recording: Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar(
+        "select owner_id from recordings where id = $1 and workspace_id = $2 and deleted_at is null",
+    )
+    .bind(recording)
+    .bind(workspace)
+    .fetch_optional(db)
+    .await
+}
+
+/// Takes the recording out of the workspace. It stays in its maker's library.
+pub async fn take_out_recording<'e>(
+    db: impl PgExecutor<'e>,
+    workspace: Uuid,
+    recording: Uuid,
+) -> Result<bool, sqlx::Error> {
+    Ok(sqlx::query(
+        "update recordings set workspace_id = null, version = version + 1, updated_at = now() \
+         where id = $1 and workspace_id = $2 and deleted_at is null",
+    )
+    .bind(recording)
+    .bind(workspace)
+    .execute(db)
+    .await?
+    .rows_affected()
+        == 1)
+}

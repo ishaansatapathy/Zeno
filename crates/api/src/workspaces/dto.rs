@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::secret::Secret;
 use crate::workspaces::permissions::WorkspaceRole;
-use crate::workspaces::repo::{InviteRow, MemberRow, SummaryRow};
+use crate::workspaces::repo::{InviteRow, MemberRow, SummaryRow, TeamRecordingRow};
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -145,4 +145,57 @@ pub struct InviteEnvelope {
 pub struct InviteListEnvelope {
     /// The invitations still waiting for an answer, newest first.
     pub invites: Vec<InviteResponse>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TeamRecordingResponse {
+    pub id: Uuid,
+    pub title: String,
+    pub source: String,
+    /// Who made it, by name.
+    pub made_by: String,
+    /// Is it the person asking who made it. Those are theirs to take out, to edit and to delete.
+    pub mine: bool,
+    /// Where it is in its life: `capturing`, `uploading`, `processing`, `ready` or `failed`.
+    pub status: &'static str,
+    /// What to play, when it has a video: `POST /v1/videos/{video_id}/play` starts a viewing for anyone in the
+    /// workspace.
+    pub video_id: Option<Uuid>,
+    pub duration_seconds: Option<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+impl TeamRecordingResponse {
+    pub fn build(row: TeamRecordingRow, viewer: Uuid) -> Self {
+        Self {
+            status: crate::recordings::dto::status_of(row.video_status),
+            mine: row.owner_id == viewer,
+            id: row.id,
+            title: row.title,
+            source: row.source,
+            made_by: row.owner_name,
+            video_id: row.video_id,
+            duration_seconds: row.duration_seconds,
+            created_at: row.created_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TeamRecordingListEnvelope {
+    /// Newest first.
+    pub recordings: Vec<TeamRecordingResponse>,
+    /// Pass as `cursor` for the next page; absent on the last.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct TeamRecordingsQuery {
+    /// `next_cursor` from the previous page.
+    pub cursor: Option<String>,
+    /// 1 to 50; default 20.
+    #[param(minimum = 1, maximum = 50)]
+    pub limit: Option<u32>,
 }

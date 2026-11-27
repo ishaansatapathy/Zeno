@@ -68,11 +68,28 @@ pub fn may_remove(actor: WorkspaceRole, target: WorkspaceRole) -> bool {
     }
 }
 
+/// Taking a recording out of the workspace (it stays in its maker's library): its maker, who put it there, and
+/// the people who look after the workspace. A plain member cannot take out somebody else's.
+pub fn may_take_out(actor: WorkspaceRole, made_it: bool) -> bool {
+    made_it || matches!(actor, Owner | Admin)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const ALL: [WorkspaceRole; 3] = [Owner, Admin, Member];
+
+    #[test]
+    fn a_recording_comes_out_by_its_maker_or_the_workspaces_managers() {
+        for actor in ALL {
+            assert!(may_take_out(actor, true), "{actor:?} taking out their own");
+        }
+        assert_eq!(
+            ALL.map(|actor| may_take_out(actor, false)),
+            [true, true, false]
+        );
+    }
 
     #[test]
     fn only_owners_and_admins_rename_and_see_people() {

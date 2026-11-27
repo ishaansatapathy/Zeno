@@ -6,9 +6,12 @@ use crate::auth::extractor::AuthUser;
 use crate::auth::limits::{self, HOUR};
 use crate::auth::tokens;
 use crate::auth::validation;
+use crate::cursor::{paginate, TimeCursor};
 use crate::error::ApiError;
 use crate::state::AppState;
-use crate::workspaces::dto::{InviteResponse, MemberResponse, WorkspaceResponse};
+use crate::workspaces::dto::{
+    InviteResponse, MemberResponse, TeamRecordingResponse, WorkspaceResponse,
+};
 use crate::workspaces::emails;
 use crate::workspaces::permissions::{self as rules, WorkspaceRole};
 use crate::workspaces::repo;
@@ -417,4 +420,80 @@ pub async fn accept(
     }
     tx.commit().await?;
     summary(state, user, invite.workspace_id).await
+}
+
+// ---- recordings ------------------------------------------------------------------------------------------
+
+fn recording_not_found() -> ApiError {
+    ApiError::Http {
+        status: StatusCode::NOT_FOUND,
+        code: "not_found",
+        message: "Recording not found.".into(),
+    }
+}
+
+/// The team's recordings. Anyone in the workspace, whatever they are in it; anyone else is told it is not there.
+pub async fn recordings(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    cursor: Option<TimeCursor>,
+    requested_limit: Option<u32>,
+) -> Result<(Vec<TeamRecordingResponse>, Option<TimeCursor>), ApiError> {
+    my_role(state, user, id).await?;
+    let limit = requested_limit.unwrap_or(20).clamp(1, 50) as usize;
+    let rows = repo::recordings(&state.db, id, cursor, limit as i64 + 1).await?;
+    let (page, next) = paginate(rows, limit, |row| TimeCursor {
+        created_at: row.created_at,
+        id: row.id,
+    });
+    let page = page
+        .into_iter()
+        .map(|row| TeamRecordingResponse::build(row, user.id))
+        .collect();
+    Ok((page, next))
+}
+
+/// Puts one of the caller's own recordings in the workspace, or moves it there from another. Safe to repeat.
+pub async fn add_recording(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    recording: Uuid,
+) -> Result<(), ApiError> {
+    // The recording must be the caller's own, and not deleted.
+    crate::recordings::repo::find_owned(&state.db, recording, user.id)
+        .await?
+        .ok_or_else(recording_not_found)?;
+    let mut tx = state.db.begin().await?;
+    // Held against anybody being removed while this is decided: a person on their way out cannot put anything in.
+    if !repo::lock_shared(&mut *tx, id).await? {
+        return Err(not_found());
+    }
+    repo::role_of(&mut *tx, id, user.id)
+        .await?
+        .ok_or_else(not_found)?;
+    repo::place_recording(&mut *tx, recording, user.id, id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Takes a recording out of the workspace. It stays in its maker's library.
+pub async fn take_out_recording(
+    state: &AppState,
+    user: &AuthUser,
+    id: Uuid,
+    recording: Uuid,
+) -> Result<(), ApiError> {
+    let role = my_role(state, user, id).await?;
+    let maker = repo::recording_maker(&state.db, id, recording)
+        .await?
+        .ok_or_else(recording_not_found)?;
+    if !rules::may_take_out(role, maker == user.id) {
+        return Err(forbidden());
+    }
+    if !repo::take_out_recording(&state.db, id, recording).await? {
+        return Err(recording_not_found());
+    }
+    Ok(())
 }
