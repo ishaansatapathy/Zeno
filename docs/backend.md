@@ -346,9 +346,8 @@ new one (Day 40 or so, with notifications), blocking a person, reporting.
 
 ## Workspaces
 
-A workspace is a team: people with a role each, brought in by invitation. This is the people and their roles (Day
-32); putting recordings in a workspace comes next and will add its own column. Nothing here touches the library,
-the share links or playback.
+A workspace is a team: people with a role each, brought in by invitation (Day 32), who can share recordings with
+each other (Day 33, below).
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -363,6 +362,9 @@ the share links or playback.
 | `GET /v1/workspaces/:id/invites` | The invitations still waiting, never with the token: owners and admins |
 | `DELETE /v1/workspaces/:id/invites/:invite` | Take one back; its link stops working at once |
 | `POST /v1/invites/accept` | `{"token"}` from the link; the caller must be signed in as the account that has the address it was sent to, verified |
+| `GET /v1/workspaces/:id/recordings` | The team's recordings, newest first, a page at a time (`limit`, `cursor`): anyone in the workspace |
+| `PUT /v1/workspaces/:id/recordings/:recording` | Put one of the caller's own recordings in the team (moving it from another; repeating it changes nothing). `204` |
+| `DELETE /v1/workspaces/:id/recordings/:recording` | Take it out (it stays in its maker's library): its maker, and the workspace's owners and admins; a member may not take out somebody else's |
 
 **Roles** (`workspaces/permissions.rs`, plain functions with their whole table tested): an `owner` does everything
 and there is always at least one; an `admin` renames, invites members, removes members and sees addresses; a
@@ -387,8 +389,34 @@ answer, `400 invalid_token`. The answer to an invitation never says whether the 
 workspace holds fifty people counting its open invitations (`workspace_full`); an accepted invitation that would be
 the fifty-first is refused and kept, not spent.
 
-**Not done.** Removing a member does not yet end anything they were doing in the workspace (there is nothing yet);
-a workspace is soft-deleted and nothing purges it; deleting an account while it is the only owner of a workspace
+**Recordings in a workspace (Day 33).** A recording is still its maker's: they keep it, edit it, share it with
+links and delete it. `recordings.workspace_id` (null for a personal one; set null if the workspace is ever purged)
+puts it in one team, and what that gives the team is two things: the recording is in `GET .../recordings` (title,
+who made it, status, length, and the video to play, but none of the maker's own controls: visibility, version,
+views), and everyone in the workspace may **watch** it. Watching is one more branch in `video_access_state`, the
+SQL function everything asks (starting a viewing, every playlist, every key, the sweep that ends viewings whose
+reason has gone): *allowed if the person is in a live workspace that holds a live recording made of this video*.
+So being taken out, leaving or being removed, the recording being deleted and the workspace ending each end a
+viewing at its next request, with no code of their own; the key server asks the same function, so a player that
+already holds a key is out within the 30 seconds the key lasts. The direct play route
+(`POST /v1/videos/:id/play`) opens to those people through a separate check, `access::via_workspace`, and not to
+every kind of entitlement: an enrolled student still plays through the lesson, not through a raw video id. Being in
+a team opens exactly what is put in it: another video of the same maker's stays shut (tested).
+
+Putting a recording in takes a *shared* row lock on the workspace and checks the person is in it under that lock;
+every change of who is in a workspace takes the same row `for update`, so somebody being removed at that moment
+cannot put something in. Shown by test (a removal holds the lock, the put arrives, the member is deleted, and the
+put is `404` and nothing is placed). Six changes were made one at a time and a test failed every time: the shared
+lock taken out, the access rule ignoring the workspace's deletion, ignoring the recording's deletion, ignoring who
+is in the team, and the play check refusing every member or admitting everyone. A person who is removed
+leaves what they made behind: it stays in the team, and stays theirs to change; they no longer see the team or add
+to it.
+
+**Not done.** There is no signed-in player in the web app yet, so a member can see the team's list but cannot watch
+from it; the play routes (`/v1/videos/:id/play`, `/v1/play/*`) are not in the OpenAPI document and the web has no
+typed way to call them. Comments and views for members are not built (comments are for people with a link). No
+limit on how many recordings a team holds. Removing a member does not end their open viewings the moment it happens,
+but at their next request; a workspace is soft-deleted and nothing purges it; deleting an account while it is the only owner of a workspace
 leaves a workspace with no owner (account deletion is planned: it has to hand over or end them); no notice goes to
 somebody who is removed or whose role changes; no audit trail of who changed what.
 

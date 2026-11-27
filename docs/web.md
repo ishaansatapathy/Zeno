@@ -135,14 +135,16 @@ link's says nothing about the video). `SITE_URL` makes the image address absolut
 the workspaces a person is in with what they are in each, starting one, and in one: its people (an owner picks each
 one's role from a list and removes anyone; an admin removes members; anyone leaves), inviting by email (an admin
 can only offer *member*), the invitations waiting (each can be taken back), renaming, and ending it (two presses,
-the second saying what it does). The screens offer only what the person's role can do (`lib/team.ts`, tested), and
+the second saying what it does), and its recordings (what people have put in, who made each, taking one out; a
+creator also picks one of their own to put in, a student has no library so is not offered it). The screens offer only what the person's role can do (`lib/team.ts`, tested), and
 the API refuses the rest on its own. An invitation's link opens a page that does nothing until *Accept invitation*
 is pressed, because mail scanners and previews open links; it is served `no-referrer` and `no-store` like the other
 token pages. Somebody who is not signed in is sent to sign in and brought back to it; **somebody with no account yet
 has to register with the address the invitation was sent to and then open the link again** (the registration does
-not carry the link through), which the page does not say yet. Seven browser tests (`e2e/team.spec.ts`: starting,
+not carry the link through), which the page does not say yet. Eight browser tests (`e2e/team.spec.ts`: starting,
 inviting and accepting, the wrong account, roles and removal, the only owner, leaving and taking an invitation back,
-ending it, axe at desktop and phone).
+ending it, recordings, axe at desktop and phone).
+There is no way to watch a team recording in the page yet.
 
 **Settings** (`/settings`, behind sign-in; the person's name in the bar leads to it): how much storage is used
 (a meter with its numbers in words for a screen reader, any use at all showing as at least 1%, the way out
