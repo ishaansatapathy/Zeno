@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canManage, canRemove, inviteRoles, isOwner } from "./team";
+import { canManage, canRemove, canTakeOut, inviteRoles, isOwner } from "./team";
 
 const ROLES = ["owner", "admin", "member"] as const;
 
@@ -22,5 +22,10 @@ describe("what each role may do", () => {
       expect(canRemove("admin", target)).toBe(target === "member");
       expect(canRemove("member", target)).toBe(false);
     }
+  });
+
+  it("lets a recording out by its maker, or by an owner or admin", () => {
+    for (const actor of ROLES) expect(canTakeOut(actor, true)).toBe(true);
+    expect(ROLES.map((actor) => canTakeOut(actor, false))).toEqual([true, true, false]);
   });
 });

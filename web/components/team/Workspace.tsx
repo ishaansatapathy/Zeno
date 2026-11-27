@@ -8,7 +8,8 @@ import { Notice, TextField, focusField } from "@/components/auth/controls";
 import { describeFailure } from "@/components/auth/messages";
 import { checkEmail, checkName } from "@/components/auth/validate";
 import { api, type ApiFailure, type Schemas } from "@/lib/api/client";
-import { ROLE_LABEL, canManage, canRemove, inviteRoles, isOwner, type Role } from "@/lib/team";
+import { clock, statusName } from "@/components/library/rows";
+import { ROLE_LABEL, canManage, canRemove, canTakeOut, inviteRoles, isOwner, type Role } from "@/lib/team";
 
 type Workspace = Schemas["WorkspaceResponse"];
 type Member = Schemas["MemberResponse"];
@@ -192,6 +193,8 @@ export function WorkspaceView({ id }: { id: string }) {
           </ul>
         </Panel>
 
+        <Recordings id={id} role={me} />
+
         {canManage(me) ? <Invitations id={id} role={me} invites={invites} change={change} say={say} reload={load} /> : null}
         {canManage(me) ? <Rename id={id} current={workspace.name} change={change} /> : null}
         {isOwner(me) ? <Danger id={id} name={workspace.name} /> : null}
@@ -364,6 +367,161 @@ function Danger({ id, name }: { id: string; name: string }) {
           Delete workspace
         </button>
       )}
+    </Panel>
+  );
+}
+
+type TeamRecording = Schemas["TeamRecordingResponse"];
+type Mine = Schemas["RecordingResponse"];
+
+const PAGE = 20;
+
+/**
+ * What people have put in the workspace, and (for a creator) a way to put one of their own in. A recording stays
+ * its maker's: it is taken out here, never deleted. The panel keeps its own list, so putting one in or taking one
+ * out does not reload the people and invitations.
+ */
+function Recordings({ id, role }: { id: string; role: Role }) {
+  const [rows, setRows] = useState<TeamRecording[] | null>(null);
+  const [next, setNext] = useState<string | null>(null);
+  // `null`: the caller keeps no library (a student), so there is nothing of theirs to put in.
+  const [library, setLibrary] = useState<Mine[] | null>(null);
+  const [choice, setChoice] = useState("");
+  const [alert, setAlert] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [pending, setPending] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const [team, mine] = await Promise.all([api.workspaces.recordings(id, { limit: PAGE }), api.recordings.list({ limit: 50 })]);
+    if (team.ok) {
+      setRows(team.data.recordings);
+      setNext(team.data.next_cursor ?? null);
+    } else {
+      setRows([]);
+      setAlert(describeFailure(team.error));
+    }
+    setLibrary(mine.ok ? mine.data.recordings : null);
+  }, [id]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function more() {
+    if (!next || pending) return;
+    setPending(true);
+    const page = await api.workspaces.recordings(id, { limit: PAGE, cursor: next });
+    setPending(false);
+    if (!page.ok) return setAlert(describeFailure(page.error));
+    setRows((now) => [...(now ?? []), ...page.data.recordings]);
+    setNext(page.data.next_cursor ?? null);
+  }
+
+  async function run(work: () => Promise<{ ok: true } | { ok: false; error: ApiFailure }>, done: string) {
+    if (pending) return;
+    setAlert(null);
+    setNote("");
+    setPending(true);
+    const result = await work();
+    if (result.ok) {
+      setNote(done);
+      await refresh();
+    } else {
+      setAlert(describeFailure(result.error));
+    }
+    setPending(false);
+  }
+
+  const addable = (library ?? []).filter((recording) => recording.workspace_id !== id);
+
+  return (
+    <Panel
+      id="recordings"
+      title={`Recordings${rows ? ` · ${rows.length}${next ? "+" : ""}` : ""}`}
+      intro="What people have put in this workspace. A recording stays its maker's: only they can edit or delete it, and taking it out here only stops sharing it."
+    >
+      {alert ? (
+        <div className="mb-4">
+          <Notice tone="error">{alert}</Notice>
+        </div>
+      ) : null}
+      <p role="status" aria-live="polite" className="label mb-3 min-h-5 text-paper">
+        {note}
+      </p>
+
+      {rows === null ? (
+        <div role="status">
+          <span className="sr-only">Loading the recordings</span>
+          <div aria-hidden="true" className="h-12 w-full bg-raise" />
+        </div>
+      ) : rows.length === 0 ? (
+        <p className="text-[0.95rem] text-mute">Nothing here yet.{library ? " Put one of yours in below." : ""}</p>
+      ) : (
+        <ul className="border-t border-line">
+          {rows.map((row) => (
+            <li key={row.id} className="flex flex-wrap items-center justify-between gap-3 border-b border-line py-4">
+              <div className="min-w-0">
+                <p className="truncate text-[1rem] text-paper">{row.title}</p>
+                <p className="text-[0.8125rem] text-mute [overflow-wrap:anywhere]">
+                  {row.mine ? "You" : row.made_by} · {statusName(row.status)}
+                  {row.duration_seconds ? ` · ${clock(row.duration_seconds)}` : ""} · {day(row.created_at)}
+                </p>
+              </div>
+              {canTakeOut(role, row.mine) ? (
+                <button
+                  type="button"
+                  disabled={pending}
+                  aria-label={`Take out ${row.title}`}
+                  className={quiet}
+                  onClick={() => void run(() => api.workspaces.takeOutRecording(id, row.id), `“${row.title}” is out of the workspace. It is still in its maker's library.`)}
+                >
+                  Take out
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {next ? (
+        <button type="button" disabled={pending} onClick={() => void more()} className={`${quiet} mt-4`}>
+          Show more
+        </button>
+      ) : null}
+
+      {library ? (
+        <form
+          className="mt-8 max-w-sm space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const picked = addable.find((recording) => recording.id === choice);
+            if (picked) void run(() => api.workspaces.addRecording(id, picked.id), `“${picked.title}” is in the workspace.`).then(() => setChoice(""));
+          }}
+        >
+          {addable.length === 0 ? (
+            <p className="text-[0.9rem] text-mute">{library.length === 0 ? "You have no recordings to put in yet." : "Everything you have recorded is already here."}</p>
+          ) : (
+            <>
+              <div>
+                <label htmlFor="recording-to-add" className="label mb-2 block">
+                  Put one of yours in
+                </label>
+                <select id="recording-to-add" value={choice} onChange={(event) => setChoice(event.target.value)} className="h-12 w-full border border-line-hi bg-ink px-4 text-[0.95rem] text-paper">
+                  <option value="">Choose a recording</option>
+                  {addable.map((recording) => (
+                    <option key={recording.id} value={recording.id}>
+                      {recording.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button type="submit" disabled={pending || !choice} aria-busy={pending} className={button}>
+                {pending ? "One moment…" : "Put in workspace"}
+              </button>
+            </>
+          )}
+        </form>
+      ) : null}
     </Panel>
   );
 }

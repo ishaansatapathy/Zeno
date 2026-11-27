@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page, type PlaywrightWorkerArgs } from "@playwright/test";
+import { expect, test, type APIResponse, type Browser, type Page, type PlaywrightWorkerArgs } from "@playwright/test";
 
 import { PASSWORD, alertOf, sharedAccount, signInQuietly, unique } from "./helpers";
 import { mailedCount, mailedLink } from "./mail";
@@ -35,6 +35,16 @@ test.afterEach(async ({ page, playwright }) => {
     if (workspace.role === "owner") await page.request.delete(`/v1/workspaces/${workspace.id}`);
   }
 });
+
+/** Repeats a call that was told to slow down, once the time it names has passed: the specs before this one spent the account's minute. */
+async function patiently(run: () => Promise<APIResponse>): Promise<APIResponse> {
+  let res = await run();
+  for (let tries = 0; tries < 4 && res.status() === 429; tries++) {
+    await new Promise((resolve) => setTimeout(resolve, (Number(res.headers()["retry-after"]) || 5) * 1000));
+    res = await run();
+  }
+  return res;
+}
 
 /** A second browser, signed in as somebody else. */
 async function another(browser: Browser, email: string): Promise<Page> {
@@ -220,10 +230,64 @@ test("ending a workspace takes two presses, and ends it for everyone", async ({ 
   await ben.context().close();
 });
 
+test("a creator puts a recording in, the team sees it, and only those who may take it out", async ({ page, browser, playwright }) => {
+  const { id } = await workspaceOf(page, playwright);
+  const guestAddress = await guestEmail(playwright);
+  const link = await invite(page, id, guestAddress);
+  const ben = await another(browser, guestAddress);
+  await ben.goto(link);
+  await ben.getByRole("button", { name: "Accept invitation" }).click();
+  await expect(ben).toHaveURL(`/team/${id}`);
+
+  const title = unique("Lesson");
+  const made = await page.request.post("/v1/recordings", { data: { source: "upload", title } });
+  expect(made.status(), await made.text()).toBe(201);
+  const { recording } = await made.json();
+
+  try {
+    await page.goto(`/team/${id}`);
+    const mine = page.getByRole("region", { name: /^Recordings/ });
+    await expect(mine).toContainText("Nothing here yet.");
+    await mine.getByLabel("Put one of yours in").selectOption({ label: title });
+    await mine.getByRole("button", { name: "Put in workspace" }).click();
+    await expect(page.getByRole("status").filter({ hasText: `\u201c${title}\u201d is in the workspace.` })).toBeVisible();
+    await expect(mine.getByRole("listitem").filter({ hasText: title })).toContainText("You");
+    // It is in, so it is no longer offered.
+    await expect(mine.locator("option", { hasText: title })).toHaveCount(0);
+
+    // The member sees it, and by whom. They have no library of their own to put one in from, and may not take it out.
+    await ben.goto(`/team/${id}`);
+    const theirs = ben.getByRole("region", { name: /^Recordings/ });
+    const row = theirs.getByRole("listitem").filter({ hasText: title });
+    await expect(row).toContainText("Asha Rao");
+    await expect(row.getByRole("button", { name: `Take out ${title}` })).toHaveCount(0);
+    await expect(theirs.getByLabel("Put one of yours in")).toHaveCount(0);
+
+    // The owner takes it out: the member's next look is empty, and the maker still has it, alone.
+    await mine.getByRole("button", { name: `Take out ${title}` }).click();
+    await expect(page.getByRole("status").filter({ hasText: "is out of the workspace" })).toBeVisible();
+    await expect(mine).toContainText("Nothing here yet.");
+    await ben.reload();
+    await expect(theirs).toContainText("Nothing here yet.");
+    const still = await page.request.get(`/v1/recordings/${recording.id}`);
+    expect(still.status()).toBe(200);
+    expect((await still.json()).recording.workspace_id ?? null).toBeNull();
+  } finally {
+    await page.request.delete(`/v1/recordings/${recording.id}`);
+    await ben.context().close();
+  }
+});
+
 test("the team screens pass axe at desktop and phone size", async ({ page, browser, playwright }) => {
   const { id } = await workspaceOf(page, playwright);
   const guestAddress = await guestEmail(playwright);
   const link = await invite(page, id, guestAddress);
+  // A recording in it, with a title that is long enough to push a phone screen wider if it is not wrapped.
+  const made = await page.request.post("/v1/recordings", { data: { source: "upload", title: unique("Weekly review of the mathematics syllabus for the whole of the ninth grade class") } });
+  expect(made.status(), await made.text()).toBe(201);
+  const recordingId = (await made.json()).recording.id as string;
+  const put = await patiently(() => page.request.put(`/v1/workspaces/${id}/recordings/${recordingId}`));
+  expect(put.status(), await put.text()).toBe(204);
 
   async function axe(where: string) {
     await page.addScriptTag({ path: require.resolve("axe-core/axe.min.js") });
@@ -270,4 +334,5 @@ test("the team screens pass axe at desktop and phone size", async ({ page, brows
     expect(result.violations.map((v: { id: string }) => v.id), `the invitation page at ${size} size`).toEqual([]);
     await ben.context().close();
   }
+  await page.request.delete(`/v1/recordings/${recordingId}`);
 });

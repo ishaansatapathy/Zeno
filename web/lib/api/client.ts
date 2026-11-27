@@ -178,6 +178,15 @@ export function createApi(options: ClientOptions = {}) {
         call(() => client.POST("/v1/workspaces/{id}/invites", { params: { path: { id } }, body: { email, role } })),
       revokeInvite: (id: string, invite: string) =>
         call(() => client.DELETE("/v1/workspaces/{id}/invites/{invite}", { params: { path: { id, invite } } })),
+      /** The team's recordings, newest first. */
+      recordings: (id: string, query: { cursor?: string; limit?: number } = {}) =>
+        call(() => client.GET("/v1/workspaces/{id}/recordings", { params: { path: { id }, query } })),
+      /** Puts one of the caller's own recordings in the team (moving it from another). Repeating it changes nothing. */
+      addRecording: (id: string, recording: string) =>
+        call(() => client.PUT("/v1/workspaces/{id}/recordings/{recording}", { params: { path: { id, recording } } })),
+      /** Takes a recording out of the team. It stays in its maker's library. */
+      takeOutRecording: (id: string, recording: string) =>
+        call(() => client.DELETE("/v1/workspaces/{id}/recordings/{recording}", { params: { path: { id, recording } } })),
     },
     invites: {
       /** Joins the workspace an emailed link is for. */

@@ -641,6 +641,52 @@ export interface paths {
         patch: operations["workspaces_set_role"];
         trace?: never;
     };
+    "/v1/workspaces/{id}/recordings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The recordings in the workspace, newest first, a page at a time.
+         * @description Anyone in it can see this list and watch what is in it. Somebody who is not in the workspace gets `404`.
+         */
+        get: operations["workspaces_recordings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workspaces/{id}/recordings/{recording}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Puts one of your recordings in the workspace, so everyone in it can see and watch it.
+         * @description It stays yours: you edit it, share it and delete it. A recording is in one workspace at a time, so putting it
+         *     in another moves it. Repeating the call changes nothing. A recording that is not yours, or is deleted, is
+         *     `404`, as is a workspace you are not in.
+         */
+        put: operations["workspaces_add_recording"];
+        post?: never;
+        /**
+         * Takes a recording out of the workspace. It stays in its maker's library.
+         * @description Its maker may, and so may the workspace's owners and admins; a member may not take out somebody else's.
+         */
+        delete: operations["workspaces_take_out_recording"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -976,6 +1022,11 @@ export interface components {
             view_count: number;
             /** @enum {string} */
             visibility: "private" | "link" | "public";
+            /**
+             * Format: uuid
+             * @description The workspace it is shared with: everyone in it can see and watch it. Absent when it is only yours.
+             */
+            workspace_id?: string | null;
         };
         RegisterRequest: {
             /** Format: email */
@@ -1075,6 +1126,34 @@ export interface components {
              * @description How many videos make up `used_bytes`.
              */
             videos: number;
+        };
+        TeamRecordingListEnvelope: {
+            /** @description Pass as `cursor` for the next page; absent on the last. */
+            next_cursor?: string | null;
+            /** @description Newest first. */
+            recordings: components["schemas"]["TeamRecordingResponse"][];
+        };
+        TeamRecordingResponse: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: int32 */
+            duration_seconds?: number | null;
+            /** Format: uuid */
+            id: string;
+            /** @description Who made it, by name. */
+            made_by: string;
+            /** @description Is it the person asking who made it. Those are theirs to take out, to edit and to delete. */
+            mine: boolean;
+            source: string;
+            /** @description Where it is in its life: `capturing`, `uploading`, `processing`, `ready` or `failed`. */
+            status: string;
+            title: string;
+            /**
+             * Format: uuid
+             * @description What to play, when it has a video: `POST /v1/videos/{video_id}/play` starts a viewing for anyone in the
+             *     workspace.
+             */
+            video_id?: string | null;
         };
         TokenRequest: {
             /** @description The one-time token from the emailed link. */
@@ -4764,6 +4843,221 @@ export interface operations {
             };
             /** @description `invalid_request`: not one of `owner`, `admin`, `member`. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    workspaces_recordings: {
+        parameters: {
+            query?: {
+                /** @description `next_cursor` from the previous page. */
+                cursor?: string;
+                /** @description 1 to 50; default 20. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The workspace. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamRecordingListEnvelope"];
+                };
+            };
+            /** @description `invalid_cursor` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    workspaces_add_recording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The workspace. */
+                id: string;
+                /** @description One of your recordings. */
+                recording: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description It is in the workspace. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden_origin` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `too_many_requests` */
+            429: {
+                headers: {
+                    /** @description Seconds until the budget is available again. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `internal_error`: our fault; safe to retry. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    workspaces_take_out_recording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The workspace. */
+                id: string;
+                /** @description A recording in it. */
+                recording: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description It is out. Viewings of it by the workspace's people end at their next request. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `unauthenticated` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `forbidden`: a member may not take out somebody else's, or `forbidden_origin`. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_found` */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

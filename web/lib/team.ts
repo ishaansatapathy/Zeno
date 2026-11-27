@@ -26,3 +26,6 @@ export function canRemove(actor: Role, target: Role): boolean {
   if (actor === "owner") return true;
   return actor === "admin" && target === "member";
 }
+
+/** Taking a recording out of the team: whoever made it, and the people who look after the workspace. */
+export const canTakeOut = (actor: Role, mine: boolean): boolean => mine || canManage(actor);
