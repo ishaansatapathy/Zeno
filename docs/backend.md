@@ -412,9 +412,15 @@ is in the team, and the play check refusing every member or admitting everyone. 
 leaves what they made behind: it stays in the team, and stays theirs to change; they no longer see the team or add
 to it.
 
-**Not done.** There is no signed-in player in the web app yet, so a member can see the team's list but cannot watch
-from it; the play routes (`/v1/videos/:id/play`, `/v1/play/*`) are not in the OpenAPI document and the web has no
-typed way to call them. Comments and views for members are not built (comments are for people with a link). No
+**Signed-in playback is in the OpenAPI document (Day 34).** `POST /v1/videos/{id}/play` (`201` with the playlist
+address, the heartbeat interval, where to resume and the watermark text; `403 playback_denied`, `404`, `409
+not_ready` or `stream_limit`, `429`), `POST /v1/play/{session}/heartbeat` (`204`; `409 session_ended` is how a
+viewing learns it is over, with the reason in the message) and `DELETE /v1/play/{session}`, all under a contract test
+that provokes every documented status. The two playlist routes stay out of the document on purpose: they are
+authorised by the token in the address and read by players, never called by a screen (they are listed as waiting,
+and the list can only shrink).
+
+**Not done.** Comments and views for members are not built (comments are for people with a link). No
 limit on how many recordings a team holds. Removing a member does not end their open viewings the moment it happens,
 but at their next request; a workspace is soft-deleted and nothing purges it; deleting an account while it is the only owner of a workspace
 leaves a workspace with no owner (account deletion is planned: it has to hand over or end them); no notice goes to

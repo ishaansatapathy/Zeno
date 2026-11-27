@@ -141,10 +141,16 @@ the API refuses the rest on its own. An invitation's link opens a page that does
 is pressed, because mail scanners and previews open links; it is served `no-referrer` and `no-store` like the other
 token pages. Somebody who is not signed in is sent to sign in and brought back to it; **somebody with no account yet
 has to register with the address the invitation was sent to and then open the link again** (the registration does
-not carry the link through), which the page does not say yet. Eight browser tests (`e2e/team.spec.ts`: starting,
+not carry the link through), which the page does not say yet. Ten browser tests (`e2e/team.spec.ts`: starting,
 inviting and accepting, the wrong account, roles and removal, the only owner, leaving and taking an invitation back,
-ending it, recordings, axe at desktop and phone).
-There is no way to watch a team recording in the page yet.
+ending it, recordings, watching one, a refused viewing, axe at desktop and phone).
+A ready recording has a **Watch** button that opens a player under it (`components/team/Watch.tsx`): it starts a
+viewing, says it is still going every few seconds with where it is, and when the server says it is over (taken out
+of the workspace, removed, the recording deleted) it stops with the sentence the server gave and offers *Watch
+again*. Closing it ends the viewing. Playing HLS is `lib/hls.ts`, shared with the share page. The browser tests play
+the API's answers back (as the share player's do), so what they prove is the page's behaviour; that the server ends
+a viewing when the reason goes is proved in Rust (`tests/team_recordings.rs`), and no test yet has a real browser
+play a real team recording through to its end.
 
 **Settings** (`/settings`, behind sign-in; the person's name in the bar leads to it): how much storage is used
 (a meter with its numbers in words for a screen reader, any use at all showing as at least 1%, the way out
