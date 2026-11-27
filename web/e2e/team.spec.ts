@@ -1,20 +1,35 @@
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type Page, type PlaywrightWorkerArgs } from "@playwright/test";
 
-import { alertOf, confirmedAccount, sharedAccount, signInQuietly, unique } from "./helpers";
+import { PASSWORD, alertOf, sharedAccount, signInQuietly, unique } from "./helpers";
 import { mailedCount, mailedLink } from "./mail";
 
-type Api = Parameters<typeof confirmedAccount>[0];
+type Playwright = PlaywrightWorkerArgs["playwright"];
 
-// Signing up is limited to ten a hour from one address, so the people in these tests are made once and shared:
-// one who owns the workspaces, and one who is invited to them.
-let owner: Promise<string> | null = null;
+// Signing up is limited to ten an hour from one address, and the other specs have spent most of it, so these tests
+// make no accounts of their own. The owner is the creator the other specs share; the person invited is the shared
+// student, given a name of their own so the two can be told apart on the screen. (This spec runs last, so the new
+// name is seen by nothing else.)
+const ownerEmail = (playwright: Playwright) => sharedAccount(playwright, "creator");
 let guest: Promise<string> | null = null;
-const ownerEmail = (request: Api) => (owner ??= confirmedAccount(request, { name: "Asha Rao" }));
-const guestEmail = (request: Api) => (guest ??= confirmedAccount(request, { name: "Ben Iyer" }));
+function guestEmail(playwright: Playwright): Promise<string> {
+  return (guest ??= (async () => {
+    const email = await sharedAccount(playwright, "student");
+    const api = await playwright.request.newContext({ baseURL: "http://localhost:3000" });
+    try {
+      const signedIn = await api.post("/v1/auth/login", { data: { email, password: PASSWORD } });
+      expect(signedIn.status()).toBe(200);
+      const named = await api.patch("/v1/auth/me", { data: { name: "Ben Iyer" } });
+      expect(named.status()).toBe(200);
+    } finally {
+      await api.dispose();
+    }
+    return email;
+  })());
+}
 
 // An account owns at most five workspaces, and the tests share one: each one ends what it made.
-test.afterEach(async ({ page, request }) => {
-  await signInQuietly(page, await ownerEmail(request));
+test.afterEach(async ({ page, playwright }) => {
+  await signInQuietly(page, await ownerEmail(playwright));
   const listed = await (await page.request.get("/v1/workspaces")).json();
   for (const workspace of listed.workspaces as { id: string; role: string }[]) {
     if (workspace.role === "owner") await page.request.delete(`/v1/workspaces/${workspace.id}`);
@@ -30,8 +45,8 @@ async function another(browser: Browser, email: string): Promise<Page> {
 }
 
 /** The owner, signed in, with a workspace of their own just made (through the page's own API). */
-async function workspaceOf(page: Page, request: Api, name = unique("Maths")) {
-  const email = await ownerEmail(request);
+async function workspaceOf(page: Page, playwright: Playwright, name = unique("Maths")) {
+  const email = await ownerEmail(playwright);
   await signInQuietly(page, email);
   const made = await page.request.post("/v1/workspaces", { data: { name } });
   expect(made.status(), await made.text()).toBe(201);
@@ -47,8 +62,8 @@ async function invite(page: Page, workspace: string, email: string, role = "memb
   return mailedLink(email, "invite", before);
 }
 
-test("a person starts a workspace and is its owner", async ({ page, request }) => {
-  const email = await ownerEmail(request);
+test("a person starts a workspace and is its owner", async ({ page, playwright }) => {
+  const email = await ownerEmail(playwright);
   await signInQuietly(page, email);
   await page.goto("/team");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("workspaces.");
@@ -71,9 +86,9 @@ test("a person starts a workspace and is its owner", async ({ page, request }) =
   await expect(page.getByRole("listitem").filter({ hasText: name })).toContainText("Owner · 1 person");
 });
 
-test("an invitation brings in the account it was sent to, and only that one", async ({ page, request, browser, playwright }) => {
-  const { id, name, email: ownerAddress } = await workspaceOf(page, request);
-  const guestAddress = await guestEmail(request);
+test("an invitation brings in the account it was sent to, and only that one", async ({ page, browser, playwright }) => {
+  const { id, name, email: ownerAddress } = await workspaceOf(page, playwright);
+  const guestAddress = await guestEmail(playwright);
   const link = await invite(page, id, guestAddress);
 
   // The owner sees it waiting.
@@ -81,7 +96,7 @@ test("an invitation brings in the account it was sent to, and only that one", as
   await expect(page.getByRole("listitem").filter({ hasText: guestAddress })).toContainText("Member · until");
 
   // Somebody else with the link is told whose it is, and it is not used up.
-  const stranger = await another(browser, await sharedAccount(playwright));
+  const stranger = await another(browser, ownerAddress);
   await stranger.goto(link);
   await stranger.getByRole("button", { name: "Accept invitation" }).click();
   await expect(alertOf(stranger)).toContainText("sent to a different email address");
@@ -117,9 +132,9 @@ test("an invitation brings in the account it was sent to, and only that one", as
   await expect(page.getByRole("heading", { name: "Waiting for an answer" })).toHaveCount(0);
 });
 
-test("an owner changes what somebody is, and removes them", async ({ page, request, browser }) => {
-  const { id } = await workspaceOf(page, request);
-  const guestAddress = await guestEmail(request);
+test("an owner changes what somebody is, and removes them", async ({ page, browser, playwright }) => {
+  const { id } = await workspaceOf(page, playwright);
+  const guestAddress = await guestEmail(playwright);
   const link = await invite(page, id, guestAddress);
   const ben = await another(browser, guestAddress);
   await ben.goto(link);
@@ -143,8 +158,8 @@ test("an owner changes what somebody is, and removes them", async ({ page, reque
   await ben.context().close();
 });
 
-test("the only owner cannot leave or step down, and is told why", async ({ page, request }) => {
-  const { id } = await workspaceOf(page, request);
+test("the only owner cannot leave or step down, and is told why", async ({ page, playwright }) => {
+  const { id } = await workspaceOf(page, playwright);
   await page.goto(`/team/${id}`);
   await page.getByRole("button", { name: "Leave" }).click();
   await expect(alertOf(page)).toContainText("You are the only owner");
@@ -155,9 +170,9 @@ test("the only owner cannot leave or step down, and is told why", async ({ page,
   await expect(page.getByText("You are owner")).toBeVisible();
 });
 
-test("a member can leave, and an invitation can be taken back", async ({ page, request, browser }) => {
-  const { id } = await workspaceOf(page, request);
-  const guestAddress = await guestEmail(request);
+test("a member can leave, and an invitation can be taken back", async ({ page, browser, playwright }) => {
+  const { id } = await workspaceOf(page, playwright);
+  const guestAddress = await guestEmail(playwright);
   const link = await invite(page, id, guestAddress);
 
   // Taken back before it was used: the link says so.
@@ -182,9 +197,9 @@ test("a member can leave, and an invitation can be taken back", async ({ page, r
   await ben.context().close();
 });
 
-test("ending a workspace takes two presses, and ends it for everyone", async ({ page, request, browser }) => {
-  const { id, name } = await workspaceOf(page, request);
-  const guestAddress = await guestEmail(request);
+test("ending a workspace takes two presses, and ends it for everyone", async ({ page, browser, playwright }) => {
+  const { id, name } = await workspaceOf(page, playwright);
+  const guestAddress = await guestEmail(playwright);
   const link = await invite(page, id, guestAddress);
   const ben = await another(browser, guestAddress);
   await ben.goto(link);
@@ -205,9 +220,9 @@ test("ending a workspace takes two presses, and ends it for everyone", async ({ 
   await ben.context().close();
 });
 
-test("the team screens pass axe at desktop and phone size", async ({ page, request, browser }) => {
-  const { id } = await workspaceOf(page, request);
-  const guestAddress = await guestEmail(request);
+test("the team screens pass axe at desktop and phone size", async ({ page, browser, playwright }) => {
+  const { id } = await workspaceOf(page, playwright);
+  const guestAddress = await guestEmail(playwright);
   const link = await invite(page, id, guestAddress);
 
   async function axe(where: string) {
