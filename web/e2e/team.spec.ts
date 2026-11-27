@@ -240,7 +240,7 @@ test("a creator puts a recording in, the team sees it, and only those who may ta
   await expect(ben).toHaveURL(`/team/${id}`);
 
   const title = unique("Lesson");
-  const made = await page.request.post("/v1/recordings", { data: { source: "upload", title } });
+  const made = await patiently(() => page.request.post("/v1/recordings", { data: { source: "upload", title } }));
   expect(made.status(), await made.text()).toBe(201);
   const { recording } = await made.json();
 
@@ -396,7 +396,7 @@ test("the team screens pass axe at desktop and phone size", async ({ page, brows
   const guestAddress = await guestEmail(playwright);
   const link = await invite(page, id, guestAddress);
   // A recording in it, with a title that is long enough to push a phone screen wider if it is not wrapped.
-  const made = await page.request.post("/v1/recordings", { data: { source: "upload", title: unique("Weekly review of the mathematics syllabus for the whole of the ninth grade class") } });
+  const made = await patiently(() => page.request.post("/v1/recordings", { data: { source: "upload", title: unique("Weekly review of the mathematics syllabus for the whole of the ninth grade class") } }));
   expect(made.status(), await made.text()).toBe(201);
   const recordingId = (await made.json()).recording.id as string;
   const put = await patiently(() => page.request.put(`/v1/workspaces/${id}/recordings/${recordingId}`));
