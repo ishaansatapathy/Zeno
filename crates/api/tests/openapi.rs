@@ -86,6 +86,13 @@ const ROUTERS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     ("crates/api/src/quota/routes.rs", &[("me_router", "/v1/me")]),
+    (
+        "crates/api/src/workspaces/routes.rs",
+        &[
+            ("router", "/v1/workspaces"),
+            ("invites_router", "/v1/invites"),
+        ],
+    ),
 ];
 
 /// Routes that exist and are not in the document yet. The list is explicit so that a new route
@@ -1112,5 +1119,272 @@ db_test! {
         contract.provoke_common_errors(&app, storage, Some(&owner), &[]).await;
         let unseen = contract.unseen(storage);
         assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+    }
+}
+
+db_test! {
+    async fn the_workspaces_api_keeps_its_promises(pool: PgPool) {
+        use axum::http::Method;
+        let app = app(pool.clone());
+        let contract = Contract::new();
+        let (list, one, member, invites, one_invite, accept) = (
+            "/v1/workspaces",
+            "/v1/workspaces/{id}",
+            "/v1/workspaces/{id}/members/{user}",
+            "/v1/workspaces/{id}/invites",
+            "/v1/workspaces/{id}/invites/{invite}",
+            "/v1/invites/accept",
+        );
+        let nobody = uuid::Uuid::new_v4();
+        let owner = signup_creator(&app, "owner@example.com").await;
+        let pupil = signup_verified_as(&app, "pupil@example.com", "student").await;
+        let stranger = signup_verified_as(&app, "stranger@example.com", "student").await;
+        let owner_id: uuid::Uuid = sqlx::query_scalar("select id from users where email = 'owner@example.com'").fetch_one(&pool).await.unwrap();
+        let pupil_id: uuid::Uuid = sqlx::query_scalar("select id from users where email = 'pupil@example.com'").fetch_one(&pool).await.unwrap();
+
+        // The shape each route takes, for the probes that need a body.
+        let body_of = |path: &str, method: &str| -> Option<Value> {
+            match (method, path) {
+                ("post", "/v1/workspaces") | ("patch", "/v1/workspaces/{id}") => Some(json!({"name": "Maths 9A"})),
+                ("patch", "/v1/workspaces/{id}/members/{user}") => Some(json!({"role": "member"})),
+                ("post", "/v1/workspaces/{id}/invites") => Some(json!({"email": "someone@example.com", "role": "member"})),
+                ("post", "/v1/invites/accept") => Some(json!({"token": "x"})),
+                _ => None,
+            }
+        };
+        let send = |method: &str, path: &str, jar: Option<&Jar>, fill: &[(&str, String)], body: Option<Value>| {
+            let uri = fill.iter().fold(path.to_owned(), |uri, (name, value)| uri.replace(&format!("{{{name}}}"), value));
+            let mut req = app.req(method.to_uppercase().parse::<Method>().unwrap(), &uri);
+            if let Some(jar) = jar {
+                req = req.jar(jar);
+            }
+            if let Some(body) = body {
+                req = req.json(body);
+            }
+            let (method, path) = (method.to_owned(), path.to_owned());
+            async move {
+                let res = req.send().await;
+                (method, path, res)
+            }
+        };
+        let id_of = |res: &Res| res.body["workspace"]["id"].as_str().unwrap().to_owned();
+        let latest_token = |to: &'static str| {
+            let app = &app;
+            async move {
+                app.settle().await;
+                let mail = app.mailer.sent().into_iter().rev().find(|m| m.to == to && m.subject.contains("invited you")).expect("the invitation");
+                token_from(&mail)
+            }
+        };
+
+        // Signed out: every route says so.
+        for (method, path, _) in contract.operations("/v1/workspaces").into_iter().chain(contract.operations("/v1/invites")) {
+            let fill = [("id", nobody.to_string()), ("user", nobody.to_string()), ("invite", nobody.to_string())];
+            let (m, p, res) = send(&method, &path, None, &fill, body_of(&path, &method)).await;
+            assert_eq!(res.status, StatusCode::UNAUTHORIZED, "{m} {p}: {:?}", res.body);
+            contract.check(&m, &p, &res);
+        }
+
+        // Starting one, and reading it.
+        let made = app.post(list).jar(&owner).json(json!({"name": "Maths 9A"})).send().await;
+        assert_eq!(made.status, StatusCode::CREATED, "{:?}", made.body);
+        contract.check("post", list, &made);
+        let ws = id_of(&made);
+        let at = [("id", ws.clone()), ("user", pupil_id.to_string()), ("invite", nobody.to_string())];
+        let (_, _, listed) = send("get", list, Some(&owner), &at, None).await;
+        contract.check("get", list, &listed);
+        let (_, _, shown) = send("get", one, Some(&owner), &at, None).await;
+        assert_eq!(shown.status, StatusCode::OK, "{:?}", shown.body);
+        contract.check("get", one, &shown);
+        let (_, _, hidden) = send("get", one, Some(&stranger), &at, None).await;
+        assert_eq!(hidden.status, StatusCode::NOT_FOUND);
+        contract.check("get", one, &hidden);
+
+        // Inviting, and every way that can go wrong.
+        let (_, _, sent) = send("post", invites, Some(&owner), &at, Some(json!({"email": "pupil@example.com", "role": "member"}))).await;
+        assert_eq!(sent.status, StatusCode::CREATED, "{:?}", sent.body);
+        contract.check("post", invites, &sent);
+        let invite_id = sent.body["invite"]["id"].as_str().unwrap().to_owned();
+        let (_, _, twice) = send("post", invites, Some(&owner), &at, Some(json!({"email": "pupil@example.com", "role": "member"}))).await;
+        assert_eq!(twice.code(), "already_invited");
+        contract.check("post", invites, &twice);
+        let (_, _, bad) = send("post", invites, Some(&owner), &at, Some(json!({"email": "nope", "role": "member"}))).await;
+        assert_eq!(bad.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("post", invites, &bad);
+        let (_, _, away) = send("post", invites, Some(&stranger), &at, Some(json!({"email": "x@example.com", "role": "member"}))).await;
+        contract.check("post", invites, &away);
+        let (_, _, seen) = send("get", invites, Some(&owner), &at, None).await;
+        assert_eq!(seen.body["invites"].as_array().unwrap().len(), 1);
+        contract.check("get", invites, &seen);
+        contract.check("get", invites, &send("get", invites, Some(&stranger), &at, None).await.2);
+
+        // Accepting: not a good link, somebody else's, and the right person's.
+        let (_, _, wrong_token) = send("post", accept, Some(&pupil), &at, Some(json!({"token": "not-a-real-token"}))).await;
+        assert_eq!(wrong_token.code(), "invalid_token");
+        contract.check("post", accept, &wrong_token);
+        let token = latest_token("pupil@example.com").await;
+        let (_, _, not_yours) = send("post", accept, Some(&stranger), &at, Some(json!({"token": token}))).await;
+        assert_eq!(not_yours.code(), "wrong_account");
+        contract.check("post", accept, &not_yours);
+        let (_, _, joined) = send("post", accept, Some(&pupil), &at, Some(json!({"token": token}))).await;
+        assert_eq!(joined.status, StatusCode::OK, "{:?}", joined.body);
+        contract.check("post", accept, &joined);
+
+        // A workspace with fifty in it has no room for one more.
+        let full = id_of(&app.post(list).jar(&owner).json(json!({"name": "Full house"})).send().await);
+        let (_, _, to_full) = send("post", invites, Some(&owner), &[("id", full.clone())], Some(json!({"email": "pupil@example.com", "role": "member"}))).await;
+        assert_eq!(to_full.status, StatusCode::CREATED, "{:?}", to_full.body);
+        let full_token = latest_token("pupil@example.com").await;
+        for n in 0..49 {
+            let filler = uuid::Uuid::new_v4();
+            sqlx::query("insert into users (id, name, email, password_hash, role) values ($1, 'Filler', $2, 'x', 'student')")
+                .bind(filler).bind(format!("filler{n}@example.com")).execute(&pool).await.unwrap();
+            sqlx::query("insert into workspace_members (workspace_id, user_id, role) values ($1::uuid, $2, 'member')")
+                .bind(&full).bind(filler).execute(&pool).await.unwrap();
+        }
+        let (_, _, no_room) = send("post", accept, Some(&pupil), &at, Some(json!({"token": full_token}))).await;
+        assert_eq!(no_room.status, StatusCode::CONFLICT, "{:?}", no_room.body);
+        contract.check("post", accept, &no_room);
+
+        // Renaming.
+        let (_, _, renamed) = send("patch", one, Some(&owner), &at, Some(json!({"name": "Maths 9B"}))).await;
+        assert_eq!(renamed.status, StatusCode::OK, "{:?}", renamed.body);
+        contract.check("patch", one, &renamed);
+        for (jar, want) in [(&pupil, 403), (&stranger, 404)] {
+            let (_, _, res) = send("patch", one, Some(jar), &at, Some(json!({"name": "Mine"}))).await;
+            assert_eq!(res.status.as_u16(), want, "{:?}", res.body);
+            contract.check("patch", one, &res);
+        }
+        let (_, _, blank) = send("patch", one, Some(&owner), &at, Some(json!({"name": " "}))).await;
+        assert_eq!(blank.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("patch", one, &blank);
+
+        // Roles and leaving.
+        let (_, _, promoted) = send("patch", member, Some(&owner), &at, Some(json!({"role": "admin"}))).await;
+        assert_eq!(promoted.status, StatusCode::NO_CONTENT, "{:?}", promoted.body);
+        contract.check("patch", member, &promoted);
+        let (_, _, refused) = send("patch", member, Some(&pupil), &at, Some(json!({"role": "owner"}))).await;
+        assert_eq!(refused.status, StatusCode::FORBIDDEN);
+        contract.check("patch", member, &refused);
+        let (_, _, unknown) = send("patch", member, Some(&owner), &[("id", ws.clone()), ("user", nobody.to_string())], Some(json!({"role": "member"}))).await;
+        assert_eq!(unknown.status, StatusCode::NOT_FOUND);
+        contract.check("patch", member, &unknown);
+        let (_, _, odd) = send("patch", member, Some(&owner), &at, Some(json!({"role": "king"}))).await;
+        assert_eq!(odd.status, StatusCode::UNPROCESSABLE_ENTITY);
+        contract.check("patch", member, &odd);
+        let mine = [("id", ws.clone()), ("user", owner_id.to_string())];
+        let (_, _, last) = send("patch", member, Some(&owner), &mine, Some(json!({"role": "member"}))).await;
+        assert_eq!(last.code(), "last_owner");
+        contract.check("patch", member, &last);
+        let (_, _, stuck) = send("delete", member, Some(&owner), &mine, None).await;
+        assert_eq!(stuck.code(), "last_owner");
+        contract.check("delete", member, &stuck);
+        let (_, _, not_allowed) = send("delete", member, Some(&pupil), &mine, None).await;
+        assert_eq!(not_allowed.status, StatusCode::FORBIDDEN);
+        contract.check("delete", member, &not_allowed);
+        let (_, _, not_there) = send("delete", member, Some(&owner), &[("id", ws.clone()), ("user", nobody.to_string())], None).await;
+        assert_eq!(not_there.status, StatusCode::NOT_FOUND);
+        contract.check("delete", member, &not_there);
+
+        // Taking an invitation back, in a workspace with one still open.
+        let (_, _, again) = send("post", invites, Some(&owner), &at, Some(json!({"email": "later@example.com", "role": "member"}))).await;
+        assert_eq!(again.status, StatusCode::CREATED);
+        let open = again.body["invite"]["id"].as_str().unwrap().to_owned();
+        let with = |invite: &str| [("id", ws.clone()), ("user", nobody.to_string()), ("invite", invite.to_owned())];
+        let (_, _, gone) = send("delete", one_invite, Some(&owner), &with(&open), None).await;
+        assert_eq!(gone.status, StatusCode::NO_CONTENT, "{:?}", gone.body);
+        contract.check("delete", one_invite, &gone);
+        for (jar, invite, want) in [(&pupil, invite_id.clone(), 404), (&owner, nobody.to_string(), 404), (&stranger, open.clone(), 404)] {
+            let (_, _, res) = send("delete", one_invite, Some(jar), &with(&invite), None).await;
+            assert_eq!(res.status.as_u16(), want, "{:?}", res.body);
+            contract.check("delete", one_invite, &res);
+        }
+
+        // Removing: an owner removes the pupil, who is out.
+        let (_, _, removed) = send("delete", member, Some(&owner), &at, None).await;
+        assert_eq!(removed.status, StatusCode::NO_CONTENT, "{:?}", removed.body);
+        contract.check("delete", member, &removed);
+
+        // What can go wrong on any route.
+        let fills = [("id", ws.clone()), ("user", nobody.to_string()), ("invite", nobody.to_string())];
+        let fill_refs: Vec<(&str, &str)> = fills.iter().map(|(a, b)| (*a, b.as_str())).collect();
+        contract.provoke_common_errors(&app, "/v1/workspaces", Some(&owner), &fill_refs).await;
+        contract.provoke_common_errors(&app, "/v1/invites", Some(&owner), &fill_refs).await;
+
+        // Ending it.
+        for (jar, want) in [(&pupil, 404), (&stranger, 404)] {
+            let (_, _, res) = send("delete", one, Some(jar), &at, None).await;
+            assert_eq!(res.status.as_u16(), want, "{:?}", res.body);
+            contract.check("delete", one, &res);
+        }
+        // A person who is only a member may not (on a workspace where the pupil is one).
+        let other = id_of(&app.post(list).jar(&owner).json(json!({"name": "Second"})).send().await);
+        send("post", invites, Some(&owner), &[("id", other.clone())], Some(json!({"email": "pupil@example.com", "role": "member"}))).await;
+        let second = latest_token("pupil@example.com").await;
+        send("post", accept, Some(&pupil), &at, Some(json!({"token": second}))).await;
+        let (_, _, only_member) = send("delete", one, Some(&pupil), &[("id", other.clone())], None).await;
+        assert_eq!(only_member.status, StatusCode::FORBIDDEN, "{:?}", only_member.body);
+        contract.check("delete", one, &only_member);
+        let in_other = [("id", other.clone()), ("user", nobody.to_string()), ("invite", nobody.to_string())];
+        let (_, _, may_not_see) = send("get", invites, Some(&pupil), &in_other, None).await;
+        assert_eq!(may_not_see.status, StatusCode::FORBIDDEN, "{:?}", may_not_see.body);
+        contract.check("get", invites, &may_not_see);
+        let (_, _, may_not_ask) = send("post", invites, Some(&pupil), &in_other, Some(json!({"email": "x@example.com", "role": "member"}))).await;
+        assert_eq!(may_not_ask.status, StatusCode::FORBIDDEN, "{:?}", may_not_ask.body);
+        contract.check("post", invites, &may_not_ask);
+        let (_, _, may_not_revoke) = send("delete", one_invite, Some(&pupil), &in_other, None).await;
+        assert_eq!(may_not_revoke.status, StatusCode::FORBIDDEN, "{:?}", may_not_revoke.body);
+        contract.check("delete", one_invite, &may_not_revoke);
+        let (_, _, ended) = send("delete", one, Some(&owner), &at, None).await;
+        assert_eq!(ended.status, StatusCode::NO_CONTENT, "{:?}", ended.body);
+        contract.check("delete", one, &ended);
+
+        // Owning at most five.
+        let mut too_many = None;
+        for n in 0..7 {
+            let res = app.post(list).jar(&stranger).json(json!({"name": format!("Stranger {n}")})).send().await;
+            if res.status == StatusCode::CONFLICT {
+                too_many = Some(res);
+                break;
+            }
+        }
+        let too_many = too_many.expect("an account owns at most five");
+        assert_eq!(too_many.code(), "too_many_workspaces");
+        contract.check("post", list, &too_many);
+
+        // The budgets run out: writes a few a minute, reads more. Once spent, every route of that kind says so.
+        let mut limited = None;
+        for _ in 0..40 {
+            let res = app.post(list).jar(&owner).json(json!({"name": "x"})).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("post", list, &limited.expect("changing runs out"));
+        for (method, path) in [("post", list), ("patch", one), ("delete", one), ("patch", member), ("delete", member), ("post", invites), ("delete", one_invite), ("post", accept)] {
+            let (_, _, res) = send(method, path, Some(&owner), &at, body_of(path, method)).await;
+            assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS, "{method} {path}: {:?}", res.body);
+            contract.check(method, path, &res);
+        }
+        let mut limited = None;
+        for _ in 0..130 {
+            let res = app.get(list).jar(&owner).send().await;
+            if res.status == StatusCode::TOO_MANY_REQUESTS {
+                limited = Some(res);
+                break;
+            }
+        }
+        contract.check("get", list, &limited.expect("reading runs out"));
+        for path in [one, invites] {
+            let (_, _, res) = send("get", path, Some(&owner), &at, None).await;
+            assert_eq!(res.status, StatusCode::TOO_MANY_REQUESTS, "get {path}");
+            contract.check("get", path, &res);
+        }
+
+        for prefix in ["/v1/workspaces", "/v1/invites"] {
+            let unseen = contract.unseen(prefix);
+            assert!(unseen.is_empty(), "the document promises responses no test has seen: {unseen:#?}");
+        }
     }
 }

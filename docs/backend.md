@@ -344,6 +344,54 @@ Comments are deleted with the recording or the account that made them (`on delet
 comment without somebody behind it. Not done yet: replies, editing a comment, telling the owner about a
 new one (Day 40 or so, with notifications), blocking a person, reporting.
 
+## Workspaces
+
+A workspace is a team: people with a role each, brought in by invitation. This is the people and their roles (Day
+32); putting recordings in a workspace comes next and will add its own column. Nothing here touches the library,
+the share links or playback.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/workspaces` | Start one; the caller is its owner. An account owns at most five (counted under the account's own lock, so five asked for at once make five), and starts ten an hour |
+| `GET /v1/workspaces` | The ones the caller is in, each with their role and how many people |
+| `GET /v1/workspaces/:id` | One, with its members. Owners and admins see every address; a member sees names and their own address |
+| `PATCH /v1/workspaces/:id` | Rename: owners and admins |
+| `DELETE /v1/workspaces/:id` | End it for everyone, at once (soft delete; open invitations are revoked): owners only |
+| `PATCH /v1/workspaces/:id/members/:user` | `{"role"}`: owners only |
+| `DELETE /v1/workspaces/:id/members/:user` | Remove somebody (an owner anyone, an admin members); the caller's own id is *leaving*, allowed for anyone but the last owner |
+| `POST /v1/workspaces/:id/invites` | `{"email", "role"}` (`admin` or `member`: nobody is invited as an owner). Owners invite either, admins members. Twenty an hour per account |
+| `GET /v1/workspaces/:id/invites` | The invitations still waiting, never with the token: owners and admins |
+| `DELETE /v1/workspaces/:id/invites/:invite` | Take one back; its link stops working at once |
+| `POST /v1/invites/accept` | `{"token"}` from the link; the caller must be signed in as the account that has the address it was sent to, verified |
+
+**Roles** (`workspaces/permissions.rs`, plain functions with their whole table tested): an `owner` does everything
+and there is always at least one; an `admin` renames, invites members, removes members and sees addresses; a
+`member` works in it and sees names. Somebody who is not in a workspace gets `404` for every route that names it,
+the same answer as for one that does not exist, so nobody learns a workspace exists by being refused; a member who
+asks for something that is not theirs gets `403`.
+
+**The last owner.** Counting the owners and then removing one is two statements, and two owners leaving at the same
+moment would each see the other. Every change of who is in a workspace (a role, a removal, leaving, accepting an
+invitation) takes a row lock on the workspace first and counts under it. Shown by test: two owners both stepping
+down at once leave one owner, and with the lock taken out both succeed and the workspace has none (the test that
+has both owners *leave* at once passed in that run even without the lock, so it is the step-down one that proves
+the lock, not that one).
+
+**Invitations.** An invitation is a row with a SHA-256 of a 256-bit token (the token is only in the email), valid
+seven days, one open per address per workspace (a unique partial index; one nobody answered in time no longer
+stands in the way of a new one). It is spent in the same transaction that adds the member, under the workspace's
+lock, so one link clicked twice at once makes one member (four at once made one, in the test). Accepting needs the
+account whose verified email is the invited address: with another account the answer is `403 wrong_account` and the
+link is not used up; a link that is wrong, used, revoked, out of time, or for a workspace that has ended is one
+answer, `400 invalid_token`. The answer to an invitation never says whether the address has an account. A
+workspace holds fifty people counting its open invitations (`workspace_full`); an accepted invitation that would be
+the fifty-first is refused and kept, not spent.
+
+**Not done.** Removing a member does not yet end anything they were doing in the workspace (there is nothing yet);
+a workspace is soft-deleted and nothing purges it; deleting an account while it is the only owner of a workspace
+leaves a workspace with no owner (account deletion is planned: it has to hand over or end them); no notice goes to
+somebody who is removed or whose role changes; no audit trail of who changed what.
+
 ## View counts
 
 A view is counted when a share link's `play` succeeds, and it costs the visitor no database write.

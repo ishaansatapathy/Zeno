@@ -138,6 +138,13 @@ enum Class {
     Webhook,
     /// Not built yet: answers 501 to everyone, without identifying them.
     NotBuilt,
+    /// A workspace's people, whatever they are in it: the owner and the student who is a member; everyone else
+    /// is told it is not there.
+    WorkspaceMember,
+    /// What a workspace's owners and admins do: the owner may; the student, who is only a member, is refused; everyone
+    /// else is told it is not there. (There is no workspace admin among these actors: the platform's own admin is
+    /// not in the workspace, so is no more than a stranger to it.)
+    WorkspaceManager,
     /// Authorised by the playback token alone (players send no cookies).
     TokenValid,
     /// No token, or one that does not belong to the session.
@@ -187,6 +194,13 @@ fn expect(class: Class, actor: Actor) -> Out {
         (Class::AdminOnly, _) => Out::Forbidden,
         (Class::Webhook, _) => Out::Unauthorized,
         (Class::NotBuilt, _) => Out::NotBuilt,
+        (Class::WorkspaceMember, Anonymous) => Out::Unauthorized,
+        (Class::WorkspaceMember, Owner | Student) => Out::Allowed,
+        (Class::WorkspaceMember, _) => Out::Hidden,
+        (Class::WorkspaceManager, Anonymous) => Out::Unauthorized,
+        (Class::WorkspaceManager, Owner) => Out::Allowed,
+        (Class::WorkspaceManager, Student) => Out::Forbidden,
+        (Class::WorkspaceManager, _) => Out::Hidden,
         (Class::TokenValid, _) => Out::TokenAccepted,
         (Class::TokenRefused, _) => Out::Forbidden,
     }
@@ -289,6 +303,10 @@ struct World {
     /// A payout the owner has asked for.
     payout: Uuid,
     owner: Uuid,
+    /// A workspace the owner made, with the student in it as a member.
+    workspace: Uuid,
+    /// An invitation to it that is still open.
+    invite: Uuid,
     slug: String,
     handle: &'static str,
     outsider_email: String,
@@ -503,6 +521,31 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
         .execute(pool)
         .await
         .unwrap();
+    let (workspace, invite) = (Uuid::new_v4(), Uuid::new_v4());
+    sqlx::query("insert into workspaces (id, name) values ($1, 'Matrix team')")
+        .bind(workspace)
+        .execute(pool)
+        .await
+        .unwrap();
+    for (user, role) in [(actors.owner_id, "owner"), (actors.student_id, "member")] {
+        sqlx::query("insert into workspace_members (workspace_id, user_id, role) values ($1, $2, $3::workspace_role)")
+            .bind(workspace)
+            .bind(user)
+            .bind(role)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "insert into workspace_invites (id, workspace_id, email, role, token_hash, invited_by, expires_at)          values ($1, $2, 'invitee@matrix.in', 'member', $3, $4, now() + interval '7 days')",
+    )
+    .bind(invite)
+    .bind(workspace)
+    .bind(Uuid::new_v4().as_bytes().to_vec())
+    .bind(actors.owner_id)
+    .execute(pool)
+    .await
+    .unwrap();
     World {
         course,
         lesson,
@@ -519,6 +562,8 @@ async fn world(app: &App, pool: &PgPool, actors: &Actors, needs_upload: bool) ->
         coupon,
         payout,
         owner: actors.owner_id,
+        workspace,
+        invite,
         slug,
         handle: "matrix-owner",
         outsider_email: "outsider@matrix.in".into(),
@@ -536,6 +581,9 @@ fn fill(path: &str, world: &World) -> String {
         .replace("{upload}", &world.upload.to_string())
         .replace("{session}", &world.session.to_string())
         .replace("{student}", &world.student.to_string())
+        .replace("{owner}", &world.owner.to_string())
+        .replace("{workspace}", &world.workspace.to_string())
+        .replace("{invite}", &world.invite.to_string())
         .replace("{order}", &world.order.to_string())
         .replace("{coupon}", &world.coupon.to_string())
         .replace("{payout}", &world.payout.to_string())
@@ -632,6 +680,18 @@ fn rows() -> Vec<Row> {
         row(get.clone(), "/v1/courses/{course}/progress", EnrolledOnly),
         row(get.clone(), "/v1/me/continue-watching", Signed),
         row(get.clone(), "/v1/me/storage", Signed),
+        // Workspaces
+        row(post.clone(), "/v1/workspaces", Signed).json(|_, a| json!({"name": format!("Matrix {}", actor_name(a))})),
+        row(get.clone(), "/v1/workspaces", Signed),
+        row(get.clone(), "/v1/workspaces/{workspace}", WorkspaceMember),
+        row(patch.clone(), "/v1/workspaces/{workspace}", WorkspaceManager).json(|_, _| json!({"name": "Renamed team"})),
+        row(delete.clone(), "/v1/workspaces/{workspace}", WorkspaceManager),
+        row(patch.clone(), "/v1/workspaces/{workspace}/members/{student}", WorkspaceManager).json(|_, _| json!({"role": "admin"})),
+        row(delete.clone(), "/v1/workspaces/{workspace}/members/{owner}", WorkspaceManager),
+        row(get.clone(), "/v1/workspaces/{workspace}/invites", WorkspaceManager),
+        row(post.clone(), "/v1/workspaces/{workspace}/invites", WorkspaceManager).json(|_, _| json!({"email": "new@matrix.in", "role": "member"})),
+        row(delete.clone(), "/v1/workspaces/{workspace}/invites/{invite}", WorkspaceManager),
+        row(post.clone(), "/v1/invites/accept", Signed).json(|_, _| json!({"token": "not-a-token"})),
         // Profile
         row(get.clone(), "/v1/me/profile", Creator),
         row(put.clone(), "/v1/me/profile", Creator).json(|_, a| {
@@ -875,7 +935,7 @@ fn no_route_is_missing_from_the_matrix() {
 
     // A router declares a path relative to where it is mounted, so a declared path matches a table
     // row whose path ends with it. A bare "/" is a mount point: it means the collection itself.
-    let is_mount = |segs: &[String]| matches!(segs, [v, c] if v == "v1" && matches!(c.as_str(), "courses" | "videos" | "recordings"));
+    let is_mount = |segs: &[String]| matches!(segs, [v, c] if v == "v1" && matches!(c.as_str(), "courses" | "videos" | "recordings" | "workspaces"));
     let covers = |declared: &RouteSig, row: &RouteSig| {
         declared.method == row.method
             && if declared.segments.is_empty() {

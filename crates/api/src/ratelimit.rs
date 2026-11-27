@@ -195,6 +195,19 @@ pub mod policies {
         fail: Fail::Open,
     };
 
+    /// Looking at one's workspaces, their people and their invitations, per account.
+    pub const WORKSPACE_READ: Policy = Policy {
+        name: "workspace_read",
+        rule: Rule::per_minute(120),
+        fail: Fail::Open,
+    };
+    /// Changing a workspace or who is in it, or answering an invitation, per account. A person does a few a minute.
+    pub const WORKSPACE_WRITE: Policy = Policy {
+        name: "workspace_write",
+        rule: Rule::per_minute(30),
+        fail: Fail::Closed,
+    };
+
     /// Reading one's own storage use, per account. The library asks after every upload and delete.
     pub const STORAGE_READ: Policy = Policy {
         name: "storage_read",

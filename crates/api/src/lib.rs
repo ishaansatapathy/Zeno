@@ -38,6 +38,7 @@ pub mod stubs;
 pub mod videos;
 pub mod views;
 pub mod webhooks;
+pub mod workspaces;
 
 use std::time::Duration;
 
@@ -109,6 +110,8 @@ pub fn build_app(state: AppState) -> Router {
         .nest("/v1/videos", videos::routes::router())
         .nest("/v1/recordings", recordings::routes::router())
         .nest("/v1/comments", comments::routes::router())
+        .nest("/v1/workspaces", workspaces::routes::router())
+        .nest("/v1/invites", workspaces::routes::invites_router())
         .nest(
             "/v1/s",
             shares::routes::public_router().layer(from_fn_with_state(
